@@ -92,6 +92,32 @@
 
     </div>
 
+    <!-- 事件面板（桌面端右侧 / 移动端可切换） -->
+    <aside class="event-panel" id="eventPanel">
+        <div class="event-panel-header">
+            <span class="event-panel-title">故事进展</span>
+            <button class="btn-icon btn-event-close" id="btnEventClose" title="关闭">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="event-story-time" id="eventStoryTime">
+            <span class="time-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><polyline points="8 5 8 8 10.5 10.5"/></svg></span>
+            <span class="time-text">第一天早晨</span>
+        </div>
+        <div class="event-summary" id="eventSummary"></div>
+        <div class="event-list" id="eventList">
+            <div class="event-empty">暂无事件记录，开始对话吧～</div>
+        </div>
+        <div class="event-push-hint" id="eventPushHint" style="display:none;">
+            <div class="push-hint-bar">
+                <span class="push-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M8 3V1m0 14v-2M1 8h2m10 0h2M3.05 3.05l1.41 1.41m7.08 7.08l1.41 1.41M3.05 12.95l1.41-1.41m7.08-7.08l1.41-1.41"/></svg></span>
+                <span class="push-text" id="pushHintText"></span>
+            </div>
+        </div>
+    </aside>
+
     <!-- 移动端遮罩 -->
     <div class="overlay" id="overlay"></div>
 
