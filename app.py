@@ -304,7 +304,7 @@ def _run_event_ai(conv_id, force_push=False, is_initializing=False):
     try:
         messages = db.get_messages(conv_id)
         existing_events = db.get_events(conv_id, limit=100)
-        current_story_time = db.get_latest_story_time() or "第一天早晨 8:00"
+        current_story_time = db.get_latest_story_time(conv_id) or "第一天早晨 8:00"
 
         msg_limit = len(messages) if is_initializing else 30
         history_text_parts = []
@@ -405,23 +405,14 @@ def _init_events_from_history(conv_id):
 
 
 def _build_event_context(conv_id):
-    """构建事件上下文 + 上一轮生成的 random_event 注入"""
+    """构建事件上下文（随机事件已改为 SSE 推送，不再注入 system prompt）"""
     events = db.get_events(conv_id, limit=20)
     lines = []
 
     # 故事时间
-    story_time = db.get_latest_story_time()
+    story_time = db.get_latest_story_time(conv_id)
     if story_time:
         lines.append(f"【故事时间】{story_time}")
-
-    # 注入上一轮 AI C 生成的随机事件（如有）
-    re_info = _last_random_event.pop(conv_id, None)
-    if re_info:
-        intensity_label = ""
-        if re_info.get("intensity") == "medium":
-            intensity_label = "（这可能会引起你的注意）"
-        lines.append(f"\n【正在发生的事】{re_info['description']} {intensity_label}")
-        lines.append("（这是世界自然发生的事情，你可以注意到它，也可以忽略。顺其自然就好。）")
 
     # 故事进展
     if events:
@@ -530,6 +521,11 @@ def chat():
     def generate():
         full_response = ""
         yield f"data: {json.dumps({'type': 'conv_id', 'id': conv_id})}\n\n"
+
+        # 推送上一轮缓存的随机事件（世界旁白）
+        re_info = _last_random_event.pop(conv_id, None)
+        if re_info:
+            yield f"data: {json.dumps({'type': 'world_narration', 'content': re_info['description'], 'intensity': re_info.get('intensity', 'low')})}\n\n"
 
         # AI A
         for chunk in deepseek.chat_stream(recent_messages, dynamic_chat_prompt):
