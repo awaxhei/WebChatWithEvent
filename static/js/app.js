@@ -17,7 +17,6 @@ class AuthManager {
         this.usernameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.passwordInput.focus(); });
     }
     async init() {
-        // 尝试用 Cookie 验证
         const valid = await this._verifyToken();
         if (valid) { this._hideOverlay(); return true; }
         this._showOverlay(); return false;
@@ -103,23 +102,7 @@ class ChatManager {
             let aiBubble = null, fullText = '';
             AnimationEngine.hideThinking();
             aiBubble = this._addBubble('assistant', ''); aiBubble.innerHTML = '';
-            while (true) {
-                const { done, value } = await reader.read(); if (done) break;
-                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
-                    if (!line.startsWith('data: ')) continue;
-                    try { const data = JSON.parse(line.slice(6));
-                        if (data.type === 'conv_id') { this.currentConvId = data.id; if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id); }
-                        else if (data.type === 'chunk') { fullText += data.content; aiBubble.textContent = fullText; AnimationEngine.scrollToBottom(this.messagesContainer); }
-                        else if (data.type === 'location') { this.locationTag.textContent = data.content; }
-                        else if (data.type === 'atmosphere') { this._addNarrationCard(data.content); }
-                        else if (data.type === 'event_organizing') { this._addEventOrganizing(); }
-                        else if (data.type === 'world_narration') { this._addWorldNarration(data.content, data.intensity || 'low'); }
-                        else if (data.type === 'story_time') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateStoryTime(data.content); }
-                        else if (data.type === 'story_summary') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateSummary(data.content); }
-                        else if (data.type === 'event_update') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); }
-                    } catch (e) {}
-                }
-            }
+            while (true) { const { done, value } = await reader.read(); if (done) break; for (const line of decoder.decode(value, { stream: true }).split('\n')) { if (!line.startsWith('data: ')) continue; try { const data = JSON.parse(line.slice(6)); if (data.type === 'conv_id') { this.currentConvId = data.id; if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id); } else if (data.type === 'chunk') { fullText += data.content; aiBubble.textContent = fullText; AnimationEngine.scrollToBottom(this.messagesContainer); } else if (data.type === 'location') { this.locationTag.textContent = data.content; } else if (data.type === 'atmosphere') { this._addNarrationCard(data.content); } else if (data.type === 'event_organizing') { this._addEventOrganizing(); } else if (data.type === 'world_narration') { this._addWorldNarration(data.content, data.intensity || 'low'); } else if (data.type === 'story_time') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateStoryTime(data.content); } else if (data.type === 'story_summary') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateSummary(data.content); } else if (data.type === 'event_update') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); } } catch (e) {} } }
             if (!fullText) aiBubble.textContent = 'No response.';
         } catch (error) { AnimationEngine.hideThinking(); this._addBubble('assistant', `Error: ${error.message}`); }
         this.isProcessing = false; this._enableInput();
@@ -128,21 +111,7 @@ class ChatManager {
     _addBubble(role, content) { const row = document.createElement('div'); row.className = `message-row ${role}`; const bubble = document.createElement('div'); bubble.className = 'message-bubble'; bubble.textContent = content; row.appendChild(bubble); this.messagesContainer.appendChild(row); AnimationEngine.slideInMessage(row); AnimationEngine.scrollToBottom(this.messagesContainer); return bubble; }
     _addEventOrganizing() { const wrapper = document.createElement('div'); wrapper.className = 'world-narration'; wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>'; wrapper.id = 'eventOrganizingHint'; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
     _addWorldNarration(text, intensity) { const hint = document.getElementById('eventOrganizingHint'); if (hint) hint.remove(); const wrapper = document.createElement('div'); wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`; wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
-    async loadConversation(convId) {
-        this.currentConvId = convId; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
-        try { const res = await authFetch(`/api/history/${convId}`); const data = await res.json();
-            if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); } else { this._showWelcome(); }
-            if (data.atmosphere && data.atmosphere.length > 0) { data.atmosphere.forEach((text) => { const d = text.replace(/【地点】\s*.+\n?/g, '').trim(); if (d) this._addNarrationCard(d); }); }
-            if (data.location) this.locationTag.textContent = data.location;
-            if (window.emotionAssistant && window.emotionAssistant.eventPanel) {
-                if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
-                if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
-                if (data.events && data.events.length > 0) { window.emotionAssistant.eventPanel.renderEvents(data.events, false, ''); }
-                else if (data.messages && data.messages.length > 0 && !data.events_initialized) { window.emotionAssistant.eventPanel.showInitializing(); this._initEventsForConversation(convId); }
-            }
-        } catch (e) { this._showWelcome(); }
-        AnimationEngine.scrollToBottom(this.messagesContainer);
-    }
+    async loadConversation(convId) { this.currentConvId = convId; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none'; try { const res = await authFetch(`/api/history/${convId}`); const data = await res.json(); if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); } else { this._showWelcome(); } if (data.atmosphere && data.atmosphere.length > 0) { data.atmosphere.forEach((text) => { const d = text.replace(/【地点】\s*.+\n?/g, '').trim(); if (d) this._addNarrationCard(d); }); } if (data.location) this.locationTag.textContent = data.location; if (window.emotionAssistant && window.emotionAssistant.eventPanel) { if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time); if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary); if (data.events && data.events.length > 0) { window.emotionAssistant.eventPanel.renderEvents(data.events, false, ''); } else if (data.messages && data.messages.length > 0 && !data.events_initialized) { window.emotionAssistant.eventPanel.showInitializing(); this._initEventsForConversation(convId); } } } catch (e) { this._showWelcome(); } AnimationEngine.scrollToBottom(this.messagesContainer); }
     async _initEventsForConversation(convId) { try { const res = await authFetch(`/api/events/init/${convId}`, { method: 'POST' }); const data = await res.json(); if (data.success && window.emotionAssistant && window.emotionAssistant.eventPanel) { if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time); if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary); if (data.events) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); } else { window.emotionAssistant.eventPanel.showEmpty(); } } catch (e) { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.showEmpty(); } }
     newConversation() { this.currentConvId = ''; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none'; this.locationTag.textContent = '公寓客厅'; this._showWelcome(); if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear(); this.inputEl.focus(); }
     _addNarrationCard(text) { this.narrationTrack.innerHTML = ''; const card = document.createElement('div'); card.className = 'narration-card'; card.textContent = text; this.narrationTrack.appendChild(card); this.narrationBar.style.display = 'block'; }
@@ -177,7 +146,7 @@ class HistoryManager {
 
 class UIController {
     constructor() { this.historyPanel = document.getElementById('historyPanel'); this.overlay = document.getElementById('overlay'); this.currentPanel = null; this._bindEvents(); }
-    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', () => { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } }
+    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', () => { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } const btnLogout = document.getElementById('btnLogout'); if (btnLogout) btnLogout.addEventListener('click', async () => { await authFetch('/api/auth/logout', { method: 'POST' }); location.reload(); }); }
     togglePanel(panelName) { if (panelName === 'events') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); return; } if (panelName !== 'history') return; if (this.currentPanel === 'history') { this.closeAllPanels(); return; } this.closeAllPanels(); this.historyPanel.classList.add('open'); this.overlay.classList.add('show'); this.currentPanel = 'history'; }
     closeAllPanels() { this.historyPanel.classList.remove('open'); this.overlay.classList.remove('show'); this.currentPanel = null; }
 }

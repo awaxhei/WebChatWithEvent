@@ -413,6 +413,12 @@ def auth_verify():
     payload = verify_token(token)
     return jsonify({"valid": bool(payload)})
 
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    resp = jsonify({"success": True})
+    resp.set_cookie("auth_token", "", max_age=0)
+    return resp
+
 @app.route("/")
 def index(): return render_template("index.html")
 
