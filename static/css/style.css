@@ -399,13 +399,18 @@ html, body {
     box-shadow: 0 20px 60px rgba(0,0,0,0.25); animation: fadeInUp 0.4s ease-out;
 }
 .login-lock { color: var(--accent); opacity: 0.7; margin-bottom: 4px; }
+.login-box input[type="text"],
 .login-box input[type="password"] {
     width: 100%; border: none; border-bottom: 2px solid var(--border);
     padding: 10px 4px; font-size: 18px; font-family: inherit;
-    text-align: center; letter-spacing: 4px; color: var(--text-primary);
+    text-align: center; color: var(--text-primary);
     background: transparent; outline: none; transition: border-color var(--transition);
 }
+.login-box input[type="text"] { letter-spacing: 0; }
+.login-box input[type="password"] { letter-spacing: 4px; }
+.login-box input[type="text"]:focus,
 .login-box input[type="password"]:focus { border-bottom-color: var(--accent); }
+.login-box input[type="text"]::placeholder,
 .login-box input[type="password"]::placeholder { letter-spacing: 0; color: var(--text-muted); font-size: 15px; }
 .remember-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); cursor: pointer; user-select: none; }
 .remember-label input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }

@@ -11,16 +11,22 @@ import secrets
 CHARACTER_NAME = "尤夏"
 
 # DeepSeek API 配置
-DEEPSEEK_API_KEY = "xxx"      # 在此填入你的 API Key
+DEEPSEEK_API_KEY = "xxx"
 DEEPSEEK_MODEL = "deepseek-v4-pro"
 
-# 登录密码（直接修改此密码即可）
-LOGIN_PASSWORD = "xxx"
-# 自动生成密码哈希（不要手动修改）
-LOGIN_PASSWORD_HASH = hashlib.sha256(LOGIN_PASSWORD.encode()).hexdigest()
+# ============================================================
+# 账号系统
+# 使用 run_once() 快速生成密码哈希：
+#   python -c "import hashlib; print(hashlib.sha256('your_password'.encode()).hexdigest())"
+# 将生成的哈希值填入下方 PRESET_ACCOUNTS
+# ============================================================
+PRESET_ACCOUNTS = {
+    # 用户名: SHA-256(密码)
+    "axxx": hashlib.sha256("xxx".encode()).hexdigest(),
+}
 
-# JWT 签名密钥（每次启动随机生成，或设为固定值以保持登录状态跨重启有效）
-JWT_SECRET_KEY = "xxx"  # 修改为你自己的密钥
+# JWT 签名密钥
+JWT_SECRET_KEY = "xxx"
 JWT_EXPIRE_DAYS = 30
 
 # ============================================================
@@ -132,6 +138,6 @@ EVENT_PROMPT = (
 )
 
 # ============================================================
-# AI C 触发策略：每 N 轮对话自动运行一次（1 = 每轮都运行，3 = 每3轮一次）
+# AI C 触发策略：每 N 轮对话自动运行一次
 # ============================================================
-EVENT_AI_INTERVAL = 2  # 每2轮对话触发一次 AI C（减少 API 调用）
+EVENT_AI_INTERVAL = 2

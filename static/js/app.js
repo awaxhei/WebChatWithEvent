@@ -1,10 +1,10 @@
 /**
- * AI 情感助手 - 前端类架构 (三 AI)
+ * AI 情感助手 - 前端类架构 (三 AI + 账号系统)
  */
 class AuthManager {
     constructor() {
-        this.token = null;
         this.overlay = document.getElementById('loginOverlay');
+        this.usernameInput = document.getElementById('loginUsername');
         this.passwordInput = document.getElementById('loginPassword');
         this.rememberCheck = document.getElementById('rememberPwd');
         this.btnLogin = document.getElementById('btnLogin');
@@ -14,31 +14,37 @@ class AuthManager {
     _bindEvents() {
         this.btnLogin.addEventListener('click', () => this._handleLogin());
         this.passwordInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._handleLogin(); });
+        this.usernameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.passwordInput.focus(); });
     }
     async init() {
-        const savedToken = localStorage.getItem('auth_token');
-        if (savedToken) { this.token = savedToken; const valid = await this._verifyToken(); if (valid) { this._hideOverlay(); return true; } localStorage.removeItem('auth_token'); this.token = null; }
+        // 尝试用 Cookie 验证
+        const valid = await this._verifyToken();
+        if (valid) { this._hideOverlay(); return true; }
         this._showOverlay(); return false;
     }
-    async _verifyToken() { try { const res = await fetch('/api/auth/verify', { headers: { 'Authorization': `Bearer ${this.token}` } }); return (await res.json()).valid === true; } catch { return false; } }
+    async _verifyToken() {
+        try { const res = await fetch('/api/auth/verify', { credentials: 'include' }); return (await res.json()).valid === true; }
+        catch { return false; }
+    }
     async _handleLogin() {
-        const password = this.passwordInput.value, remember = this.rememberCheck.checked;
-        if (!password) { this._showError('请输入密码'); return; }
+        const username = this.usernameInput.value.trim();
+        const password = this.passwordInput.value;
+        const remember = this.rememberCheck.checked;
+        if (!username || !password) { this._showError('请输入用户名和密码'); return; }
         this.btnLogin.disabled = true; this.errorEl.textContent = '';
         try {
-            const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, remember }) });
+            const res = await fetch('/api/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, remember }) });
             const data = await res.json();
-            if (data.success) { this.token = data.token; if (remember) localStorage.setItem('auth_token', data.token); else localStorage.removeItem('auth_token'); this._hideOverlay(); onAuthSuccess(); }
-            else { this._showError(data.error || '密码错误'); this.passwordInput.value = ''; this.passwordInput.focus(); }
+            if (data.success) { this._hideOverlay(); onAuthSuccess(); }
+            else { this._showError(data.error || '登录失败'); this.passwordInput.value = ''; this.passwordInput.focus(); }
         } catch { this._showError('网络错误'); }
         this.btnLogin.disabled = false;
     }
     _showError(msg) { this.errorEl.textContent = msg; this.errorEl.style.animation = 'none'; this.errorEl.offsetHeight; this.errorEl.style.animation = 'fadeIn 0.3s ease-out'; setTimeout(() => { this.errorEl.textContent = ''; }, 3000); }
-    _showOverlay() { this.overlay.classList.remove('hidden'); this.passwordInput.focus(); }
+    _showOverlay() { this.overlay.classList.remove('hidden'); this.usernameInput.focus(); }
     _hideOverlay() { this.overlay.classList.add('hidden'); }
-    getAuthHeaders() { return this.token ? { 'Authorization': `Bearer ${this.token}` } : {}; }
 }
-const authFetch = (url, options = {}) => fetch(url, { ...options, headers: { ...options.headers, ...auth.getAuthHeaders() } });
+const authFetch = (url, options = {}) => fetch(url, { ...options, credentials: 'include' });
 
 const SVG_ICONS = {
     milestone: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6366f1" stroke-width="1.5"><polygon points="8 1.5 10 6 15 6 11.2 9 12.5 13.5 8 11 3.5 13.5 4.8 9 1 6 6 6"/></svg>',
@@ -52,14 +58,7 @@ const SVG_ICONS = {
 class AnimationEngine {
     static slideInMessage(el, delay = 0) { el.style.animation = 'none'; el.offsetHeight; el.style.animation = `messageSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms both`; }
     static scrollToBottom(container) { container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }); }
-    static showThinking(container) {
-        const row = document.createElement('div'); row.className = 'message-row assistant'; row.id = 'thinkingRow';
-        const bubble = document.createElement('div'); bubble.className = 'message-bubble thinking-indicator';
-        for (let i = 0; i < 3; i++) { const dot = document.createElement('span'); dot.className = 'thinking-dot'; bubble.appendChild(dot); }
-        row.appendChild(bubble); container.appendChild(row);
-        row.style.animation = 'messageSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both';
-        this.scrollToBottom(container); return row;
-    }
+    static showThinking(container) { const row = document.createElement('div'); row.className = 'message-row assistant'; row.id = 'thinkingRow'; const bubble = document.createElement('div'); bubble.className = 'message-bubble thinking-indicator'; for (let i = 0; i < 3; i++) { const dot = document.createElement('span'); dot.className = 'thinking-dot'; bubble.appendChild(dot); } row.appendChild(bubble); container.appendChild(row); row.style.animation = 'messageSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both'; this.scrollToBottom(container); return row; }
     static hideThinking() { const row = document.getElementById('thinkingRow'); if (row) { row.style.opacity = '0'; row.style.transform = 'scale(0.95)'; row.style.transition = 'opacity 0.2s, transform 0.2s'; setTimeout(() => row.remove(), 200); } }
     static hideWelcome() { const w = document.querySelector('.welcome-message'); if (w) { w.style.opacity = '0'; w.style.transform = 'translateY(10px)'; w.style.transition = 'opacity 0.3s, transform 0.3s'; setTimeout(() => w.remove(), 300); } }
 }
@@ -83,11 +82,7 @@ class ChatManager {
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
         this.btnPushMode.addEventListener('click', () => this.togglePushMode());
     }
-    togglePushMode() {
-        this.pushMode = !this.pushMode;
-        if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; }
-        else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this.inputEl.placeholder = '输入消息...'; }
-    }
+    togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this.inputEl.placeholder = '输入消息...'; } }
     _disableInput() { this.inputEl.disabled = true; this.btnSend.disabled = true; this.btnPushMode.disabled = true; }
     _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; this.btnPushMode.disabled = false; this.inputEl.focus(); }
     async sendMessage() {
@@ -102,24 +97,17 @@ class ChatManager {
         this._addBubble('user', displayMsg);
         AnimationEngine.showThinking(this.messagesContainer);
         try {
-            const response = await authFetch('/api/chat', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conversation_id: this.currentConvId, message: serverMsg }),
-            });
+            const response = await authFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation_id: this.currentConvId, message: serverMsg }) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
+            const reader = response.body.getReader(); const decoder = new TextDecoder();
             let aiBubble = null, fullText = '';
             AnimationEngine.hideThinking();
             aiBubble = this._addBubble('assistant', ''); aiBubble.innerHTML = '';
             while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value, { stream: true });
-                for (const line of chunk.split('\n')) {
+                const { done, value } = await reader.read(); if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
                     if (!line.startsWith('data: ')) continue;
-                    try {
-                        const data = JSON.parse(line.slice(6));
+                    try { const data = JSON.parse(line.slice(6));
                         if (data.type === 'conv_id') { this.currentConvId = data.id; if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id); }
                         else if (data.type === 'chunk') { fullText += data.content; aiBubble.textContent = fullText; AnimationEngine.scrollToBottom(this.messagesContainer); }
                         else if (data.type === 'location') { this.locationTag.textContent = data.content; }
@@ -129,7 +117,7 @@ class ChatManager {
                         else if (data.type === 'story_time') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateStoryTime(data.content); }
                         else if (data.type === 'story_summary') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateSummary(data.content); }
                         else if (data.type === 'event_update') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); }
-                    } catch (e) { /* ignore */ }
+                    } catch (e) {}
                 }
             }
             if (!fullText) aiBubble.textContent = 'No response.';
@@ -137,36 +125,12 @@ class ChatManager {
         this.isProcessing = false; this._enableInput();
         if (window.emotionAssistant && window.emotionAssistant.historyManager) window.emotionAssistant.historyManager.loadHistory();
     }
-    _addBubble(role, content) {
-        const row = document.createElement('div'); row.className = `message-row ${role}`;
-        const bubble = document.createElement('div'); bubble.className = 'message-bubble'; bubble.textContent = content;
-        row.appendChild(bubble); this.messagesContainer.appendChild(row);
-        AnimationEngine.slideInMessage(row); AnimationEngine.scrollToBottom(this.messagesContainer);
-        return bubble;
-    }
-    _addEventOrganizing() {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'world-narration';
-        wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>';
-        wrapper.id = 'eventOrganizingHint';
-        this.messagesContainer.appendChild(wrapper);
-        AnimationEngine.scrollToBottom(this.messagesContainer);
-    }
-    _addWorldNarration(text, intensity) {
-        const hint = document.getElementById('eventOrganizingHint');
-        if (hint) hint.remove();
-        const wrapper = document.createElement('div');
-        wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`;
-        wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`;
-        this.messagesContainer.appendChild(wrapper);
-        AnimationEngine.scrollToBottom(this.messagesContainer);
-    }
+    _addBubble(role, content) { const row = document.createElement('div'); row.className = `message-row ${role}`; const bubble = document.createElement('div'); bubble.className = 'message-bubble'; bubble.textContent = content; row.appendChild(bubble); this.messagesContainer.appendChild(row); AnimationEngine.slideInMessage(row); AnimationEngine.scrollToBottom(this.messagesContainer); return bubble; }
+    _addEventOrganizing() { const wrapper = document.createElement('div'); wrapper.className = 'world-narration'; wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>'; wrapper.id = 'eventOrganizingHint'; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
+    _addWorldNarration(text, intensity) { const hint = document.getElementById('eventOrganizingHint'); if (hint) hint.remove(); const wrapper = document.createElement('div'); wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`; wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
     async loadConversation(convId) {
-        this.currentConvId = convId;
-        this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
-        try {
-            const res = await authFetch(`/api/history/${convId}`);
-            const data = await res.json();
+        this.currentConvId = convId; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
+        try { const res = await authFetch(`/api/history/${convId}`); const data = await res.json();
             if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); } else { this._showWelcome(); }
             if (data.atmosphere && data.atmosphere.length > 0) { data.atmosphere.forEach((text) => { const d = text.replace(/【地点】\s*.+\n?/g, '').trim(); if (d) this._addNarrationCard(d); }); }
             if (data.location) this.locationTag.textContent = data.location;
@@ -179,64 +143,20 @@ class ChatManager {
         } catch (e) { this._showWelcome(); }
         AnimationEngine.scrollToBottom(this.messagesContainer);
     }
-    async _initEventsForConversation(convId) {
-        try {
-            const res = await authFetch(`/api/events/init/${convId}`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success && window.emotionAssistant && window.emotionAssistant.eventPanel) {
-                if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
-                if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
-                if (data.events) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint);
-            } else { window.emotionAssistant.eventPanel.showEmpty(); }
-        } catch (e) { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.showEmpty(); }
-    }
-    newConversation() {
-        this.currentConvId = ''; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
-        this.locationTag.textContent = '公寓客厅'; this._showWelcome();
-        if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear();
-        this.inputEl.focus();
-    }
+    async _initEventsForConversation(convId) { try { const res = await authFetch(`/api/events/init/${convId}`, { method: 'POST' }); const data = await res.json(); if (data.success && window.emotionAssistant && window.emotionAssistant.eventPanel) { if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time); if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary); if (data.events) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); } else { window.emotionAssistant.eventPanel.showEmpty(); } } catch (e) { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.showEmpty(); } }
+    newConversation() { this.currentConvId = ''; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none'; this.locationTag.textContent = '公寓客厅'; this._showWelcome(); if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear(); this.inputEl.focus(); }
     _addNarrationCard(text) { this.narrationTrack.innerHTML = ''; const card = document.createElement('div'); card.className = 'narration-card'; card.textContent = text; this.narrationTrack.appendChild(card); this.narrationBar.style.display = 'block'; }
     _showWelcome() { this.welcomeEl = document.createElement('div'); this.welcomeEl.className = 'welcome-message'; this.welcomeEl.innerHTML = `<svg class="welcome-icon" viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linecap="round"><path d="M32 8C19 8 8 17 8 28c0 10 8 17 16 19v9l10-8c12 0 22-9 22-20S45 8 32 8z"/><circle cx="22" cy="28" r="2.5" fill="#6366f1"/><circle cx="42" cy="28" r="2.5" fill="#6366f1"/></svg>`; this.messagesContainer.appendChild(this.welcomeEl); }
 }
 
 class EventPanel {
-    constructor() {
-        this.panel = document.getElementById('eventPanel');
-        this.storyTimeEl = document.querySelector('#eventStoryTime .time-text');
-        this.summaryEl = document.getElementById('eventSummary');
-        this.eventList = document.getElementById('eventList');
-        this.pushHint = document.getElementById('eventPushHint');
-        this.pushHintText = document.getElementById('pushHintText');
-        this.btnClose = document.getElementById('btnEventClose');
-        if (this.btnClose) this.btnClose.addEventListener('click', () => this.close());
-    }
+    constructor() { this.panel = document.getElementById('eventPanel'); this.storyTimeEl = document.querySelector('#eventStoryTime .time-text'); this.summaryEl = document.getElementById('eventSummary'); this.eventList = document.getElementById('eventList'); this.pushHint = document.getElementById('eventPushHint'); this.pushHintText = document.getElementById('pushHintText'); this.btnClose = document.getElementById('btnEventClose'); if (this.btnClose) this.btnClose.addEventListener('click', () => this.close()); }
     updateStoryTime(t) { if (this.storyTimeEl && t) this.storyTimeEl.textContent = t; }
     updateSummary(s) { if (this.summaryEl && s) this.summaryEl.textContent = s; }
     showInitializing() { this.updateStoryTime('分析中...'); this.summaryEl.textContent = '正在分析历史对话...'; this.eventList.innerHTML = '<div class="event-empty event-loading">AI 正在分析历史对话...</div>'; }
     showEmpty() { this.eventList.innerHTML = '<div class="event-empty">暂无事件记录，开始对话吧</div>'; }
-    _ensureVisible() {
-        this.panel.classList.remove('collapsed');
-        this.panel.offsetHeight; // 强制回流，确保 CSS 过渡完成后再渲染内容
-        if (window.innerWidth <= 768) this.panel.classList.add('open');
-    }
-    renderEvents(events, hasPush, pushHint) {
-        if (!events || events.length === 0) { return; }
-        this._ensureVisible();
-        this.eventList.innerHTML = events.map((ev, i) => {
-            const iconSvg = SVG_ICONS[ev.event_type] || SVG_ICONS.misc;
-            const statusClass = `status-${ev.status}`;
-            const randomClass = ev.event_type === 'random' ? ' event-random' : '';
-            const timeLabel = ev.story_time ? ` · ${ev.story_time}` : '';
-            return `<div class="event-card ${statusClass}${randomClass}" style="animation-delay: ${i * 0.05}s">
-                <div class="event-card-header"><span class="event-type-icon">${iconSvg}</span><span class="event-card-title">${this._e(ev.title)}</span><span class="event-status-dot ${ev.status}"></span></div>
-                <div class="event-card-desc">${this._e(ev.description)}</div>${timeLabel ? `<div class="event-card-time">${timeLabel}</div>` : ''}</div>`;
-        }).join('');
-        if (hasPush && pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
-        else if (pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
-        else { this.pushHint.style.display = 'none'; }
-        this.eventList.scrollTop = this.eventList.scrollHeight;
-    }
+    _ensureVisible() { this.panel.classList.remove('collapsed'); this.panel.offsetHeight; if (window.innerWidth <= 768) this.panel.classList.add('open'); }
+    renderEvents(events, hasPush, pushHint) { if (!events || events.length === 0) return; this._ensureVisible(); this.eventList.innerHTML = events.map((ev, i) => { const iconSvg = SVG_ICONS[ev.event_type] || SVG_ICONS.misc; const statusClass = `status-${ev.status}`; const randomClass = ev.event_type === 'random' ? ' event-random' : ''; const timeLabel = ev.story_time ? ` · ${ev.story_time}` : ''; return `<div class="event-card ${statusClass}${randomClass}" style="animation-delay: ${i * 0.05}s"><div class="event-card-header"><span class="event-type-icon">${iconSvg}</span><span class="event-card-title">${this._e(ev.title)}</span><span class="event-status-dot ${ev.status}"></span></div><div class="event-card-desc">${this._e(ev.description)}</div>${timeLabel ? `<div class="event-card-time">${timeLabel}</div>` : ''}</div>`; }).join(''); if (hasPush && pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; } else if (pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; } else { this.pushHint.style.display = 'none'; } this.eventList.scrollTop = this.eventList.scrollHeight; }
     clear() { this.updateStoryTime('第一天早晨'); this.updateSummary(''); this.showEmpty(); this.pushHint.style.display = 'none'; }
     toggle() { if (window.innerWidth <= 768) this.panel.classList.toggle('open'); else this.panel.classList.toggle('collapsed'); }
     open() { this.panel.classList.remove('collapsed'); this.panel.classList.add('open'); }
