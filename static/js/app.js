@@ -1,7 +1,6 @@
 /**
  * AI 情感助手 - 前端类架构 (三 AI)
  */
-
 class AuthManager {
     constructor() {
         this.token = null;
@@ -86,33 +85,22 @@ class ChatManager {
     }
     togglePushMode() {
         this.pushMode = !this.pushMode;
-        if (this.pushMode) {
-            this.btnPushMode.classList.add('active');
-            this.btnSend.classList.add('push-active');
-            this.inputEl.placeholder = '输入推进方向...';
-        } else {
-            this.btnPushMode.classList.remove('active');
-            this.btnSend.classList.remove('push-active');
-            this.inputEl.placeholder = '输入消息...';
-        }
+        if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; }
+        else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this.inputEl.placeholder = '输入消息...'; }
     }
+    _disableInput() { this.inputEl.disabled = true; this.btnSend.disabled = true; this.btnPushMode.disabled = true; }
+    _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; this.btnPushMode.disabled = false; this.inputEl.focus(); }
     async sendMessage() {
         const message = this.inputEl.value.trim();
         if (!message || this.isProcessing) return;
-        this.isProcessing = true; this.btnSend.disabled = true;
+        this.isProcessing = true; this._disableInput();
         this.inputEl.value = ''; this.inputEl.style.height = 'auto';
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
-
-        const isPushCmd = this.pushMode;
-        const displayMsg = isPushCmd ? (message || '（轻戳尤夏）') : message;
-        // 如果 pushMode 开启，发送的消息前拼接 /推进
+        const displayMsg = this.pushMode ? (message || '（轻戳尤夏）') : message;
         const serverMsg = this.pushMode ? `/推进 ${message}` : message;
-        // 发送后自动关闭 push 模式
         if (this.pushMode) this.togglePushMode();
-
         this._addBubble('user', displayMsg);
         AnimationEngine.showThinking(this.messagesContainer);
-
         try {
             const response = await authFetch('/api/chat', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -124,7 +112,6 @@ class ChatManager {
             let aiBubble = null, fullText = '';
             AnimationEngine.hideThinking();
             aiBubble = this._addBubble('assistant', ''); aiBubble.innerHTML = '';
-
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
@@ -137,6 +124,7 @@ class ChatManager {
                         else if (data.type === 'chunk') { fullText += data.content; aiBubble.textContent = fullText; AnimationEngine.scrollToBottom(this.messagesContainer); }
                         else if (data.type === 'location') { this.locationTag.textContent = data.content; }
                         else if (data.type === 'atmosphere') { this._addNarrationCard(data.content); }
+                        else if (data.type === 'event_organizing') { this._addEventOrganizing(); }
                         else if (data.type === 'world_narration') { this._addWorldNarration(data.content, data.intensity || 'low'); }
                         else if (data.type === 'story_time') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateStoryTime(data.content); }
                         else if (data.type === 'story_summary') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateSummary(data.content); }
@@ -146,7 +134,7 @@ class ChatManager {
             }
             if (!fullText) aiBubble.textContent = 'No response.';
         } catch (error) { AnimationEngine.hideThinking(); this._addBubble('assistant', `Error: ${error.message}`); }
-        this.isProcessing = false; this.btnSend.disabled = false; this.inputEl.focus();
+        this.isProcessing = false; this._enableInput();
         if (window.emotionAssistant && window.emotionAssistant.historyManager) window.emotionAssistant.historyManager.loadHistory();
     }
     _addBubble(role, content) {
@@ -156,7 +144,17 @@ class ChatManager {
         AnimationEngine.slideInMessage(row); AnimationEngine.scrollToBottom(this.messagesContainer);
         return bubble;
     }
+    _addEventOrganizing() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'world-narration';
+        wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>';
+        wrapper.id = 'eventOrganizingHint';
+        this.messagesContainer.appendChild(wrapper);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
     _addWorldNarration(text, intensity) {
+        const hint = document.getElementById('eventOrganizingHint');
+        if (hint) hint.remove();
         const wrapper = document.createElement('div');
         wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`;
         wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`;
@@ -169,12 +167,12 @@ class ChatManager {
         try {
             const res = await authFetch(`/api/history/${convId}`);
             const data = await res.json();
-            if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); }
-            else { this._showWelcome(); }
+            if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); } else { this._showWelcome(); }
             if (data.atmosphere && data.atmosphere.length > 0) { data.atmosphere.forEach((text) => { const d = text.replace(/【地点】\s*.+\n?/g, '').trim(); if (d) this._addNarrationCard(d); }); }
             if (data.location) this.locationTag.textContent = data.location;
             if (window.emotionAssistant && window.emotionAssistant.eventPanel) {
                 if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
+                if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
                 if (data.events && data.events.length > 0) { window.emotionAssistant.eventPanel.renderEvents(data.events, false, ''); }
                 else if (data.messages && data.messages.length > 0 && !data.events_initialized) { window.emotionAssistant.eventPanel.showInitializing(); this._initEventsForConversation(convId); }
             }
@@ -217,8 +215,14 @@ class EventPanel {
     updateSummary(s) { if (this.summaryEl && s) this.summaryEl.textContent = s; }
     showInitializing() { this.updateStoryTime('分析中...'); this.summaryEl.textContent = '正在分析历史对话...'; this.eventList.innerHTML = '<div class="event-empty event-loading">AI 正在分析历史对话...</div>'; }
     showEmpty() { this.eventList.innerHTML = '<div class="event-empty">暂无事件记录，开始对话吧</div>'; }
+    _ensureVisible() {
+        this.panel.classList.remove('collapsed');
+        this.panel.offsetHeight; // 强制回流，确保 CSS 过渡完成后再渲染内容
+        if (window.innerWidth <= 768) this.panel.classList.add('open');
+    }
     renderEvents(events, hasPush, pushHint) {
-        if (!events || events.length === 0) { this.showEmpty(); return; }
+        if (!events || events.length === 0) { return; }
+        this._ensureVisible();
         this.eventList.innerHTML = events.map((ev, i) => {
             const iconSvg = SVG_ICONS[ev.event_type] || SVG_ICONS.misc;
             const statusClass = `status-${ev.status}`;
@@ -231,42 +235,20 @@ class EventPanel {
         if (hasPush && pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
         else if (pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
         else { this.pushHint.style.display = 'none'; }
+        this.eventList.scrollTop = this.eventList.scrollHeight;
     }
     clear() { this.updateStoryTime('第一天早晨'); this.updateSummary(''); this.showEmpty(); this.pushHint.style.display = 'none'; }
-    toggle() {
-        if (window.innerWidth <= 768) {
-            this.panel.classList.toggle('open');
-        } else {
-            this.panel.classList.toggle('collapsed');
-        }
-    }
+    toggle() { if (window.innerWidth <= 768) this.panel.classList.toggle('open'); else this.panel.classList.toggle('collapsed'); }
     open() { this.panel.classList.remove('collapsed'); this.panel.classList.add('open'); }
-    close() {
-        if (window.innerWidth <= 768) {
-            this.panel.classList.remove('open');
-        } else {
-            this.panel.classList.add('collapsed');
-        }
-    }
+    close() { if (window.innerWidth <= 768) this.panel.classList.remove('open'); else this.panel.classList.add('collapsed'); }
     _e(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 }
 
 class HistoryManager {
     constructor(chatManager) { this.chatManager = chatManager; this.listEl = document.getElementById('historyList'); this.btnNewChat = document.getElementById('btnNewChat'); this._bindEvents(); }
-    _bindEvents() {
-        this.btnNewChat.addEventListener('click', () => { this.chatManager.newConversation(); this.loadHistory(); });
-        this.listEl.addEventListener('click', (e) => {
-            const item = e.target.closest('.history-item'); if (!item) return;
-            const convId = item.dataset.id;
-            if (e.target.closest('.btn-delete')) { e.stopPropagation(); this.deleteConversation(convId); return; }
-            this._setActive(convId); this.chatManager.loadConversation(convId);
-        });
-    }
+    _bindEvents() { this.btnNewChat.addEventListener('click', () => { this.chatManager.newConversation(); this.loadHistory(); }); this.listEl.addEventListener('click', (e) => { const item = e.target.closest('.history-item'); if (!item) return; const convId = item.dataset.id; if (e.target.closest('.btn-delete')) { e.stopPropagation(); this.deleteConversation(convId); return; } this._setActive(convId); this.chatManager.loadConversation(convId); }); }
     async loadHistory() { try { const res = await authFetch('/api/history'); const conversations = await res.json(); this._render(conversations); } catch (e) { this.listEl.innerHTML = ''; } }
-    _render(conversations) {
-        if (!conversations || conversations.length === 0) { this.listEl.innerHTML = ''; return; }
-        this.listEl.innerHTML = conversations.map((c, i) => `<li class="history-item ${c.id === this.chatManager.currentConvId ? 'active' : ''}" data-id="${c.id}" style="animation-delay: ${i * 0.04}s"><span class="conv-title">${this._e(c.title)}</span><span class="conv-date">${this._fd(c.updated_at)}</span><button class="btn-delete" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></li>`).join('');
-    }
+    _render(conversations) { if (!conversations || conversations.length === 0) { this.listEl.innerHTML = ''; return; } this.listEl.innerHTML = conversations.map((c, i) => `<li class="history-item ${c.id === this.chatManager.currentConvId ? 'active' : ''}" data-id="${c.id}" style="animation-delay: ${i * 0.04}s"><span class="conv-title">${this._e(c.title)}</span><span class="conv-date">${this._fd(c.updated_at)}</span><button class="btn-delete" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></li>`).join(''); }
     async deleteConversation(convId) { if (!confirm('Delete this conversation?')) return; try { await authFetch(`/api/history/${convId}`, { method: 'DELETE' }); if (convId === this.chatManager.currentConvId) this.chatManager.newConversation(); this.loadHistory(); } catch (e) { alert('Delete failed'); } }
     _setActive(convId) { this.listEl.querySelectorAll('.history-item').forEach((item) => item.classList.toggle('active', item.dataset.id === convId)); }
     _fd(dateStr) { if (!dateStr) return ''; const d = new Date(dateStr), now = new Date(), diff = now - d; if (diff < 60000) return 'now'; if (diff < 3600000) return Math.floor(diff / 60000) + 'm'; if (diff < 86400000) return Math.floor(diff / 3600000) + 'h'; return `${d.getMonth() + 1}/${d.getDate()}`; }
@@ -275,13 +257,7 @@ class HistoryManager {
 
 class UIController {
     constructor() { this.historyPanel = document.getElementById('historyPanel'); this.overlay = document.getElementById('overlay'); this.currentPanel = null; this._bindEvents(); }
-    _bindEvents() {
-        document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel)));
-        this.overlay.addEventListener('click', () => this.closeAllPanels());
-        window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); });
-        const charTitle = document.getElementById('charTitle');
-        if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', () => { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); }
-    }
+    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', () => { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } }
     togglePanel(panelName) { if (panelName === 'events') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); return; } if (panelName !== 'history') return; if (this.currentPanel === 'history') { this.closeAllPanels(); return; } this.closeAllPanels(); this.historyPanel.classList.add('open'); this.overlay.classList.add('show'); this.currentPanel = 'history'; }
     closeAllPanels() { this.historyPanel.classList.remove('open'); this.overlay.classList.remove('show'); this.currentPanel = null; }
 }
