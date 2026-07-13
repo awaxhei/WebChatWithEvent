@@ -5,6 +5,7 @@ import re
 from flask import Blueprint, request, jsonify
 from core.auth import require_auth
 from core.database import ChatDB
+from config import DEFAULT_LOCATION
 
 history_bp = Blueprint("history", __name__)
 db = None  # 由外部注入
@@ -27,7 +28,7 @@ def get_conversation(conv_id):
     story_time = db.get_latest_story_time(conv_id)
     story_summary = events[-1]["description"] if events else ""
     initialized = db.is_events_initialized(conv_id)
-    location = "公寓客厅"
+    location = DEFAULT_LOCATION
     atmo_list = [a["content"] for a in atmo]
     for a_text in reversed(atmo_list):
         m = _LOCATION_RE.search(a_text)

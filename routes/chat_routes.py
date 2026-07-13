@@ -8,7 +8,7 @@ from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services.event_engine import _run_event_ai as run_event_ai, build_event_context
 from services.atmosphere import extract_location, strip_location_tag
-from config import CHAT_PROMPT, ATMOSPHERE_PROMPT, CHARACTER_NAME, EVENT_AI_INTERVAL
+from config import CHAT_PROMPT, ATMOSPHERE_PROMPT, CHARACTER_NAME, EVENT_AI_INTERVAL, DEFAULT_LOCATION, DEFAULT_STORY_TIME
 
 chat_bp = Blueprint("chat", __name__)
 db = None       # 由外部注入
@@ -49,7 +49,7 @@ def chat():
         db.update_conversation_title(conv_id, user_message[:20] + ("..." if len(user_message) > 20 else ""))
 
     recent_messages = messages[-20:]
-    current_location = "公寓客厅"
+    current_location = DEFAULT_LOCATION
     latest_atmo = db.get_atmosphere(conv_id, limit=1)
     if latest_atmo:
         m = _LOCATION_RE.search(latest_atmo[0]["content"])
@@ -76,17 +76,33 @@ def chat():
                 clean = clean[:m.start()].strip()
             db.add_message(conv_id, "assistant", clean)
             db.touch_conversation(conv_id)
-        # AI B
+        # AI C: 先于 AI B 执行，确保环境描写能感知最新时间和事件
+        if should_run_event_ai:
+            yield f"data: {json.dumps({'type': 'event_organizing'})}\n\n"
+            ev = run_event_ai(conv_id, db, deepseek, force_push=is_push_cmd)
+            if ev:
+                re2 = ev.get("random_event")
+                if re2 and isinstance(re2, dict):
+                    yield f"data: {json.dumps({'type': 'world_narration', 'content': re2.get('description',''), 'intensity': re2.get('intensity','low')})}\n\n"
+                if ev.get("story_time"):
+                    yield f"data: {json.dumps({'type': 'story_time', 'content': ev['story_time']})}\n\n"
+                if ev.get("story_summary"):
+                    yield f"data: {json.dumps({'type': 'story_summary', 'content': ev['story_summary']})}\n\n"
+                all_events = db.get_events(conv_id, limit=50)
+                yield f"data: {json.dumps({'type': 'event_update', 'events': all_events, 'has_push': ev.get('should_push',False), 'push_hint': ev.get('push_hint','')})}\n\n"
+        # AI B: 在 AI C 之后执行，能感知最新 story_time 和活跃事件
         all_messages = db.get_messages(conv_id)
         atmo_history = db.get_atmosphere(conv_id, limit=5)
         latest_msgs = all_messages[-2:]
+        story_time = db.get_latest_story_time(conv_id) or DEFAULT_STORY_TIME
+        event_ctx = build_event_context(conv_id, db)
         ac = "以下是之前的连续环境描述，请保持延续感：\n"
         if atmo_history:
             for ah in atmo_history:
                 ac += f"- {ah['content']}\n"
         else:
             ac += "（这是对话的开始）\n"
-        au = f"{ac}\n最新的对话内容：\n"
+        au = f"【当前故事时间】{story_time}\n{event_ctx}\n\n{ac}\n最新的对话内容：\n"
         for msg in latest_msgs:
             label = "用户" if msg["role"] == "user" else CHARACTER_NAME
             au += f"{label}：{msg['content']}\n"
@@ -104,20 +120,6 @@ def chat():
             else:
                 db.add_atmosphere(conv_id, atmo_text)
                 yield f"data: {json.dumps({'type': 'atmosphere', 'content': atmo_text})}\n\n"
-        # AI C
-        if should_run_event_ai:
-            yield f"data: {json.dumps({'type': 'event_organizing'})}\n\n"
-            ev = run_event_ai(conv_id, db, deepseek, force_push=is_push_cmd)
-            if ev:
-                re2 = ev.get("random_event")
-                if re2 and isinstance(re2, dict):
-                    yield f"data: {json.dumps({'type': 'world_narration', 'content': re2.get('description',''), 'intensity': re2.get('intensity','low')})}\n\n"
-                if ev.get("story_time"):
-                    yield f"data: {json.dumps({'type': 'story_time', 'content': ev['story_time']})}\n\n"
-                if ev.get("story_summary"):
-                    yield f"data: {json.dumps({'type': 'story_summary', 'content': ev['story_summary']})}\n\n"
-                all_events = db.get_events(conv_id, limit=50)
-                yield f"data: {json.dumps({'type': 'event_update', 'events': all_events, 'has_push': ev.get('should_push',False), 'push_hint': ev.get('push_hint','')})}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream")

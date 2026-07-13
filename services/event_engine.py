@@ -4,7 +4,7 @@ AI C: 世界引擎 - 事件分析、初始化、上下文构建
 import json, re
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
-from config import EVENT_PROMPT
+from config import EVENT_PROMPT, DEFAULT_STORY_TIME
 
 
 def _parse_event_json(raw_text):
@@ -25,7 +25,7 @@ def _run_event_ai(conv_id, db: ChatDB, deepseek: DeepSeekClient, force_push=Fals
     try:
         messages = db.get_messages(conv_id)
         existing_events = db.get_events(conv_id, limit=100)
-        current_story_time = db.get_latest_story_time(conv_id) or "第一天早晨 8:00"
+        current_story_time = db.get_latest_story_time(conv_id) or DEFAULT_STORY_TIME
         msg_limit = len(messages) if is_initializing else 30
         history_text = "\n".join(
             f"{'青梅' if m['role'] == 'user' else '尤夏'}：{m['content']}" for m in messages[-msg_limit:]
