@@ -5,7 +5,7 @@ AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 import socket, subprocess
 from flask import Flask, render_template
 
-from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL
+from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION, DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 
@@ -40,6 +40,16 @@ app.register_blueprint(history_bp)
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/config", methods=["GET"])
+def get_client_config():
+    return {
+        "character_name": CHARACTER_NAME,
+        "default_location": DEFAULT_LOCATION,
+        "default_story_time": DEFAULT_STORY_TIME,
+        "default_story_summary": DEFAULT_STORY_SUMMARY,
+    }
 
 
 if __name__ == "__main__":

@@ -16,6 +16,9 @@ DEFAULT_STORY_TIME = "第一天早晨 7:00"
 # 故事默认初始地点（AI B 环境叙述使用）
 DEFAULT_LOCATION = "公寓客厅"
 
+# 故事面板默认概要文字（前端事件面板初始化显示）
+DEFAULT_STORY_SUMMARY = "与尤夏的故事，从这里开始..."
+
 # DeepSeek API 配置
 DEEPSEEK_API_KEY = "xxx"
 DEEPSEEK_MODEL = "deepseek-v4-pro"

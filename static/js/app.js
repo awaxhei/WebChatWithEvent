@@ -120,6 +120,7 @@ class ChatManager {
 
 class EventPanel {
     constructor() { this.panel = document.getElementById('eventPanel'); this.storyTimeEl = document.querySelector('#eventStoryTime .time-text'); this.summaryEl = document.getElementById('eventSummary'); this.eventList = document.getElementById('eventList'); this.pushHint = document.getElementById('eventPushHint'); this.pushHintText = document.getElementById('pushHintText'); this.btnClose = document.getElementById('btnEventClose'); if (this.btnClose) this.btnClose.addEventListener('click', () => this.close()); }
+    init(cfg) { this.cfg = cfg; this.updateStoryTime(cfg.default_story_time); this.updateSummary(cfg.default_story_summary); }
     updateStoryTime(t) { if (this.storyTimeEl && t) this.storyTimeEl.textContent = t; }
     updateSummary(s) { if (this.summaryEl && s) this.summaryEl.textContent = s; }
     showInitializing() { this.updateStoryTime('分析中...'); this.summaryEl.textContent = '正在分析历史对话...'; this.eventList.innerHTML = '<div class="event-empty event-loading">AI 正在分析历史对话...</div>'; }
@@ -193,7 +194,7 @@ class EventPanel {
         const m2 = storyTime.match(/\d{1,2}:\d{2}/);
         return m2 ? m2[0] : storyTime;
     }
-    clear() { this.updateStoryTime('第一天早晨'); this.updateSummary(''); this.showEmpty(); this.pushHint.style.display = 'none'; }
+    clear() { if (this.cfg) { this.updateStoryTime(this.cfg.default_story_time); this.updateSummary(this.cfg.default_story_summary); } else { this.updateStoryTime('第一天早晨'); this.updateSummary(''); } this.showEmpty(); this.pushHint.style.display = 'none'; }
     toggle() { if (window.innerWidth <= 768) this.panel.classList.toggle('open'); else this.panel.classList.toggle('collapsed'); }
     open() { this.panel.classList.remove('collapsed'); this.panel.classList.add('open'); }
     close() { if (window.innerWidth <= 768) this.panel.classList.remove('open'); else this.panel.classList.add('collapsed'); }
@@ -220,7 +221,8 @@ class UIController {
 
 class EmotionAssistant {
     constructor() { this.chatManager = new ChatManager(); this.historyManager = new HistoryManager(this.chatManager); this.eventPanel = new EventPanel(); this.uiController = new UIController(); window.emotionAssistant = this; this._init(); }
-    _init() { this.historyManager.loadHistory(); document.getElementById('messageInput').focus(); }
+    async _init() { await this._loadClientConfig(); this.historyManager.loadHistory(); document.getElementById('messageInput').focus(); }
+    async _loadClientConfig() { try { const res = await fetch('/api/config'); this.eventPanel.init(await res.json()); } catch (e) { this.eventPanel.init({ default_story_time: '第一天早晨', default_story_summary: '与尤夏的故事，从这里开始...' }); } }
     onConvIdChange(convId) { this.historyManager.loadHistory(); }
 }
 
