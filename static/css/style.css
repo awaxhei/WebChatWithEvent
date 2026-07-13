@@ -311,6 +311,135 @@ html, body {
 .event-status-dot.completed { background: #a0aec0; }
 .event-status-dot.pending { background: #f59e0b; }
 
+/* ---------- 事件轴分层压缩 ---------- */
+
+/* 按"天"分组折叠 */
+.day-group { margin-bottom: 4px; }
+.day-group-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, rgba(99,102,241,0.05), rgba(99,102,241,0.01));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer; user-select: none;
+    transition: background var(--transition);
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+}
+.day-group-header:hover { background: rgba(99,102,241,0.08); }
+.day-group-header .day-arrow {
+    display: inline-block; width: 14px; height: 14px;
+    transition: transform 0.25s ease;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+.day-group-header .day-arrow::before { content: '▸'; font-size: 10px; }
+.day-group.expanded .day-arrow { transform: rotate(90deg); }
+.day-group-header .day-label { flex: 1; }
+.day-group-header .day-count {
+    font-size: 10px; font-weight: 400; color: var(--text-muted);
+}
+.day-group-body { overflow: hidden; max-height: 0; transition: max-height 0.35s ease; }
+.day-group.expanded .day-group-body { max-height: 2000px; }
+
+/* 时间轴分隔线 (time_advance) */
+.event-time-divider {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; margin: 2px 0;
+    font-size: 10px; color: var(--text-muted);
+    animation: fadeInUp 0.3s ease both;
+}
+.event-time-divider::before,
+.event-time-divider::after {
+    content: ''; flex: 1; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+}
+.event-time-divider .time-label { flex-shrink: 0; font-style: italic; }
+
+/* milestone 高亮卡片 */
+.event-card.event-milestone {
+    border-left: 3px solid #6366f1;
+    background: linear-gradient(135deg, rgba(99,102,241,0.04), transparent);
+}
+.event-card.event-milestone .event-card-title { color: #4f46e5; font-weight: 700; }
+
+/* random 缩略卡片 */
+.event-card.event-random {
+    border-left: 3px dashed #f59e0b;
+    background: rgba(245,158,11,0.02);
+    padding: 6px 10px;
+}
+.event-card.event-random .event-card-header { margin-bottom: 0; }
+.event-card.event-random .event-card-desc {
+    max-height: 0; overflow: hidden; opacity: 0;
+    transition: max-height 0.25s ease, opacity 0.25s ease, margin-top 0.25s ease;
+    margin-top: 0;
+}
+.event-card.event-random:hover .event-card-desc {
+    max-height: 60px; opacity: 1; margin-top: 4px;
+}
+
+/* emotional_shift 卡片 */
+.event-card.event-emotional_shift {
+    border-left: 3px solid #a78bfa;
+    background: linear-gradient(135deg, rgba(167,139,250,0.04), transparent);
+}
+
+/* scene_change 卡片 */
+.event-card.event-scene_change {
+    border-left: 3px solid #6b7280;
+}
+
+/* misc 弱化卡片 */
+.event-card.event-misc {
+    opacity: 0.75;
+    padding: 6px 10px;
+    font-size: 11px;
+}
+.event-card.event-misc .event-card-title { font-size: 11px; font-weight: 500; }
+.event-card.event-misc .event-card-desc { font-size: 10px; }
+
+/* 状态 completed 样式 */
+.event-card.status-completed {
+    opacity: 0.6;
+    background: rgba(0,0,0,0.01);
+}
+.event-card.status-completed .event-card-title {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+/* 状态 pending 样式 */
+.event-card.status-pending {
+    border-style: dashed;
+    opacity: 0.75;
+}
+
+/* 状态 active 脉冲 */
+.event-card.status-active.event-milestone {
+    animation: eventPulse 3s ease-in-out infinite;
+}
+@keyframes eventPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.15); }
+    50% { box-shadow: 0 0 0 4px rgba(99,102,241,0); }
+}
+
+/* "查看全部" 按钮 */
+.event-expand-btn {
+    display: block; width: 100%; padding: 8px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px; cursor: pointer;
+    transition: all var(--transition);
+    margin-top: 4px;
+}
+.event-expand-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(99,102,241,0.03);
+}
+
 .event-push-hint { padding: 10px 16px; border-top: 1px solid var(--border); }
 .push-hint-bar {
     display: flex; align-items: flex-start; gap: 8px;

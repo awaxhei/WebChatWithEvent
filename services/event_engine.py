@@ -4,7 +4,7 @@ AI C: 世界引擎 - 事件分析、初始化、上下文构建
 import json, re
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
-from config import EVENT_PROMPT, DEFAULT_STORY_TIME
+from config import EVENT_PROMPT, DEFAULT_STORY_TIME, CHARACTER_NAME
 
 
 def _parse_event_json(raw_text):
@@ -27,9 +27,21 @@ def _run_event_ai(conv_id, db: ChatDB, deepseek: DeepSeekClient, force_push=Fals
         existing_events = db.get_events(conv_id, limit=100)
         current_story_time = db.get_latest_story_time(conv_id) or DEFAULT_STORY_TIME
         msg_limit = len(messages) if is_initializing else 30
-        history_text = "\n".join(
-            f"{'青梅' if m['role'] == 'user' else '尤夏'}：{m['content']}" for m in messages[-msg_limit:]
-        )
+        msg_slice = messages[-msg_limit:]
+        # 使用摘要代替原始消息：读取过往摘要 + 保留最近5条原文
+        existing_summaries = db.get_latest_summaries(conv_id, limit=5)
+        if existing_summaries and not is_initializing:
+            summary_lines = [s["summary"] for s in existing_summaries]
+            summary_text = " ".join(summary_lines)
+            recent_count = min(5, len(msg_slice))
+            recent_text = "\n".join(
+                f"{'青梅' if m['role'] == 'user' else CHARACTER_NAME}：{m['content']}" for m in msg_slice[-recent_count:]
+            )
+            history_text = f"【过往剧情摘要】\n{summary_text}\n\n【最近对话】\n{recent_text}"
+        else:
+            history_text = "\n".join(
+                f"{'青梅' if m['role'] == 'user' else CHARACTER_NAME}：{m['content']}" for m in msg_slice
+            )
         events_text = "暂无"
         if existing_events:
             lines = []

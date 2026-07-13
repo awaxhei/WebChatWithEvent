@@ -48,7 +48,8 @@ def chat():
     if len(user_msgs) == 1:
         db.update_conversation_title(conv_id, user_message[:20] + ("..." if len(user_message) > 20 else ""))
 
-    recent_messages = messages[-20:]
+    # AI A 分层上下文：最近5条原文 + 过往摘要（长期记忆）
+    recent_messages = messages[-5:]
     current_location = DEFAULT_LOCATION
     latest_atmo = db.get_atmosphere(conv_id, limit=1)
     if latest_atmo:
@@ -59,7 +60,13 @@ def chat():
     push_extra = ""
     if is_push_cmd:
         push_extra = "\n\n【系统提示】故事需要向前推进了。请自然地推动情节发展。"
-    dynamic_chat_prompt = f"【当前地点】：{current_location}\n{event_context}{push_extra}\n\n{CHAT_PROMPT}"
+    # 注入过往对话摘要作为长期记忆
+    summary_prefix = ""
+    summaries = db.get_latest_summaries(conv_id, limit=3)
+    if summaries:
+        summary_text = " ".join(s["summary"] for s in summaries)
+        summary_prefix = f"【过往剧情回顾】{summary_text}\n\n"
+    dynamic_chat_prompt = f"{summary_prefix}【当前地点】：{current_location}\n{event_context}{push_extra}\n\n{CHAT_PROMPT}"
     msg_count = db.get_message_count(conv_id)
     should_run_event_ai = is_push_cmd or (msg_count % EVENT_AI_INTERVAL == 0)
 
@@ -76,6 +83,24 @@ def chat():
                 clean = clean[:m.start()].strip()
             db.add_message(conv_id, "assistant", clean)
             db.touch_conversation(conv_id)
+        # 每 5 轮生成对话摘要，供 AI C 后续使用
+        if msg_count > 0 and msg_count % 5 == 0:
+            last_end = db.get_last_summary_end_id(conv_id)
+            new_msgs = db.get_messages_since(conv_id, last_end)
+            if new_msgs and len(new_msgs) >= 3:
+                try:
+                    lines = "\n".join(
+                        f"{'青梅' if m['role'] == 'user' else CHARACTER_NAME}：{m['content']}" for m in new_msgs
+                    )
+                    summary = deepseek.chat_sync(
+                        [{"role": "user", "content": f"将以下对话压缩为2-3句话的剧情摘要，只保留关键事件和情绪变化：\n\n{lines}"}],
+                        temperature=0.3
+                    )
+                    if summary and not summary.startswith("[生成失败"):
+                        db.add_summary(conv_id, summary.strip(), new_msgs[0]["id"], new_msgs[-1]["id"])
+                        print(f"[摘要] 已生成对话摘要 ({len(new_msgs)} 条消息)")
+                except Exception as e:
+                    print(f"[摘要] 生成失败: {e}")
         # AI C: 先于 AI B 执行，确保环境描写能感知最新时间和事件
         if should_run_event_ai:
             yield f"data: {json.dumps({'type': 'event_organizing'})}\n\n"

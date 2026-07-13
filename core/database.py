@@ -65,6 +65,15 @@ class ChatDB:
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS conversation_summaries (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    summary         TEXT NOT NULL,
+                    start_msg_id    INTEGER NOT NULL,
+                    end_msg_id      INTEGER NOT NULL,
+                    created_at      TEXT DEFAULT (datetime('now','localtime')),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
             """)
 
     def migrate(self):
@@ -141,8 +150,18 @@ class ChatDB:
 
     def get_messages(self, conv_id):
         with self._get_conn() as conn:
-            rows = conn.execute("SELECT role, content, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC", (conv_id,)).fetchall()
+            rows = conn.execute("SELECT id, role, content, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_messages_since(self, conv_id, since_id):
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT id, role, content, created_at FROM messages WHERE conversation_id=? AND id > ? ORDER BY id ASC", (conv_id, since_id)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_last_message_id(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT MAX(id) as mid FROM messages WHERE conversation_id=?", (conv_id,)).fetchone()
+        return row["mid"] if row and row["mid"] else 0
 
     def get_message_count(self, conv_id):
         with self._get_conn() as conn:
@@ -184,3 +203,23 @@ class ChatDB:
         with self._get_conn() as conn:
             row = conn.execute("SELECT story_time FROM events WHERE conversation_id=? AND story_time != '' ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
         return row["story_time"] if row else ""
+
+    # ----- 对话摘要 -----
+    def add_summary(self, conv_id, summary, start_msg_id, end_msg_id):
+        with self._get_conn() as conn:
+            conn.execute("INSERT INTO conversation_summaries(conversation_id, summary, start_msg_id, end_msg_id) VALUES(?,?,?,?)",
+                         (conv_id, summary, start_msg_id, end_msg_id))
+
+    def get_latest_summaries(self, conv_id, limit=3):
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT summary, end_msg_id FROM conversation_summaries WHERE conversation_id=? ORDER BY id DESC LIMIT ?", (conv_id, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def get_last_summary_end_id(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT MAX(end_msg_id) as eid FROM conversation_summaries WHERE conversation_id=?", (conv_id,)).fetchone()
+        return row["eid"] if row and row["eid"] else 0
+
+    def clear_summaries(self, conv_id):
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM conversation_summaries WHERE conversation_id=?", (conv_id,))

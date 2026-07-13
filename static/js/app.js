@@ -125,7 +125,74 @@ class EventPanel {
     showInitializing() { this.updateStoryTime('分析中...'); this.summaryEl.textContent = '正在分析历史对话...'; this.eventList.innerHTML = '<div class="event-empty event-loading">AI 正在分析历史对话...</div>'; }
     showEmpty() { this.eventList.innerHTML = '<div class="event-empty">暂无事件记录，开始对话吧</div>'; }
     _ensureVisible() { this.panel.classList.remove('collapsed'); this.panel.offsetHeight; if (window.innerWidth <= 768) this.panel.classList.add('open'); }
-    renderEvents(events, hasPush, pushHint) { if (!events || events.length === 0) return; this._ensureVisible(); this.eventList.innerHTML = events.map((ev, i) => { const iconSvg = SVG_ICONS[ev.event_type] || SVG_ICONS.misc; const statusClass = `status-${ev.status}`; const randomClass = ev.event_type === 'random' ? ' event-random' : ''; const timeLabel = ev.story_time ? ` · ${ev.story_time}` : ''; return `<div class="event-card ${statusClass}${randomClass}" style="animation-delay: ${i * 0.05}s"><div class="event-card-header"><span class="event-type-icon">${iconSvg}</span><span class="event-card-title">${this._e(ev.title)}</span><span class="event-status-dot ${ev.status}"></span></div><div class="event-card-desc">${this._e(ev.description)}</div>${timeLabel ? `<div class="event-card-time">${timeLabel}</div>` : ''}</div>`; }).join(''); if (hasPush && pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; } else if (pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; } else { this.pushHint.style.display = 'none'; } this.eventList.scrollTop = this.eventList.scrollHeight; }
+    renderEvents(events, hasPush, pushHint) {
+        if (!events || events.length === 0) return;
+        this._ensureVisible();
+        // 按"天"分组
+        const groups = this._groupByDay(events);
+        const dayKeys = Object.keys(groups);
+        if (dayKeys.length === 0) return;
+        const latestDay = dayKeys[dayKeys.length - 1];
+        let html = '';
+        let needsExpand = dayKeys.length > 2;
+        dayKeys.forEach((day, gi) => {
+            const dayEvents = groups[day];
+            const count = dayEvents.length;
+            const isExpanded = day === latestDay || dayKeys.length <= 2;
+            html += `<div class="day-group${isExpanded ? ' expanded' : ''}" data-day="${this._e(day)}">`;
+            html += `<div class="day-group-header" onclick="this.parentElement.classList.toggle('expanded')">`;
+            html += `<span class="day-arrow"></span>`;
+            html += `<span class="day-label">${this._e(day)}</span>`;
+            html += `<span class="day-count">${count} 个事件</span>`;
+            html += `</div><div class="day-group-body">`;
+            dayEvents.forEach((ev, i) => {
+                if (ev.event_type === 'time_advance') {
+                    const t = ev.story_time ? this._extractTime(ev.story_time) : '';
+                    html += `<div class="event-time-divider"><span class="time-label">${this._e(t || ev.title)}</span></div>`;
+                    return;
+                }
+                const iconSvg = SVG_ICONS[ev.event_type] || SVG_ICONS.misc;
+                const typeClass = ` event-${ev.event_type}`;
+                const statusClass = `status-${ev.status}`;
+                const title = ev.event_type === 'milestone' ? `✦ ${this._e(ev.title)}` : this._e(ev.title);
+                const timeLabel = ev.story_time ? this._extractTime(ev.story_time) : '';
+                html += `<div class="event-card${typeClass} ${statusClass}" style="animation-delay: ${i * 0.03}s">`;
+                html += `<div class="event-card-header"><span class="event-type-icon">${iconSvg}</span>`;
+                html += `<span class="event-card-title">${title}</span>`;
+                html += `<span class="event-status-dot ${ev.status}"></span></div>`;
+                html += `<div class="event-card-desc">${this._e(ev.description)}</div>`;
+                if (timeLabel) html += `<div class="event-card-time">${timeLabel}</div>`;
+                html += `</div>`;
+            });
+            html += `</div></div>`;
+        });
+        // 50+ events 时显示"查看全部"按钮（兜底）
+        if (events.length > 30) {
+            html += `<button class="event-expand-btn" onclick="document.querySelectorAll('.day-group').forEach(g=>g.classList.add('expanded'));this.style.display='none'">📋 展开全部历史事件</button>`;
+        }
+        this.eventList.innerHTML = html;
+        if (hasPush && pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
+        else if (pushHint) { this.pushHint.style.display = 'block'; this.pushHintText.textContent = pushHint; }
+        else { this.pushHint.style.display = 'none'; }
+        this.eventList.scrollTop = this.eventList.scrollHeight;
+    }
+    _groupByDay(events) {
+        const groups = {};
+        const dayRe = /(第[^\s]+天)/;
+        events.forEach(ev => {
+            const m = ev.story_time ? ev.story_time.match(dayRe) : null;
+            const day = m ? m[1] : '未分组';
+            if (!groups[day]) groups[day] = [];
+            groups[day].push(ev);
+        });
+        return groups;
+    }
+    _extractTime(storyTime) {
+        const m = storyTime.match(/[早上下晚凌][晨午晚]?\s*\d{1,2}:\d{2}/);
+        if (m) return m[0];
+        const m2 = storyTime.match(/\d{1,2}:\d{2}/);
+        return m2 ? m2[0] : storyTime;
+    }
     clear() { this.updateStoryTime('第一天早晨'); this.updateSummary(''); this.showEmpty(); this.pushHint.style.display = 'none'; }
     toggle() { if (window.innerWidth <= 768) this.panel.classList.toggle('open'); else this.panel.classList.toggle('collapsed'); }
     open() { this.panel.classList.remove('collapsed'); this.panel.classList.add('open'); }
