@@ -1,5 +1,8 @@
 /**
- * AI 情感助手 - 前端类架构 (三 AI + 账号系统)
+ * AI 情感助手 - 前端类架构 (优化版)
+ * - AI A JSON 格式解析 + 分离渲染（对白/动作/消息/表情包）
+ * - 异步氛围/事件 API 调用
+ * - 表情包随机选取
  */
 class AuthManager {
     constructor() {
@@ -54,8 +57,22 @@ const SVG_ICONS = {
     misc: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#a0aec0" stroke-width="1.5"><circle cx="8" cy="8" r="2"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2"/></svg>',
 };
 
+// ── 表情包：动态从 /api/stickers 加载，零硬编码 ──
+let STICKER_FOLDERS = []; // {name: "害羞", count: 3}
+
+async function loadStickerFolders() {
+    try {
+        const res = await fetch('/api/stickers');
+        const data = await res.json();
+        STICKER_FOLDERS = data.emotions || [];
+    } catch (e) {
+        STICKER_FOLDERS = [];
+    }
+}
+
 class AnimationEngine {
-    static slideInMessage(el, delay = 0) { el.style.animation = 'none'; el.offsetHeight; el.style.animation = `messageSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms both`; }
+    static slideIn(el, delay = 0) { el.style.animation = 'none'; el.offsetHeight; el.style.animation = `messageSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms both`; }
+    static fadeIn(el) { el.style.animation = 'none'; el.offsetHeight; el.style.animation = 'fadeIn 0.4s ease-out both'; }
     static scrollToBottom(container) { container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }); }
     static showThinking(container) { const row = document.createElement('div'); row.className = 'message-row assistant'; row.id = 'thinkingRow'; const bubble = document.createElement('div'); bubble.className = 'message-bubble thinking-indicator'; for (let i = 0; i < 3; i++) { const dot = document.createElement('span'); dot.className = 'thinking-dot'; bubble.appendChild(dot); } row.appendChild(bubble); container.appendChild(row); row.style.animation = 'messageSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both'; this.scrollToBottom(container); return row; }
     static hideThinking() { const row = document.getElementById('thinkingRow'); if (row) { row.style.opacity = '0'; row.style.transform = 'scale(0.95)'; row.style.transition = 'opacity 0.2s, transform 0.2s'; setTimeout(() => row.remove(), 200); } }
@@ -84,6 +101,7 @@ class ChatManager {
     togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this.inputEl.placeholder = '输入消息...'; } }
     _disableInput() { this.inputEl.disabled = true; this.btnSend.disabled = true; this.btnPushMode.disabled = true; }
     _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; this.btnPushMode.disabled = false; this.inputEl.focus(); }
+
     async sendMessage() {
         const message = this.inputEl.value.trim();
         if (!message || this.isProcessing) return;
@@ -92,6 +110,7 @@ class ChatManager {
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
         const displayMsg = this.pushMode ? (message || '（轻戳尤夏）') : message;
         const serverMsg = this.pushMode ? `/推进 ${message}` : message;
+        const isPushCmd = this.pushMode;
         if (this.pushMode) this.togglePushMode();
         this._addBubble('user', displayMsg);
         AnimationEngine.showThinking(this.messagesContainer);
@@ -99,24 +118,386 @@ class ChatManager {
             const response = await authFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation_id: this.currentConvId, message: serverMsg }) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const reader = response.body.getReader(); const decoder = new TextDecoder();
-            let aiBubble = null, fullText = '';
+            let fullText = '', buffer = '', atmData = null;
             AnimationEngine.hideThinking();
-            aiBubble = this._addBubble('assistant', ''); aiBubble.innerHTML = '';
-            while (true) { const { done, value } = await reader.read(); if (done) break; for (const line of decoder.decode(value, { stream: true }).split('\n')) { if (!line.startsWith('data: ')) continue; try { const data = JSON.parse(line.slice(6)); if (data.type === 'conv_id') { this.currentConvId = data.id; if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id); } else if (data.type === 'chunk') { fullText += data.content; aiBubble.textContent = fullText; AnimationEngine.scrollToBottom(this.messagesContainer); } else if (data.type === 'location') { this.locationTag.textContent = data.content; } else if (data.type === 'atmosphere') { this._addNarrationCard(data.content); } else if (data.type === 'event_organizing') { this._addEventOrganizing(); } else if (data.type === 'world_narration') { this._addWorldNarration(data.content, data.intensity || 'low'); } else if (data.type === 'story_time') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateStoryTime(data.content); } else if (data.type === 'story_summary') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.updateSummary(data.content); } else if (data.type === 'event_update') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); } } catch (e) {} } }
-            if (!fullText) aiBubble.textContent = 'No response.';
-        } catch (error) { AnimationEngine.hideThinking(); this._addBubble('assistant', `Error: ${error.message}`); }
+
+            // 先处理流式 JSON 累积
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.type === 'conv_id') {
+                            this.currentConvId = data.id;
+                            if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id);
+                        } else if (data.type === 'chunk') {
+                            fullText += data.content;
+                            // 流式渲染：尝试解析已累积的完整 JSON 行
+                            this._renderStreamingJSON(fullText);
+                        } else if (data.type === 'done') {
+                            atmData = { conv_id: data.conv_id, msg_count: data.msg_count, is_push_cmd: data.is_push_cmd || isPushCmd };
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            // 流结束后最终渲染
+            this._finalizeStreamingJSON(fullText);
+
+            // ── 异步调用氛围/事件 API ──
+            if (atmData) {
+                this._fetchAtmosphere(atmData.conv_id, atmData.msg_count, atmData.is_push_cmd);
+            }
+        } catch (error) {
+            AnimationEngine.hideThinking();
+            this._addBubble('assistant', `Error: ${error.message}`);
+            this.isProcessing = false; this._enableInput();
+            return;
+        }
         this.isProcessing = false; this._enableInput();
         if (window.emotionAssistant && window.emotionAssistant.historyManager) window.emotionAssistant.historyManager.loadHistory();
     }
-    _addBubble(role, content) { const row = document.createElement('div'); row.className = `message-row ${role}`; const bubble = document.createElement('div'); bubble.className = 'message-bubble'; bubble.textContent = content; row.appendChild(bubble); this.messagesContainer.appendChild(row); AnimationEngine.slideInMessage(row); AnimationEngine.scrollToBottom(this.messagesContainer); return bubble; }
-    _addEventOrganizing() { const wrapper = document.createElement('div'); wrapper.className = 'world-narration'; wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>'; wrapper.id = 'eventOrganizingHint'; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
-    _addWorldNarration(text, intensity) { const hint = document.getElementById('eventOrganizingHint'); if (hint) hint.remove(); const wrapper = document.createElement('div'); wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`; wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`; this.messagesContainer.appendChild(wrapper); AnimationEngine.scrollToBottom(this.messagesContainer); }
-    async loadConversation(convId) { this.currentConvId = convId; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none'; try { const res = await authFetch(`/api/history/${convId}`); const data = await res.json(); if (data.messages && data.messages.length > 0) { data.messages.forEach((msg) => this._addBubble(msg.role, msg.content)); } else { this._showWelcome(); } if (data.atmosphere && data.atmosphere.length > 0) { data.atmosphere.forEach((text) => { const d = text.replace(/【地点】\s*.+\n?/g, '').trim(); if (d) this._addNarrationCard(d); }); } if (data.location) this.locationTag.textContent = data.location; if (window.emotionAssistant && window.emotionAssistant.eventPanel) { if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time); if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary); if (data.events && data.events.length > 0) { window.emotionAssistant.eventPanel.renderEvents(data.events, false, ''); } else if (data.messages && data.messages.length > 0 && !data.events_initialized) { window.emotionAssistant.eventPanel.showInitializing(); this._initEventsForConversation(convId); } } } catch (e) { this._showWelcome(); } AnimationEngine.scrollToBottom(this.messagesContainer); }
-    async _initEventsForConversation(convId) { try { const res = await authFetch(`/api/events/init/${convId}`, { method: 'POST' }); const data = await res.json(); if (data.success && window.emotionAssistant && window.emotionAssistant.eventPanel) { if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time); if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary); if (data.events) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint); } else { window.emotionAssistant.eventPanel.showEmpty(); } } catch (e) { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.showEmpty(); } }
-    newConversation() { this.currentConvId = ''; this.messagesContainer.innerHTML = ''; this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none'; this.locationTag.textContent = '公寓客厅'; this._showWelcome(); if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear(); this.inputEl.focus(); }
-    _addNarrationCard(text) { this.narrationTrack.innerHTML = ''; const card = document.createElement('div'); card.className = 'narration-card'; card.textContent = text; this.narrationTrack.appendChild(card); this.narrationBar.style.display = 'block'; }
-    _showWelcome() { this.welcomeEl = document.createElement('div'); this.welcomeEl.className = 'welcome-message'; this.welcomeEl.innerHTML = `<svg class="welcome-icon" viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linecap="round"><path d="M32 8C19 8 8 17 8 28c0 10 8 17 16 19v9l10-8c12 0 22-9 22-20S45 8 32 8z"/><circle cx="22" cy="28" r="2.5" fill="#6366f1"/><circle cx="42" cy="28" r="2.5" fill="#6366f1"/></svg>`; this.messagesContainer.appendChild(this.welcomeEl); }
+
+    // ── JSON 流式渲染 ──
+    _lastRenderedCount = 0;
+
+    _renderStreamingJSON(fullText) {
+        const lines = fullText.split('\n').filter(l => l.trim());
+        const newLines = lines.slice(this._lastRenderedCount);
+        if (newLines.length === 0) return;
+
+        for (const line of newLines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('{')) continue;
+            try {
+                const obj = JSON.parse(trimmed);
+                this._renderJSONObject(obj);
+            } catch (e) {
+                // JSON 不完整，等待更多数据
+            }
+        }
+        this._lastRenderedCount = lines.length;
+    }
+
+    _finalizeStreamingJSON(fullText) {
+        // 清除之前的流式渲染残留
+        document.querySelectorAll('.stream-temp').forEach(el => el.classList.remove('stream-temp'));
+
+        // 最终 JSON 解析
+        const lines = fullText.split('\n').filter(l => l.trim());
+        const rendered = new Set();
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('{')) continue;
+            try {
+                const obj = JSON.parse(trimmed);
+                const key = JSON.stringify(obj);
+                if (!rendered.has(key)) {
+                    // 检查是否已存在相同对象（避免重复）
+                    // 简单去重：如果流式阶段已渲染，跳过
+                    rendered.add(key);
+                }
+            } catch (e) {}
+        }
+
+        // 清除所有 stream-temp 标记
+        document.querySelectorAll('.stream-temp').forEach(el => {
+            el.classList.remove('stream-temp');
+        });
+    }
+
+    _renderJSONObject(obj) {
+        // 动作：居中灰色文字（不在气泡内）
+        if (obj["动作"]) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-row action-row stream-temp';
+            const action = document.createElement('div');
+            action.className = 'action-text';
+            action.textContent = obj["动作"];
+            wrapper.appendChild(action);
+            this.messagesContainer.appendChild(wrapper);
+            AnimationEngine.fadeIn(action);
+        }
+
+        // 对白：对话气泡
+        if (obj["对白"]) {
+            this._addBubble('assistant', obj["对白"], true);
+        }
+
+        // 消息：手机消息气泡
+        if (obj["消息"]) {
+            this._addMessageBubble(obj["消息"]);
+        }
+
+        // 表情包：从表情库选取
+        if (obj["表情包"]) {
+            this._addSticker(obj["表情包"]);
+        }
+
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
+
+    // ── 异步氛围获取 ──
+    async _fetchAtmosphere(convId, msgCount, isPushCmd) {
+        this._addEventOrganizing();
+        try {
+            const response = await authFetch(`/api/atmosphere/${convId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ msg_count: msgCount, is_push_cmd: isPushCmd })
+            });
+            if (!response.ok) { this._removeEventOrganizing(); return; }
+            const reader = response.body.getReader(); const decoder = new TextDecoder();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.type === 'location') {
+                            this.locationTag.textContent = data.content;
+                        } else if (data.type === 'atmosphere') {
+                            this._addNarrationCard(data.content);
+                        } else if (data.type === 'world_narration') {
+                            this._addWorldNarration(data.content, data.intensity || 'low');
+                        } else if (data.type === 'event_organizing') {
+                            // 更新提示文字
+                            const hint = document.getElementById('eventOrganizingHint');
+                            if (hint) {
+                                const label = hint.querySelector('.world-narration-label');
+                                if (label && data.hint) label.textContent = data.hint;
+                            } else {
+                                this._addEventOrganizing();
+                            }
+                        } else if (data.type === 'story_time') {
+                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
+                                window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                        } else if (data.type === 'story_summary') {
+                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
+                                window.emotionAssistant.eventPanel.updateSummary(data.content);
+                        } else if (data.type === 'event_update') {
+                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
+                                window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint);
+                        } else if (data.type === 'done') {
+                            this._removeEventOrganizing();
+                        }
+                    } catch (e) {}
+                }
+            }
+        } catch (e) {
+            this._removeEventOrganizing();
+        }
+    }
+
+    // ── 渲染方法 ──
+    _addBubble(role, content, isStream) {
+        const row = document.createElement('div');
+        row.className = `message-row ${role}` + (isStream ? ' stream-temp' : '');
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble';
+        bubble.textContent = content;
+        row.appendChild(bubble);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.slideIn(row);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+        return bubble;
+    }
+
+    _addMessageBubble(content) {
+        const row = document.createElement('div');
+        row.className = 'message-row assistant message-row-app stream-temp';
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble message-phone-bubble';
+        bubble.textContent = content;
+        row.appendChild(bubble);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.slideIn(row);
+    }
+
+    _addSticker(emotion) {
+        // 动态从 API 获取的文件夹列表中查找匹配项
+        const found = STICKER_FOLDERS.find(f => f.name === emotion);
+        if (!found && STICKER_FOLDERS.length === 0) {
+            // API 尚未加载，显示 fallback
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-row assistant sticker-row stream-temp';
+            wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
+            this.messagesContainer.appendChild(wrapper);
+            AnimationEngine.fadeIn(wrapper.firstChild);
+            return;
+        }
+        // 文件夹名即情绪词
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-row assistant sticker-row stream-temp';
+        const img = document.createElement('img');
+        img.className = 'sticker-img';
+        // 随机选取该文件夹下的一张图片（如果有 count > 1）
+        if (found && found.count > 1) {
+            const idx = Math.floor(Math.random() * found.count) + 1;
+            const padded = String(idx).padStart(2, '0');
+            img.src = `/static/stickers/${encodeURIComponent(emotion)}/${encodeURIComponent(emotion)}_${padded}.png`;
+        } else {
+            img.src = `/static/stickers/${encodeURIComponent(emotion)}/${encodeURIComponent(emotion)}_01.png`;
+        }
+        img.alt = emotion;
+        img.title = emotion;
+        img.onerror = () => {
+            wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
+        };
+        wrapper.appendChild(img);
+        this.messagesContainer.appendChild(wrapper);
+        AnimationEngine.fadeIn(img);
+    }
+
+    _addEventOrganizing() {
+        const existing = document.getElementById('eventOrganizingHint');
+        if (existing) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'world-narration';
+        wrapper.id = 'eventOrganizingHint';
+        wrapper.innerHTML = '<div class="world-narration-inner"><div class="world-narration-label">事件组织中...</div></div>';
+        this.messagesContainer.appendChild(wrapper);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
+
+    _removeEventOrganizing() {
+        const hint = document.getElementById('eventOrganizingHint');
+        if (hint) {
+            hint.style.opacity = '0';
+            hint.style.transform = 'scale(0.95)';
+            hint.style.transition = 'opacity 0.3s, transform 0.3s';
+            setTimeout(() => hint.remove(), 300);
+        }
+    }
+
+    _addWorldNarration(text, intensity) {
+        this._removeEventOrganizing();
+        const wrapper = document.createElement('div');
+        wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`;
+        wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`;
+        this.messagesContainer.appendChild(wrapper);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
+
+    async loadConversation(convId) {
+        this.currentConvId = convId;
+        this.messagesContainer.innerHTML = '';
+        this.narrationTrack.innerHTML = '';
+        this.narrationBar.style.display = 'none';
+        try {
+            const res = await authFetch(`/api/history/${convId}`);
+            const data = await res.json();
+            if (data.messages && data.messages.length > 0) {
+                data.messages.forEach((msg) => {
+                    if (msg.role === 'user') {
+                        this._addBubble('user', msg.content);
+                    } else {
+                        // 尝试解析 JSON 格式的历史消息
+                        this._parseAndRenderHistory(msg.content);
+                    }
+                });
+            } else {
+                this._showWelcome();
+            }
+            if (data.atmosphere && data.atmosphere.length > 0) {
+                data.atmosphere.forEach((text) => {
+                    const d = text.replace(/【地点】\s*.+\n?/g, '').trim();
+                    if (d) this._addNarrationCard(d);
+                });
+            }
+            if (data.location) this.locationTag.textContent = data.location;
+            if (window.emotionAssistant && window.emotionAssistant.eventPanel) {
+                if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
+                if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
+                if (data.events && data.events.length > 0) {
+                    window.emotionAssistant.eventPanel.renderEvents(data.events, false, '');
+                } else if (data.messages && data.messages.length > 0 && !data.events_initialized) {
+                    window.emotionAssistant.eventPanel.showInitializing();
+                    this._initEventsForConversation(convId);
+                }
+            }
+        } catch (e) { this._showWelcome(); }
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
+
+    _parseAndRenderHistory(content) {
+        // 尝试按行解析 JSON 对象
+        const lines = content.split('\n').filter(l => l.trim());
+        let parsedAny = false;
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('{')) {
+                try {
+                    const obj = JSON.parse(trimmed);
+                    if (obj["动作"]) {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'message-row action-row';
+                        const action = document.createElement('div');
+                        action.className = 'action-text';
+                        action.textContent = obj["动作"];
+                        wrapper.appendChild(action);
+                        this.messagesContainer.appendChild(wrapper);
+                    }
+                    if (obj["对白"]) {
+                        this._addBubble('assistant', obj["对白"]);
+                    }
+                    if (obj["消息"]) {
+                        this._addMessageBubble(obj["消息"]);
+                    }
+                    if (obj["表情包"]) {
+                        this._addSticker(obj["表情包"]);
+                    }
+                    parsedAny = true;
+                } catch (e) {}
+            }
+        }
+        if (!parsedAny) {
+            // 旧格式：纯文本
+            this._addBubble('assistant', content);
+        }
+    }
+
+    async _initEventsForConversation(convId) {
+        try {
+            const res = await authFetch(`/api/events/init/${convId}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success && window.emotionAssistant && window.emotionAssistant.eventPanel) {
+                if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
+                if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
+                if (data.events) window.emotionAssistant.eventPanel.renderEvents(data.events, data.has_push, data.push_hint);
+            } else { window.emotionAssistant.eventPanel.showEmpty(); }
+        } catch (e) { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.showEmpty(); }
+    }
+
+    newConversation() {
+        this.currentConvId = ''; this.messagesContainer.innerHTML = '';
+        this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
+        this.locationTag.textContent = '公寓客厅'; this._showWelcome();
+        if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear();
+        this.inputEl.focus();
+    }
+
+    _addNarrationCard(text) {
+        this.narrationTrack.innerHTML = '';
+        const card = document.createElement('div');
+        card.className = 'narration-card';
+        card.textContent = text;
+        this.narrationTrack.appendChild(card);
+        this.narrationBar.style.display = 'block';
+    }
+
+    _showWelcome() {
+        this.welcomeEl = document.createElement('div');
+        this.welcomeEl.className = 'welcome-message';
+        this.welcomeEl.innerHTML = `<svg class="welcome-icon" viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linecap="round"><path d="M32 8C19 8 8 17 8 28c0 10 8 17 16 19v9l10-8c12 0 22-9 22-20S45 8 32 8z"/><circle cx="22" cy="28" r="2.5" fill="#6366f1"/><circle cx="42" cy="28" r="2.5" fill="#6366f1"/></svg>`;
+        this.messagesContainer.appendChild(this.welcomeEl);
+    }
 }
+
+// ── EventPanel / HistoryManager / UIController ──
 
 class EventPanel {
     constructor() { this.panel = document.getElementById('eventPanel'); this.storyTimeEl = document.querySelector('#eventStoryTime .time-text'); this.summaryEl = document.getElementById('eventSummary'); this.eventList = document.getElementById('eventList'); this.pushHint = document.getElementById('eventPushHint'); this.pushHintText = document.getElementById('pushHintText'); this.btnClose = document.getElementById('btnEventClose'); if (this.btnClose) this.btnClose.addEventListener('click', () => this.close()); }
@@ -129,13 +510,11 @@ class EventPanel {
     renderEvents(events, hasPush, pushHint) {
         if (!events || events.length === 0) return;
         this._ensureVisible();
-        // 按"天"分组
         const groups = this._groupByDay(events);
         const dayKeys = Object.keys(groups);
         if (dayKeys.length === 0) return;
         const latestDay = dayKeys[dayKeys.length - 1];
         let html = '';
-        let needsExpand = dayKeys.length > 2;
         dayKeys.forEach((day, gi) => {
             const dayEvents = groups[day];
             const count = dayEvents.length;
@@ -167,7 +546,6 @@ class EventPanel {
             });
             html += `</div></div>`;
         });
-        // 50+ events 时显示"查看全部"按钮（兜底）
         if (events.length > 30) {
             html += `<button class="event-expand-btn" onclick="document.querySelectorAll('.day-group').forEach(g=>g.classList.add('expanded'));this.style.display='none'">📋 展开全部历史事件</button>`;
         }

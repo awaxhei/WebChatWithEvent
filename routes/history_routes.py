@@ -51,6 +51,13 @@ def get_conversation(conv_id):
 @require_auth
 def delete_conversation(conv_id):
     db.delete_conversation(conv_id)
+    # 清理 ChromaDB 向量数据
+    try:
+        from core.vector_store import VectorStore
+        vs = VectorStore()
+        vs.delete_collection(conv_id)
+    except Exception as e:
+        print(f"[向量清理] 失败: {e}")
     return jsonify({"success": True})
 
 

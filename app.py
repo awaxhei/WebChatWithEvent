@@ -2,7 +2,7 @@
 AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
-import socket, subprocess
+import os, socket, subprocess
 from flask import Flask, render_template
 
 from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION, DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY
@@ -24,12 +24,18 @@ from routes.chat_routes import chat_bp
 from routes.event_routes import event_bp
 from routes.history_routes import history_bp
 
-auth_bp.db = db
-chat_bp.db = db
-chat_bp.deepseek = deepseek
-event_bp.db = db
-event_bp.deepseek = deepseek
-history_bp.db = db
+# 注入模块级依赖（直接设置各路由模块的模块变量）
+import routes.auth_routes as auth_mod
+import routes.chat_routes as chat_mod
+import routes.event_routes as event_mod
+import routes.history_routes as history_mod
+
+auth_mod.db = db
+chat_mod.db = db
+chat_mod.deepseek = deepseek
+event_mod.db = db
+event_mod.deepseek = deepseek
+history_mod.db = db
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(chat_bp)
@@ -50,6 +56,21 @@ def get_client_config():
         "default_story_time": DEFAULT_STORY_TIME,
         "default_story_summary": DEFAULT_STORY_SUMMARY,
     }
+
+
+@app.route("/api/stickers")
+def get_stickers():
+    """扫描 static/stickers/ 文件夹，返回可用情绪列表（动态，零硬编码）"""
+    sticker_dir = os.path.join(app.static_folder, "stickers")
+    folders = []
+    if os.path.isdir(sticker_dir):
+        for name in sorted(os.listdir(sticker_dir)):
+            path = os.path.join(sticker_dir, name)
+            if os.path.isdir(path):
+                images = [f for f in os.listdir(path)
+                          if f.lower().endswith(('.png', '.jpg', '.gif', '.webp'))]
+                folders.append({"name": name, "count": len(images)})
+    return {"emotions": folders}
 
 
 if __name__ == "__main__":

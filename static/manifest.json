@@ -1,0 +1,22 @@
+{
+  "name": "尤夏 - AI 角色扮演",
+  "short_name": "尤夏",
+  "description": "和三无傲娇猫娘青梅同居了！基于事件驱动的 AI 角色扮演聊天",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0f4f8",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/image/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/image/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

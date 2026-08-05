@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 情感助手</title>
+    <title>尤夏 - AI 角色扮演</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#6366f1">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -127,5 +129,10 @@
     <div class="overlay" id="overlay"></div>
 
     <script src="/static/js/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js');
+        }
+    </script>
 </body>
 </html>

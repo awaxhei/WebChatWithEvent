@@ -1,5 +1,6 @@
 """
 DeepSeekClient: DeepSeek API 流式/同步调用封装
+支持用户自定义 API Key（通过请求头或参数覆盖 config.py 中的 key）
 """
 import json, requests
 from config import DEEPSEEK_API_KEY, DEEPSEEK_MODEL, CHARACTER_NAME
@@ -8,11 +9,15 @@ DEEPSEEK_BASE = "https://api.deepseek.com/v1/chat/completions"
 
 
 class DeepSeekClient:
-    def __init__(self, base_url=DEEPSEEK_BASE, model=DEEPSEEK_MODEL, api_key=DEEPSEEK_API_KEY):
+    def __init__(self, base_url=DEEPSEEK_BASE, model=DEEPSEEK_MODEL, api_key=None):
         self.base_url = base_url
         self.model = model
-        self.api_key = api_key
-        self._headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        self._default_api_key = api_key or DEEPSEEK_API_KEY
+        self.api_key = self._default_api_key
+
+    def _headers(self, api_key_override=None):
+        key = api_key_override or self.api_key or self._default_api_key
+        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
     def _build_messages(self, system_prompt, messages):
         msgs = [{"role": "system", "content": system_prompt}] if system_prompt else []
@@ -21,18 +26,17 @@ class DeepSeekClient:
             msgs.append({"role": role, "content": msg["content"]})
         return msgs
 
-    def chat_stream(self, messages, system_prompt=""):
+    def chat_stream(self, messages, system_prompt="", api_key_override=None):
         msgs = self._build_messages(system_prompt, messages)
         payload = {"model": self.model, "messages": msgs, "stream": True, "temperature": 0.7, "top_p": 0.9}
-        if not self.api_key:
+        key = api_key_override or self.api_key or self._default_api_key
+        if not key:
             yield "请在 config.py 中设置 DEEPSEEK_API_KEY"
             return
+        hdrs = self._headers(api_key_override)
         try:
-            resp = requests.post(self.base_url, json=payload, headers=self._headers, stream=True, timeout=120)
+            resp = requests.post(self.base_url, json=payload, headers=hdrs, stream=True, timeout=120)
             resp.raise_for_status()
-            fc = False
-            buf = ""
-            prefixes = (f"{CHARACTER_NAME}：", f"{CHARACTER_NAME}:", "青梅：")
             for line in resp.iter_lines(decode_unicode=True):
                 if not line:
                     continue
@@ -42,30 +46,10 @@ class DeepSeekClient:
                         break
                     try:
                         content = json.loads(ds).get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if not content:
-                            continue
-                        if not fc:
-                            buf += content
-                            s = buf
-                            for p in prefixes:
-                                if buf.startswith(p):
-                                    s = buf[len(p):].strip()
-                                    break
-                            if len(buf) >= max(len(p) for p in prefixes) or s != buf:
-                                fc = True
-                                if s:
-                                    yield s
-                        else:
+                        if content:
                             yield content
                     except json.JSONDecodeError:
                         continue
-            if not fc and buf:
-                for p in prefixes:
-                    if buf.startswith(p):
-                        buf = buf[len(p):].strip()
-                        break
-                if buf:
-                    yield buf
         except requests.exceptions.ConnectionError:
             yield "无法连接到 DeepSeek API，请检查网络。"
         except requests.exceptions.HTTPError as e:
@@ -77,13 +61,15 @@ class DeepSeekClient:
         except Exception as e:
             yield f"错误: {str(e)}"
 
-    def chat_sync(self, messages, system_prompt="", temperature=0.8):
+    def chat_sync(self, messages, system_prompt="", temperature=0.8, api_key_override=None):
         msgs = self._build_messages(system_prompt, messages)
         payload = {"model": self.model, "messages": msgs, "stream": False, "temperature": temperature, "top_p": 0.9}
-        if not self.api_key:
+        key = api_key_override or self.api_key or self._default_api_key
+        if not key:
             return "[请在 config.py 中设置 DEEPSEEK_API_KEY]"
+        hdrs = self._headers(api_key_override)
         try:
-            resp = requests.post(self.base_url, json=payload, headers=self._headers, timeout=120)
+            resp = requests.post(self.base_url, json=payload, headers=hdrs, timeout=120)
             resp.raise_for_status()
             return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         except Exception as e:
