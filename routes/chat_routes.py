@@ -188,9 +188,17 @@ def chat():
                                    force=moved or bool(keyword_jump))
     _mark("自然情境撰写")
 
-    channel_rule = ("你们现在在同一个地方，可以当面说话。" if can_speak
-                    else "你们现在不在面对面交流，只能用手机发消息，不要输出对白。")
-    system_prompt = f"{CHAT_PROMPT}\n\n{channel_rule}"
+    channel_rule = (
+        "你们现在在同一个地方，可以当面说话。当面的对白要短、平、少。"
+        if can_speak else
+        "你们现在不在面对面交流，只能用「消息」联系，不要输出对白。"
+        "手机里的你要活泼、傲娇、带语气词和颜文字，可以连发两三条短句，"
+        "和当面的冷淡形成明显反差。"
+    )
+    # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
+    format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
+                   "不要用纯文本回应，哪怕只有一个字或一个颜文字，也要包进 JSON。")
+    system_prompt = f"{CHAT_PROMPT}\n\n{channel_rule}\n\n{format_rule}"
     context_messages = db.get_messages(conv_id, channel=channel)[-6:]
     _mark("提示词组装完成（准备开始流式）")
 
