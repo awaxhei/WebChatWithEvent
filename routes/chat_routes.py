@@ -182,6 +182,12 @@ def chat():
 
     db.add_message(conv_id, "user", user_message, channel=channel, scene=player_loc)
     db.touch_conversation(conv_id)
+    # 记下"她说完之后，玩家隔了多久才回"：等待时长按这个自适应
+    prev_yuxia_at, _prev_channel = db.get_last_yuxia(conv_id)
+    if prev_yuxia_at:
+        latency = time.time() - prev_yuxia_at
+        if 1 <= latency < 3600:
+            db.update_reply_latency(conv_id, latency)
     db.set_last_user_at(conv_id, time.time())
 
     all_messages = db.get_messages(conv_id)

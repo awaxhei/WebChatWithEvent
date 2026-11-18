@@ -155,6 +155,8 @@ class ChatDB:
                 # v7：她最后一次说话的时刻与通道（决定她还该等玩家多久）
                 ("last_yuxia_at", "REAL DEFAULT 0"),
                 ("last_yuxia_channel", "TEXT DEFAULT ''"),
+                # v7：玩家平均多久回一句（秒，指数滑动平均），用来自适应等待时长
+                ("reply_latency", "REAL DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -660,3 +662,22 @@ class ChatDB:
         if not row:
             return (0.0, "")
         return (float(row["last_yuxia_at"] or 0), row["last_yuxia_channel"] or "")
+
+    # ----- v7：玩家的回复速度（自适应等待时长用）-----
+    def update_reply_latency(self, conv_id, seconds, alpha=0.4):
+        """把一次"她说完 → 玩家开回"的间隔并进滑动平均"""
+        seconds = max(1.0, min(float(seconds), 3600.0))
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT reply_latency FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+            old = float(row["reply_latency"] or 0) if row else 0.0
+            value = seconds if old <= 0 else (old * (1 - alpha) + seconds * alpha)
+            conn.execute("UPDATE conversations SET reply_latency=? WHERE id=?",
+                         (round(value, 2), conv_id))
+        return value
+
+    def get_reply_latency(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT reply_latency FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+        return float(row["reply_latency"] or 0) if row else 0.0

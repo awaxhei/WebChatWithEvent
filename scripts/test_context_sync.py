@@ -11,6 +11,7 @@
 import json
 import os
 import sys
+import time
 import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -231,6 +232,21 @@ def main():
               llm2.system_prompt[:400])
         check("提示词里她自己的动作不再是第三人称",
               "尤夏把灶台擦了一遍" not in llm2.system_prompt)
+    finally:
+        chat_mod.deepseek = real
+
+    # ── 9) 玩家回复速度会被记录下来（等待时长靠它自适应）
+    convL = app_db.create_conversation(user)
+    app_db.add_message(convL, "user", "先说一句", channel="chat")
+    app_db.set_last_user_at(convL, time.time())
+    app_db.set_last_yuxia_at(convL, time.time() - 30, "chat")
+    llm3 = CaptureLLM()
+    chat_mod.deepseek = llm3
+    try:
+        r = c.post("/api/chat", json={"conversation_id": convL, "message": "回一句"})
+        r.data.decode("utf-8")
+        lat = app_db.get_reply_latency(convL)
+        check("记录玩家回复间隔", 25 <= lat <= 40, str(lat))
     finally:
         chat_mod.deepseek = real
 

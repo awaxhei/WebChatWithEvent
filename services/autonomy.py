@@ -27,6 +27,9 @@ from config import (
     AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
     AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
     AUTONOMY_SPEAK_WAIT_SECONDS, AUTONOMY_PHONE_WAIT_SECONDS,
+    AUTONOMY_WAIT_MIN_SECONDS, AUTONOMY_WAIT_MAX_SECONDS,
+    AUTONOMY_WAIT_LATENCY_MULTIPLIER, AUTONOMY_WAIT_QUESTION_FACTOR,
+    AUTONOMY_WAIT_BACKOFF_STEP, AUTONOMY_WAIT_BACKOFF_CAP,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -176,25 +179,59 @@ def _autonomy_after_last_user(db, conv_id):
     return [t for t in tail if float(t.get("at") or 0) >= last_user_at]
 
 
+_QUESTION_TAIL = re.compile(r"[?？]|吗|呢|吧|好不好|行不行")
+
+
+def _asked_question(db, conv_id):
+    """她最后一句是不是在问玩家（问了就值得多等一会）"""
+    try:
+        msgs = [m for m in db.get_messages(conv_id)
+                if m["role"] == "assistant"
+                and (m.get("channel") or "chat") in ("chat", "phone")]
+    except Exception:
+        return False
+    if not msgs:
+        return False
+    text = _readable(msgs[-1]["content"]).strip()
+    if not text:
+        return False
+    return bool(_QUESTION_TAIL.search(text[-6:]))
+
+
 def _wait_seconds_needed(db, conv_id):
     """她说完话之后，该等玩家多久才能再自己动。
 
-    - 普通说话（对白）：等 AUTONOMY_SPEAK_WAIT_SECONDS
-    - 发手机消息：等 AUTONOMY_PHONE_WAIT_SECONDS（玩家得先看到红点再打开手机）
-    - 已经动过手又补过话：等 AUTONOMY_AFTER_ACT_GRACE_SECONDS，把话筒彻底交回去
+    动态计算，而不是固定秒数：
+    - 底层：玩家平时的回复间隔（指数滑动平均）× 倍率，落在 [MIN, MAX]
+    - 她刚问了一句 → 再乘一个系数（问到点上了，值得多等）
+    - 她已经连着输出过几次而你还没回 → 逐步拉长，别一直催
+    - 动过手又补过话 → 更长的一档，把话筒彻底交回去
+    - 刚动完手还没说话 → 最短（允许马上补一句）
     """
     at, channel = db.get_last_yuxia(conv_id)
     if not at:
         return (0, 0.0)
-    recent = _autonomy_after_last_user(db, conv_id)
-    if any(t.get("action") == "act" for t in recent) and recent[-1].get("action") != "act":
-        return (AUTONOMY_AFTER_ACT_GRACE_SECONDS, at)
+
+    base = AUTONOMY_PHONE_WAIT_SECONDS if channel == "phone" else AUTONOMY_SPEAK_WAIT_SECONDS
+    latency = db.get_reply_latency(conv_id)
+    if latency > 0:
+        base = latency * AUTONOMY_WAIT_LATENCY_MULTIPLIER
     if channel == "act":
-        # 刚动完手还没说话：允许她马上补一句（这是交互感的关键），别等太久
         return (AUTONOMY_MIN_INTERVAL_SECONDS, at)
-    if channel == "phone":
-        return (AUTONOMY_PHONE_WAIT_SECONDS, at)
-    return (AUTONOMY_SPEAK_WAIT_SECONDS, at)
+
+    if _asked_question(db, conv_id):
+        base *= AUTONOMY_WAIT_QUESTION_FACTOR
+
+    recent = _autonomy_after_last_user(db, conv_id)
+    unfinished_act = any(t.get("action") == "act" for t in recent)
+    if unfinished_act and recent[-1].get("action") != "act":
+        # 做完事又说了话：这一档更长，把话筒彻底交回去
+        base = min(base * 3, AUTONOMY_AFTER_ACT_GRACE_SECONDS)
+    elif len(recent) >= 2:
+        base *= min(AUTONOMY_WAIT_BACKOFF_STEP ** (len(recent) - 1), AUTONOMY_WAIT_BACKOFF_CAP)
+
+    base = max(AUTONOMY_WAIT_MIN_SECONDS, min(base, AUTONOMY_WAIT_MAX_SECONDS))
+    return (int(round(base)), at)
 
 
 def _waiting_for_player(db, conv_id, idle):

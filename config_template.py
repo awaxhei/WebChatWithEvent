@@ -382,9 +382,18 @@ AUTONOMY_ACT_PER_WINDOW = 1
 # 玩家真的走开这么久（秒）之后，她才允许自己再动起来
 AUTONOMY_AFTER_ACT_GRACE_SECONDS = 180
 # 她说完话之后要等玩家多久才允许自己再开口 / 动手（秒）
+# 实际等待是动态的：按玩家平时的回复速度自适应，这两个值只是"还没数据时"的默认值
 AUTONOMY_SPEAK_WAIT_SECONDS = 20
-# 发了手机消息的等待时长（和当面一致）
 AUTONOMY_PHONE_WAIT_SECONDS = 20
+# 动态等待的边界与倍率：等待 ≈ 玩家平均回复间隔 × 倍率，落在 [MIN, MAX] 之间
+AUTONOMY_WAIT_MIN_SECONDS = 12
+AUTONOMY_WAIT_MAX_SECONDS = 150
+AUTONOMY_WAIT_LATENCY_MULTIPLIER = 1.6
+# 她刚问了一句时，愿意多等这么多倍
+AUTONOMY_WAIT_QUESTION_FACTOR = 1.4
+# 连续几次自主输出后玩家还没回，等待逐步拉长（封顶 4 倍），别一直催
+AUTONOMY_WAIT_BACKOFF_STEP = 1.5
+AUTONOMY_WAIT_BACKOFF_CAP = 4.0
 # 前端轮询闲置的间隔（秒）
 IDLE_POLL_SECONDS = 8
 AUTONOMY_PROMPT = (
