@@ -125,16 +125,20 @@ def main():
     check("act 记进事件表", "misc" in kinds, str(kinds))
     check("同处一地时 act 对玩家可见", acted7.get("visible") is True)
 
-    # 9) 防重复：和刚才做过的高度相似 → 丢弃
-    again = StubLLM('{"action": "act", "text": "去关水阀，把地上的水擦掉", "location": ""}')
-    check("重复的 act 被拦截", autonomy.maybe_act(db, conv7, again, 610, "情境", idle=False) is None)
+    # 9) 动作不能连着来：中间必须先有话（交互感）
+    again = StubLLM('{"action": "act", "text": "把湿掉的抹布拿去阳台晾着", "location": ""}')
+    check("act 之后紧接 act 被拦下",
+          autonomy.maybe_act(db, conv7, again, 610, "情境", idle=False) is None)
+    after = StubLLM('{"action": "speak", "text": "……要帮忙吗。", "location": ""}')
+    db.set_last_user_at(conv7, time.time() - autonomy.AUTONOMY_MIN_INTERVAL_SECONDS - 5)
+    acted8 = autonomy.maybe_act(db, conv7, after, 612, "情境", idle=True)
+    check("动作之后可以补一句话", bool(acted8) and acted8["action"] == "speak", str(acted8))
 
-    # 10) 换了内容就可以继续
-    newone = StubLLM('{"action": "act", "text": "把湿掉的抹布拿去阳台晾着", "location": ""}')
-    acted9 = autonomy.maybe_act(db, conv7, newone, 620, "情境", idle=False)
-    check("不同内容可以继续行动", bool(acted9) and acted9["action"] == "act", str(acted9))
-    activity2, _at2 = db.get_yuxia_activity(conv7)
-    check("活动被更新", activity2 == "把湿掉的抹布拿去阳台晾着", activity2)
+    # 10) 做了一件事、又说了一句话之后，就等玩家开口（不再自顾自）
+    more = StubLLM('{"action": "act", "text": "把阳台的窗帘拉上", "location": ""}')
+    check("act+说话之后不再自己动",
+          autonomy.maybe_act(db, conv7, more, 614, "情境", idle=True) is None)
+    check("等玩家时不再调用模型", more.calls == 0, f"calls={more.calls}")
 
     # 11) 重复的台词同样拦截
     conv11 = fresh()
@@ -163,7 +167,7 @@ def main():
     check("act 事件标记为 self（不能当世界事件喂回去）",
           any(e.get("tier") == "self" for e in db.get_recent_events(conv13, limit=5)))
 
-    # 14) 同一时间窗内动手次数有预算，防止一分钟做完一整顿早饭
+    # 14) 同一时间窗内动手次数有预算（默认 12 分钟内只允许一次）
     conv14 = fresh()
     db.set_story_minutes(conv14, 600)
     for i in range(autonomy.AUTONOMY_ACT_PER_WINDOW):
@@ -176,11 +180,32 @@ def main():
     check("预算用完时提示词里会说明",
           "已经动过手了" in llm14.last_user_msg, llm14.last_user_msg[-120:])
 
-    # 15) 时间窗过了就又能动手
+    # 15) 时间窗过了、中间也说过话，就又能动手
+    conv15 = fresh()
+    db.set_story_minutes(conv15, 620)
+    long_ago = time.time() - autonomy.AUTONOMY_AFTER_ACT_GRACE_SECONDS - 10
+    db.set_last_user_at(conv15, long_ago - 10)
+    db.push_autonomy(conv15, {"action": "act", "text": "叠好沙发上的毯子",
+                              "at": long_ago, "at_minutes": 600})
+    db.push_autonomy(conv15, {"action": "speak", "text": "……毯子叠好了。",
+                              "at": long_ago, "at_minutes": 604})
     stale = StubLLM('{"action": "act", "text": "把买回来的菜放进冰箱", "location": ""}')
-    acted15 = autonomy.maybe_act(db, conv14, stale,
-                                 605 + autonomy.AUTONOMY_ACT_WINDOW_MINUTES + 1, "x", idle=False)
+    acted15 = autonomy.maybe_act(db, conv15, stale, 620, "x", idle=True)
     check("过了时间窗可以重新动手", bool(acted15) and acted15["action"] == "act", str(acted15))
+
+    # 16) 刚做完就说话（玩家还在），不再接着动手
+    conv16 = fresh()
+    db.set_story_minutes(conv16, 600)
+    db.set_last_user_at(conv16, time.time())
+    now_ts = time.time()
+    db.push_autonomy(conv16, {"action": "act", "text": "把窗帘拉开",
+                              "at": now_ts - 6, "at_minutes": 600})
+    db.push_autonomy(conv16, {"action": "speak", "text": "……外面在下雨。",
+                              "at": now_ts - 2, "at_minutes": 601})
+    greedy = StubLLM('{"action": "act", "text": "去拿伞", "location": ""}')
+    check("动作+说话之后把话筒交回玩家",
+          autonomy.maybe_act(db, conv16, greedy, 604, "x", idle=True) is None)
+    check("这时也不调用模型", greedy.calls == 0, f"calls={greedy.calls}")
 
     print()
     if FAILED:

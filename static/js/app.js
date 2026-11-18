@@ -781,12 +781,16 @@ class ChatManager {
 
 // ── EventPanel / HistoryManager / UIController ──
 
-/** 手机面板：所有手机通道消息都在这里，主聊天页不出现 */
+/** 手机面板：所有手机通道消息都在这里，主聊天页不出现
+ *  面板是可拖动、可缩放的浮动窗口（位置/尺寸记在本机 localStorage） */
 class PhonePanel {
     constructor() {
         this.btn = document.getElementById('btnPhone');
         this.badge = document.getElementById('phoneBadge');
         this.overlay = document.getElementById('phoneOverlay');
+        this.shell = document.getElementById('phoneShell');
+        this.header = document.getElementById('phoneHeader');
+        this.resizeHandle = document.getElementById('phoneResize');
         this.list = document.getElementById('phoneList');
         this.input = document.getElementById('phoneInput');
         this.btnSend = document.getElementById('phoneSend');
@@ -794,18 +798,143 @@ class PhonePanel {
         this.messages = [];
         this.unread = 0;
         this.isOpen = false;
+        this._win = null;
         this._bind();
+        this._initWindow();
     }
     _bind() {
         if (this.btn) this.btn.addEventListener('click', () => this.toggle());
         if (this.btnClose) this.btnClose.addEventListener('click', () => this.close());
-        if (this.overlay) this.overlay.addEventListener('click', (e) => { if (e.target === this.overlay) this.close(); });
         if (this.btnSend) this.btnSend.addEventListener('click', () => this.send());
         if (this.input) {
             this.input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
             });
         }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isOpen) this.close();
+        });
+    }
+
+    // ── 浮动窗口：拖动 / 缩放 / 位置记忆 ──
+    _initWindow() {
+        if (!this.shell) return;
+        const saved = this._loadWindow();
+        this._applyWindow(saved || this._defaultWindow());
+        this._bindDrag();
+        this._bindResize();
+        window.addEventListener('resize', () => {
+            if (!this.isOpen) return;
+            this._applyWindow(this._clamp(this._currentWindow()));
+        });
+    }
+    _defaultWindow() {
+        const w = 340, h = Math.min(480, window.innerHeight - 120);
+        return {
+            left: Math.max(12, window.innerWidth - w - 48),
+            top: 72,
+            width: w,
+            height: Math.max(260, h),
+        };
+    }
+    _loadWindow() {
+        try {
+            const raw = localStorage.getItem('yuxia_phone_win');
+            if (!raw) return null;
+            const d = JSON.parse(raw);
+            if (!d || typeof d.left !== 'number') return null;
+            return d;
+        } catch (e) { return null; }
+    }
+    _saveWindow(win) {
+        try { localStorage.setItem('yuxia_phone_win', JSON.stringify(win)); } catch (e) {}
+    }
+    _currentWindow() {
+        return {
+            left: parseFloat(this.shell.style.left) || 16,
+            top: parseFloat(this.shell.style.top) || 72,
+            width: parseFloat(this.shell.style.width) || 340,
+            height: parseFloat(this.shell.style.height) || 480,
+        };
+    }
+    // 不让窗口跑出视口（留 8px 边距），宽高也不超过视口
+    _clamp(win) {
+        const margin = 8;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const width = Math.min(Math.max(260, win.width), Math.max(260, vw - margin * 2));
+        const height = Math.min(Math.max(220, win.height), Math.max(220, vh - margin * 2));
+        const left = Math.min(Math.max(margin, win.left), Math.max(margin, vw - width - margin));
+        const top = Math.min(Math.max(margin, win.top), Math.max(margin, vh - height - margin));
+        return { left, top, width, height };
+    }
+    _applyWindow(win) {
+        const w = this._clamp(win);
+        this._win = w;
+        this.shell.style.left = w.left + 'px';
+        this.shell.style.top = w.top + 'px';
+        this.shell.style.width = w.width + 'px';
+        this.shell.style.height = w.height + 'px';
+    }
+    _bindDrag() {
+        if (!this.header) return;
+        let start = null;
+        const onMove = (e) => {
+            if (!start) return;
+            const win = {
+                ...start.win,
+                left: start.win.left + (e.clientX - start.x),
+                top: start.win.top + (e.clientY - start.y),
+            };
+            this._applyWindow(win);
+            e.preventDefault();
+        };
+        const onUp = () => {
+            if (!start) return;
+            start = null;
+            this.shell.classList.remove('dragging');
+            this._saveWindow(this._currentWindow());
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        };
+        this.header.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('button')) return;   // 别把关闭按钮当拖拽区
+            if (window.innerWidth <= 768) return;     // 手机上不浮动
+            start = { x: e.clientX, y: e.clientY, win: this._currentWindow() };
+            this.shell.classList.add('dragging');
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+            e.preventDefault();
+        });
+    }
+    _bindResize() {
+        if (!this.resizeHandle) return;
+        let start = null;
+        const onMove = (e) => {
+            if (!start) return;
+            this._applyWindow({
+                left: start.win.left,
+                top: start.win.top,
+                width: start.win.width + (e.clientX - start.x),
+                height: start.win.height + (e.clientY - start.y),
+            });
+            e.preventDefault();
+        };
+        const onUp = () => {
+            if (!start) return;
+            start = null;
+            this.shell.classList.remove('dragging');
+            this._saveWindow(this._currentWindow());
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        };
+        this.resizeHandle.addEventListener('pointerdown', (e) => {
+            if (window.innerWidth <= 768) return;
+            start = { x: e.clientX, y: e.clientY, win: this._currentWindow() };
+            this.shell.classList.add('dragging');
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+            e.preventDefault();
+        });
     }
     setMessages(msgs, unread) {
         this.messages = msgs || [];
@@ -855,6 +984,7 @@ class PhonePanel {
     }
     openPhone() {
         if (!this.overlay) return;
+        this._applyWindow(this._clamp(this._win || this._currentWindow()));
         this.overlay.classList.add('show');
         this.isOpen = true;
         this.setUnread(0);

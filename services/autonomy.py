@@ -25,7 +25,7 @@ from config import (
     AUTONOMY_ENABLED, AUTONOMY_PROMPT, AUTONOMY_ALLOW_NEW_LOCATION,
     AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
     AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
-    AUTONOMY_SPEAK_MINUTES,
+    AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -165,6 +165,37 @@ def _assistant_streak(db, conv_id):
     return streak
 
 
+def _autonomy_after_last_user(db, conv_id):
+    """玩家最后一次开口之后，她自己做过的所有事（按时间正序）"""
+    last_user_at = db.get_last_user_at(conv_id)
+    try:
+        tail = db.get_autonomy_tail(conv_id)
+    except Exception:
+        return []
+    return [t for t in tail if float(t.get("at") or 0) >= last_user_at]
+
+
+def _waiting_for_player(db, conv_id, idle):
+    """她做完一件事、又补上一句之后，该把话筒交回玩家。
+
+    没有这条时，闲置轮询会让她一环接一环地做下去（煎蛋→翻面→装盘→端上桌），
+    玩家只能看着，像在看她一个人演默剧。
+    """
+    recent = _autonomy_after_last_user(db, conv_id)
+    if not recent:
+        return False
+    if not any(t.get("action") == "act" for t in recent):
+        return False
+    if recent[-1].get("action") == "act":
+        return False          # 只做了动作，允许她再补一句
+    if idle:
+        # 玩家真的走开很久了，才允许她重新动起来
+        last_at = float(recent[-1].get("at") or 0)
+        if (time.time() - last_at) >= AUTONOMY_AFTER_ACT_GRACE_SECONDS:
+            return False
+    return True
+
+
 def _allowed(db, conv_id, idle):
     if not AUTONOMY_ENABLED:
         return False
@@ -172,6 +203,8 @@ def _allowed(db, conv_id, idle):
     if db.is_paused(conv_id):
         return False
     if _assistant_streak(db, conv_id) >= 1 + AUTONOMY_MAX_CONSECUTIVE:
+        return False
+    if _waiting_for_player(db, conv_id, idle):
         return False
     if idle:
         last = db.get_last_user_at(conv_id)
@@ -250,7 +283,7 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
 
     user_msg = _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
                              co_located, idle, idle_seconds,
-                             can_act=_act_budget_left(db, conv_id, now_minutes))
+                             can_act=_can_act(db, conv_id, now_minutes))
 
     try:
         raw = deepseek.chat_sync(
@@ -284,7 +317,7 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
         return _do_move(db, conv_id, decision, yuxia_loc, now_minutes)
 
     if action == "act" and text:
-        if not _act_budget_left(db, conv_id, now_minutes):
+        if not _can_act(db, conv_id, now_minutes):
             print("[自主行动] 这段时间已经动过手了，跳过 act")
             return None
         return _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located)
@@ -320,6 +353,17 @@ def _act_budget_left(db, conv_id, now_minutes):
               if t.get("action") == "act"
               and int(now_minutes) - int(t.get("at_minutes") or 0) < AUTONOMY_ACT_WINDOW_MINUTES]
     return len(recent) < AUTONOMY_ACT_PER_WINDOW
+
+
+def _can_act(db, conv_id, now_minutes):
+    """能不能动手：预算之内，并且不连着动两次（中间必须有话）"""
+    if not _act_budget_left(db, conv_id, now_minutes):
+        return False
+    try:
+        tail = db.get_autonomy_tail(conv_id)
+    except Exception:
+        return True
+    return not (tail and tail[-1].get("action") == "act")
 
 
 def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):

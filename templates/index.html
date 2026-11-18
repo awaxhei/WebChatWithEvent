@@ -197,10 +197,17 @@
 
     </div>
 
-    <!-- 手机面板 -->
+    <!-- 手机面板：可拖动、可缩放的浮动窗口，背景不遮不糊 -->
     <div class="phone-overlay" id="phoneOverlay">
-        <div class="phone-shell">
-            <div class="phone-header">
+        <div class="phone-shell" id="phoneShell">
+            <div class="phone-header" id="phoneHeader" title="按住拖动窗口">
+                <span class="phone-grip" aria-hidden="true">
+                    <svg viewBox="0 0 10 16" width="10" height="16" fill="currentColor">
+                        <circle cx="2" cy="3" r="1.2"/><circle cx="8" cy="3" r="1.2"/>
+                        <circle cx="2" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/>
+                        <circle cx="2" cy="13" r="1.2"/><circle cx="8" cy="13" r="1.2"/>
+                    </svg>
+                </span>
                 <span class="phone-title">手机 · 与尤夏</span>
                 <button class="btn-icon" id="phoneClose" title="关闭">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -217,6 +224,7 @@
                     </svg>
                 </button>
             </div>
+            <div class="phone-resize" id="phoneResize" title="拖动调整大小"></div>
         </div>
     </div>
 
