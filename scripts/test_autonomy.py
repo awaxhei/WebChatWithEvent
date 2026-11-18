@@ -222,17 +222,20 @@ def main():
     db.set_last_yuxia_at(conv17, time.time() - autonomy.AUTONOMY_SPEAK_WAIT_SECONDS - 2, "chat")
     check("等不及了才行动", bool(autonomy.maybe_act(db, conv17, eager, 603, "x", idle=True)))
 
-    # 19) 手机消息要等更久（玩家得先看到红点、打开手机、读完再回）
+    # 19) 手机消息同样要等（等待时长取 AUTONOMY_PHONE_WAIT_SECONDS）
     conv19 = fresh()
     db.set_story_minutes(conv19, 600)
     db.set_last_user_at(conv19, time.time() - 60)
-    db.set_last_yuxia_at(conv19, time.time() - autonomy.AUTONOMY_SPEAK_WAIT_SECONDS - 5, "phone")
+    db.set_last_yuxia_at(conv19, time.time() - 5, "phone")
     phone_wait = StubLLM('{"action": "act", "text": "把灯关了", "location": ""}')
-    check("手机消息的等待更长",
+    check("手机消息也要等",
           autonomy.maybe_act(db, conv19, phone_wait, 601, "x", idle=True) is None)
     db.set_last_yuxia_at(conv19, time.time() - autonomy.AUTONOMY_PHONE_WAIT_SECONDS - 2, "phone")
     check("手机消息等够了才行动",
           bool(autonomy.maybe_act(db, conv19, phone_wait, 603, "x", idle=True)))
+    check("等待时长可按通道配置（当前 20 秒）",
+          autonomy.AUTONOMY_PHONE_WAIT_SECONDS == autonomy.AUTONOMY_SPEAK_WAIT_SECONDS,
+          f"{autonomy.AUTONOMY_PHONE_WAIT_SECONDS} vs {autonomy.AUTONOMY_SPEAK_WAIT_SECONDS}")
 
     # 20) 她答应了"来了"，就允许在等待期里跟过去（不然只会嘴上答应）
     conv20 = fresh()
