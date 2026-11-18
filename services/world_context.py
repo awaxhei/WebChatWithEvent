@@ -26,7 +26,31 @@ _TYPE_HINT = {
 SELF_TIER = "self"
 
 
-def recent_events_block(db, conv_id, limit=6, with_time=True, exclude_self=True):
+def _age_label(event, now_minutes):
+    """把事件的时间戳换算成"距现在多久"。
+
+    事件表里只有「第一天 07:10」这样的绝对时间，模型很容易把它读成"早上发生过的旧事"，
+    于是明明刚响的敲门声，她会回一句"哦……早上那个"。
+    """
+    if now_minutes is None or not event.get("story_time"):
+        return ""
+    ev_minutes = clock.parse_display_time(event["story_time"])
+    if ev_minutes is None:
+        return ""
+    delta = int(now_minutes) - int(ev_minutes)
+    if delta <= 0:
+        return "刚刚"
+    if delta <= 5:
+        return "刚刚"
+    if delta <= 60:
+        return f"{delta} 分钟前"
+    if delta <= 240:
+        return f"{delta // 60} 小时前"
+    return ""
+
+
+def recent_events_block(db, conv_id, limit=6, with_time=True, exclude_self=True,
+                        now_minutes=None):
     """最近发生的事（时间正序，最后一条最新）"""
     try:
         events = db.get_recent_events(conv_id, limit=limit * 4 if exclude_self else limit)
@@ -36,15 +60,16 @@ def recent_events_block(db, conv_id, limit=6, with_time=True, exclude_self=True)
         events = [e for e in events if e.get("tier") != SELF_TIER][-limit:]
     if not events:
         return ""
-    lines = ["【最近发生的事】"]
+    lines = ["【最近发生的事】（按时间先后，越靠下越新）"]
     for e in events:
         tag = _TYPE_HINT.get(e.get("event_type"), "")
         tag = f"（{tag}）" if tag else ""
-        ts = f"{e['story_time']} " if (with_time and e.get("story_time")) else ""
+        age = _age_label(e, now_minutes) if with_time else ""
+        when = f"{age}｜" if age else (f"{e['story_time']}｜" if (with_time and e.get("story_time")) else "")
         desc = (e.get("description") or "").strip()
         title = (e.get("title") or "").strip()
         body = f"{title}：{desc}" if desc and desc != title else title
-        lines.append(f"- {ts}{body}{tag}")
+        lines.append(f"- {when}{body}{tag}")
     return "\n".join(lines)
 
 
@@ -112,9 +137,12 @@ def recent_activity_block(db, conv_id, limit=4):
 
 
 def world_block(db, conv_id, now_minutes=None, events_limit=6):
-    """给对话/自主行动提示词用的世界块：最近发生的事 + 她正在做的事"""
+    """给对话/自主行动提示词用的世界块：此刻时间 + 最近发生的事 + 她正在做的事"""
     parts = []
-    ev = recent_events_block(db, conv_id, limit=events_limit)
+    tl = time_line(now_minutes)
+    if tl:
+        parts.append(tl)
+    ev = recent_events_block(db, conv_id, limit=events_limit, now_minutes=now_minutes)
     if ev:
         parts.append(ev)
     act = activity_line(db, conv_id, now_minutes)

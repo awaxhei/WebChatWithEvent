@@ -258,7 +258,7 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
     if scene_line:
         parts.append(scene_line.rstrip("\n"))
 
-    events = world_context.recent_events_block(db, conv_id, limit=6)
+    events = world_context.recent_events_block(db, conv_id, limit=6, now_minutes=now_minutes)
     if events:
         parts.append(events)
 

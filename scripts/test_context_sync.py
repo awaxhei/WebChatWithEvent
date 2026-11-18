@@ -200,6 +200,14 @@ def main():
     check("世界事件仍然在", "楼上传来一阵拖椅子的声音" in block, block[:160])
     check("她自己的动作不算世界事件", "从沙发上起身" not in block, block[:160])
 
+    # 事件要标出"距现在多久"，否则刚响的敲门声会被她说成"早上那事"
+    aged = world_context.recent_events_block(app_db, conv6, limit=6, now_minutes=307)
+    check("刚发生的事件标「刚刚」", "刚刚" in aged, aged[:200])
+    aged2 = world_context.recent_events_block(app_db, conv6, limit=6, now_minutes=460)
+    check("久一点的事件标分钟数", "分钟前" in aged2, aged2[:200])
+    wb = world_context.world_block(app_db, conv6, now_minutes=307)
+    check("世界块带上「此刻」", "此刻" in wb, wb[:200])
+
     app_db.set_yuxia_activity(conv6, "尤夏把碗摞起来", 429)
     line = world_context.activity_line(app_db, conv6, 430)
     check("活动行改成第二人称（去掉「尤夏」主语）",
