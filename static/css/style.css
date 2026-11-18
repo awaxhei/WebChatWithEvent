@@ -793,6 +793,22 @@ html, body {
     align-self: flex-end;
     background: #22c55e; color: #fff; border-bottom-right-radius: 4px;
 }
+/* 等待她回复时的"正在输入" */
+.phone-typing {
+    display: flex; align-items: center; gap: 4px;
+    padding: 10px 14px; width: fit-content;
+}
+.phone-typing span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-muted); display: inline-block;
+    animation: phoneTyping 1.2s ease-in-out infinite;
+}
+.phone-typing span:nth-child(2) { animation-delay: 0.15s; }
+.phone-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes phoneTyping {
+    0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+}
 .phone-input-row {
     display: flex; gap: 6px; align-items: center;
     padding: 10px 12px; border-top: 1px solid var(--border);

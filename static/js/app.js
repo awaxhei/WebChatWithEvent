@@ -239,7 +239,10 @@ class ChatManager {
         if (this.pushMode) this.togglePushMode();
         const viaPhone = forceChannel === 'phone' || !this.coLocated;
         if (viaPhone) {
-            if (window.phonePanel) window.phonePanel.push('user', displayMsg, false);
+            if (window.phonePanel) {
+                window.phonePanel.push('user', displayMsg, false);
+                window.phonePanel.showTyping();
+            }
         } else {
             this._addBubble(this._looksLikeSceneNote(displayMsg) ? 'narration' : 'user', displayMsg);
         }
@@ -287,6 +290,7 @@ class ChatManager {
             }
         } catch (error) {
             AnimationEngine.hideThinking();
+            if (window.phonePanel) window.phonePanel.hideTyping();
             this._addBubble('assistant', `Error: ${error.message}`);
             this.isProcessing = false; this._enableInput();
             return;
@@ -348,6 +352,7 @@ class ChatManager {
             }
         }
         document.querySelectorAll('.stream-temp').forEach(el => el.classList.remove('stream-temp'));
+        if (window.phonePanel) window.phonePanel.hideTyping();
     }
 
     _extractJSONObjects(text) {
@@ -676,8 +681,22 @@ class PhonePanel {
     }
     push(role, text, markUnread) {
         this.messages.push({ role, content: text });
+        if (role === 'assistant') this.hideTyping();
         this.render();
         if (markUnread && !this.isOpen) this.setUnread(this.unread + 1);
+    }
+    showTyping() {
+        if (!this.list || document.getElementById('phoneTyping')) return;
+        const el = document.createElement('div');
+        el.id = 'phoneTyping';
+        el.className = 'phone-msg her phone-typing';
+        el.innerHTML = '<span></span><span></span><span></span>';
+        this.list.appendChild(el);
+        this.list.scrollTop = this.list.scrollHeight;
+    }
+    hideTyping() {
+        const el = document.getElementById('phoneTyping');
+        if (el) el.remove();
     }
     setUnread(n) {
         this.unread = n;
