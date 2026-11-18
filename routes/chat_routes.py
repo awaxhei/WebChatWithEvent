@@ -271,9 +271,10 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     objects = _extract_json_objects(clean)
     if not objects:
         # 模型没按 JSON 输出（或报错）：按当前通道原样存一条，前端照常显示
+        fallback_channel = PHONE_CHANNEL if not can_speak else channel
         db.add_message(conv_id, "assistant", clean,
-                       channel=PHONE_CHANNEL if not can_speak else channel,
-                       scene=yuxia_loc)
+                       channel=fallback_channel, scene=yuxia_loc)
+        db.set_last_yuxia_at(conv_id, time.time(), fallback_channel)
         if not clean.startswith(("API 错误", "错误:", "无法连接", "[生成失败")):
             memory_engine.remember_assistant_message(db, conv_id, clean, now_minutes)
         return
@@ -302,6 +303,12 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     readable = " ".join(speech + [f"（手机）{m}" for m in phone_msgs]).strip()
     if readable:
         memory_engine.remember_assistant_message(db, conv_id, readable, now_minutes)
+
+    # 记下她这次说话的通道与时刻：手机消息要给玩家更多时间，别转头就开始干活
+    if phone_msgs:
+        db.set_last_yuxia_at(conv_id, time.time(), PHONE_CHANNEL)
+    elif speech or stickers_used:
+        db.set_last_yuxia_at(conv_id, time.time(), CHAT_CHANNEL)
 
 
 # ──────────────────────────────────────────────

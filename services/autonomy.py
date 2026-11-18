@@ -26,6 +26,7 @@ from config import (
     AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
     AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
     AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
+    AUTONOMY_SPEAK_WAIT_SECONDS, AUTONOMY_PHONE_WAIT_SECONDS,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -175,25 +176,33 @@ def _autonomy_after_last_user(db, conv_id):
     return [t for t in tail if float(t.get("at") or 0) >= last_user_at]
 
 
-def _waiting_for_player(db, conv_id, idle):
-    """她做完一件事、又补上一句之后，该把话筒交回玩家。
+def _wait_seconds_needed(db, conv_id):
+    """她说完话之后，该等玩家多久才能再自己动。
 
-    没有这条时，闲置轮询会让她一环接一环地做下去（煎蛋→翻面→装盘→端上桌），
-    玩家只能看着，像在看她一个人演默剧。
+    - 普通说话（对白）：等 AUTONOMY_SPEAK_WAIT_SECONDS
+    - 发手机消息：等 AUTONOMY_PHONE_WAIT_SECONDS（玩家得先看到红点再打开手机）
+    - 已经动过手又补过话：等 AUTONOMY_AFTER_ACT_GRACE_SECONDS，把话筒彻底交回去
     """
+    at, channel = db.get_last_yuxia(conv_id)
+    if not at:
+        return (0, 0.0)
     recent = _autonomy_after_last_user(db, conv_id)
-    if not recent:
+    if any(t.get("action") == "act" for t in recent) and recent[-1].get("action") != "act":
+        return (AUTONOMY_AFTER_ACT_GRACE_SECONDS, at)
+    if channel == "act":
+        # 刚动完手还没说话：允许她马上补一句（这是交互感的关键），别等太久
+        return (AUTONOMY_MIN_INTERVAL_SECONDS, at)
+    if channel == "phone":
+        return (AUTONOMY_PHONE_WAIT_SECONDS, at)
+    return (AUTONOMY_SPEAK_WAIT_SECONDS, at)
+
+
+def _waiting_for_player(db, conv_id, idle):
+    """她刚说完话 → 先等玩家；等不及了（超过等待时长）才允许自己再动。"""
+    need, at = _wait_seconds_needed(db, conv_id)
+    if not need or not at:
         return False
-    if not any(t.get("action") == "act" for t in recent):
-        return False
-    if recent[-1].get("action") == "act":
-        return False          # 只做了动作，允许她再补一句
-    if idle:
-        # 玩家真的走开很久了，才允许她重新动起来
-        last_at = float(recent[-1].get("at") or 0)
-        if (time.time() - last_at) >= AUTONOMY_AFTER_ACT_GRACE_SECONDS:
-            return False
-    return True
+    return (time.time() - at) < need
 
 
 def _allowed(db, conv_id, idle):
@@ -204,6 +213,7 @@ def _allowed(db, conv_id, idle):
         return False
     if _assistant_streak(db, conv_id) >= 1 + AUTONOMY_MAX_CONSECUTIVE:
         return False
+    # 她刚发完消息 / 刚说完话：等玩家回，别转头就开始干活
     if _waiting_for_player(db, conv_id, idle):
         return False
     if idle:
@@ -333,6 +343,7 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
             db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_SPEAK_MINUTES)
         except Exception:
             pass
+        db.set_last_yuxia_at(conv_id, time.time(), channel)
         return {"action": action, "text": text, "channel": channel, "visible": True}
 
     return None
@@ -398,6 +409,7 @@ def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
         db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
     except Exception:
         pass
+    db.set_last_yuxia_at(conv_id, time.time(), "act")
     return {"action": "move", "location": new_loc, "text": "", "created": created, "visible": True}
 
 
@@ -428,6 +440,7 @@ def _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located):
         db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
     except Exception:
         pass
+    db.set_last_yuxia_at(conv_id, time.time(), "act")
     # 不在同一个地方时，玩家看不到，只在故事进展里留痕
     return {"action": "act", "text": text, "activity": text,
             "location": yuxia_loc, "visible": bool(co_located)}

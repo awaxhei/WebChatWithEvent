@@ -215,6 +215,23 @@ python scripts/check_api_key.py
 #5 [act] 从阳台边拽过拖把，拧开水龙头冲了冲，甩两下，往厨房水面按下去。
 ```
 
+### 她会先等你（等待 → 等不及 → 行动）
+
+她说完话之后不是马上接着演，而是先给玩家留出反应时间：
+
+| 她刚做了什么 | 等多久才允许自己动 | 配置 |
+|---|---|---|
+| 当面说了一句 | 45 秒 | `AUTONOMY_SPEAK_WAIT_SECONDS` |
+| 发了一条手机消息 | 90 秒（你得先看到红点、打开手机、读完再回） | `AUTONOMY_PHONE_WAIT_SECONDS` |
+| 刚动完手、还没说话 | 8 秒（允许马上补一句，这是交互感的关键） | `AUTONOMY_MIN_INTERVAL_SECONDS` |
+| 动完手又补了话 | 180 秒，然后把话筒彻底交回 | `AUTONOMY_AFTER_ACT_GRACE_SECONDS` |
+
+等待用的是**墙钟时间**（`conversations.last_yuxia_at` + `last_yuxia_channel`），不是故事时间，
+所以"你正在打字"和"你走开了"是有区别的。等待期间连模型都不调用，只是按时返回空。
+
+实测（她发完三条手机消息后每 5 秒问一次）：0–85 秒全部 denied，90.8 秒才放行，
+然后她才发「喂——厨房那边怎么没动静了？尤夏要过去检查咯」。
+
 ### 不会原地打转
 
 | 机制 | 说明 |
@@ -226,6 +243,7 @@ python scripts/check_api_key.py
 | 动手预算 | 同一 12 分钟窗内最多动手 1 次（`AUTONOMY_ACT_PER_WINDOW = 1`），动手要稀，不然像在自顾自做家务 |
 | 不连动手 | 两次 `act` 之间必须有一句话，不能一环接一环地做 |
 | 交还话筒 | 做完一件事、又补上一句之后，她停下来等你开口；你真的走开超过 3 分钟（`AUTONOMY_AFTER_ACT_GRACE_SECONDS`）她才重新动起来 |
+| 先等你回话 | 她说完话之后不会立刻接着动：对白后等 45 秒（`AUTONOMY_SPEAK_WAIT_SECONDS`）、发完手机消息等 90 秒（`AUTONOMY_PHONE_WAIT_SECONDS`），等不及了才自己行动；等待期间连模型都不调用 |
 | 行动耗时 | act/move 占 2 分钟、speak/phone 占 1 分钟故事时间，事情是"花时间做完的"，不是瞬间完成 |
 
 ### 视角不能混（她自己的动作 vs 世界事件）

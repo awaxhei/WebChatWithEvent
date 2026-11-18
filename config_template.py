@@ -380,6 +380,10 @@ AUTONOMY_ACT_PER_WINDOW = 1
 # 动手 + 补一句话之后就该把话筒交回给玩家；
 # 玩家真的走开这么久（秒）之后，她才允许自己再动起来
 AUTONOMY_AFTER_ACT_GRACE_SECONDS = 180
+# 她说完话之后要等玩家多久才允许自己再开口 / 动手（秒）
+AUTONOMY_SPEAK_WAIT_SECONDS = 45
+# 发了手机消息要等更久：玩家得先看到红点、打开手机、读完再回
+AUTONOMY_PHONE_WAIT_SECONDS = 90
 # 前端轮询闲置的间隔（秒）
 IDLE_POLL_SECONDS = 8
 AUTONOMY_PROMPT = (

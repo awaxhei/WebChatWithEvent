@@ -131,6 +131,7 @@ def main():
           autonomy.maybe_act(db, conv7, again, 610, "情境", idle=False) is None)
     after = StubLLM('{"action": "speak", "text": "……要帮忙吗。", "location": ""}')
     db.set_last_user_at(conv7, time.time() - autonomy.AUTONOMY_MIN_INTERVAL_SECONDS - 5)
+    db.set_last_yuxia_at(conv7, time.time() - autonomy.AUTONOMY_MIN_INTERVAL_SECONDS - 2, "act")
     acted8 = autonomy.maybe_act(db, conv7, after, 612, "情境", idle=True)
     check("动作之后可以补一句话", bool(acted8) and acted8["action"] == "speak", str(acted8))
 
@@ -206,6 +207,32 @@ def main():
     check("动作+说话之后把话筒交回玩家",
           autonomy.maybe_act(db, conv16, greedy, 604, "x", idle=True) is None)
     check("这时也不调用模型", greedy.calls == 0, f"calls={greedy.calls}")
+
+    # 17) 她刚说完话，玩家还没回：先等，不行动、也不调模型
+    conv17 = fresh()
+    db.set_story_minutes(conv17, 600)
+    db.set_last_user_at(conv17, time.time() - 60)
+    db.set_last_yuxia_at(conv17, time.time() - 5, "chat")
+    eager = StubLLM('{"action": "act", "text": "把杯子收了", "location": ""}')
+    check("刚说完话不会立刻行动",
+          autonomy.maybe_act(db, conv17, eager, 601, "x", idle=True) is None)
+    check("等待期间不调用模型", eager.calls == 0, f"calls={eager.calls}")
+
+    # 18) 等够了（超过 AUTONOMY_SPEAK_WAIT_SECONDS）才开始动
+    db.set_last_yuxia_at(conv17, time.time() - autonomy.AUTONOMY_SPEAK_WAIT_SECONDS - 2, "chat")
+    check("等不及了才行动", bool(autonomy.maybe_act(db, conv17, eager, 603, "x", idle=True)))
+
+    # 19) 手机消息要等更久（玩家得先看到红点、打开手机、读完再回）
+    conv19 = fresh()
+    db.set_story_minutes(conv19, 600)
+    db.set_last_user_at(conv19, time.time() - 60)
+    db.set_last_yuxia_at(conv19, time.time() - autonomy.AUTONOMY_SPEAK_WAIT_SECONDS - 5, "phone")
+    phone_wait = StubLLM('{"action": "act", "text": "把灯关了", "location": ""}')
+    check("手机消息的等待更长",
+          autonomy.maybe_act(db, conv19, phone_wait, 601, "x", idle=True) is None)
+    db.set_last_yuxia_at(conv19, time.time() - autonomy.AUTONOMY_PHONE_WAIT_SECONDS - 2, "phone")
+    check("手机消息等够了才行动",
+          bool(autonomy.maybe_act(db, conv19, phone_wait, 603, "x", idle=True)))
 
     print()
     if FAILED:

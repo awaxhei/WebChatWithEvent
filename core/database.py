@@ -152,6 +152,9 @@ class ChatDB:
                 ("autonomy_tail", "TEXT DEFAULT '[]'"),
                 # v7：暂停自动推进（她不再自主行动、世界引擎停转）
                 ("paused", "INTEGER DEFAULT 0"),
+                # v7：她最后一次说话的时刻与通道（决定她还该等玩家多久）
+                ("last_yuxia_at", "REAL DEFAULT 0"),
+                ("last_yuxia_channel", "TEXT DEFAULT ''"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -641,3 +644,19 @@ class ChatDB:
         with self._get_conn() as conn:
             row = conn.execute("SELECT paused FROM conversations WHERE id=?", (conv_id,)).fetchone()
         return bool(row and row["paused"])
+
+    # ----- v7：她最后一次说话（用于"先等玩家，等不及了才行动"） -----
+    def set_last_yuxia_at(self, conv_id, ts, channel="chat"):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET last_yuxia_at=?, last_yuxia_channel=? WHERE id=?",
+                         (float(ts), channel or "chat", conv_id))
+
+    def get_last_yuxia(self, conv_id):
+        """返回 (最后一次说话的墙钟时间, 通道)"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT last_yuxia_at, last_yuxia_channel FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        if not row:
+            return (0.0, "")
+        return (float(row["last_yuxia_at"] or 0), row["last_yuxia_channel"] or "")
