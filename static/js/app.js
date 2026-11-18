@@ -178,6 +178,18 @@ class ChatManager {
             window.emotionAssistant.eventPanel.updateStoryTime(scene.story_time);
         }
         this._updatePlaceholder();
+
+        // 环境描写在后台生成：拿到 pending 就稍后重取（最多 6 次，避免无限轮询）
+        if (scene.pending) {
+            this._sceneRetries = (this._sceneRetries || 0) + 1;
+            if (this._sceneRetries <= 6) {
+                clearTimeout(this._sceneRetryTimer);
+                this._sceneRetryTimer = setTimeout(() => this.loadScene(), 1800);
+            }
+        } else {
+            this._sceneRetries = 0;
+            clearTimeout(this._sceneRetryTimer);
+        }
     }
     async _toggleLocationPicker(force) {
         if (!this.locationPicker) return;

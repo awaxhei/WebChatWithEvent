@@ -9,6 +9,7 @@
 - 自主行动：尤夏会主动说话、发消息、甚至自己换场景
 """
 import json
+import os
 import re
 import time
 
@@ -38,6 +39,22 @@ _MOVE_CMD_RE = re.compile(r"^/去\s*(.+)")
 
 def _sse(payload):
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+# 分段计时（设置环境变量 YUXIA_TIMING=1 时打开，用于排查首轮延迟）
+_TIMING = bool(os.environ.get("YUXIA_TIMING"))
+_T0 = {"t": 0.0}
+
+
+def _mark(label):
+    if not _TIMING:
+        return
+    now = time.time()
+    if not _T0["t"]:
+        _T0["t"] = now
+        print(f"[timing] {label}: 0 ms (起点)")
+        return
+    print(f"[timing] {label}: {int((now - _T0['t']) * 1000)} ms")
 
 
 def _extract_json_objects(text):
@@ -100,11 +117,15 @@ def chat():
     if not user_message:
         return jsonify({"error": "消息不能为空"}), 400
 
+    _T0["t"] = 0.0
+    _mark("请求进入")
+
     if not conv_id or not db.conversation_belongs_to(conv_id, user_id):
         conv_id = db.create_conversation(user_id)
 
     locations.ensure_defaults(db, conv_id)
     memory_engine.ensure_backfill(db, conv_id, time_keeper.init_clock(db, conv_id))
+    _mark("会话/地点初始化")
 
     is_push_cmd = False
     push_match = _PUSH_CMD_RE.match(user_message)
@@ -144,21 +165,36 @@ def chat():
     now_minutes, keyword_jump = time_keeper.apply_message_tick(db, conv_id, user_message)
     story_time = clock.format_time(now_minutes)
     msg_count = db.get_message_count(conv_id)
+    _mark("时钟推进")
+
+    # 预热当前场景的环境描写（后台线程，不阻塞回复）：让前端首屏更快拿到文字
+    try:
+        scenes.ensure_description(db, conv_id, yuxia_loc, now_minutes, deepseek,
+                                  api_key, background=True)
+        if player_loc != yuxia_loc:
+            scenes.ensure_description(db, conv_id, player_loc, now_minutes, deepseek,
+                                      api_key, background=True)
+    except Exception as e:
+        print(f"[场景] 预热失败: {e}")
 
     memory_engine.remember_user_message(db, conv_id, user_message, now_minutes)
+    _mark("记忆写入")
 
     # 自然情境（上层 LLM 撰写 + 缓存）
     brief = context_writer.compose(db, conv_id, now_minutes, yuxia_loc, player_loc,
                                    deepseek, api_key=api_key, turn=msg_count,
                                    force=moved or bool(keyword_jump))
+    _mark("自然情境撰写")
 
     channel_rule = ("你们现在在同一个地方，可以当面说话。" if can_speak
                     else "你们现在不在面对面交流，只能用手机发消息，不要输出对白。")
     system_prompt = f"{CHAT_PROMPT}\n\n{channel_rule}"
     context_messages = db.get_messages(conv_id, channel=channel)[-6:]
+    _mark("提示词组装完成（准备开始流式）")
 
     def generate():
         full = ""
+        first_chunk_at = [None]
         yield _sse({"type": "conv_id", "id": conv_id})
         yield _sse({"type": "story_time", "content": story_time,
                     "jump": keyword_jump, "reason": "关键词规则" if keyword_jump else ""})
@@ -168,9 +204,13 @@ def chat():
 
         for chunk in deepseek.chat_stream(context_messages, system_prompt,
                                           api_key_override=api_key):
+            if first_chunk_at[0] is None:
+                first_chunk_at[0] = time.time()
+                _mark("AI A 首个 token")
             full += chunk
             yield _sse({"type": "chunk", "content": chunk})
 
+        _mark("AI A 输出完成")
         _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel)
         yield _sse({"type": "done", "conv_id": conv_id, "msg_count": msg_count,
                     "is_push_cmd": is_push_cmd, "channel": channel,

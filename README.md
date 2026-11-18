@@ -218,6 +218,7 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/e2e_server.py` | 开发用隔离实例：临时库 + 端口 5050 + 账号 `e2e/e2e123` |
 | `python scripts/auto_test_server.py` | 自主行动演示实例：概率门槛 100% + 端口 5051，用来观察尤夏自己行动 |
 | `python scripts/test_scene_creation.py` | 场景创建探针：玩家/尤夏新建场景、自动描写、上限与开关 |
+| `python scripts/timing_probe.py` | 首轮延迟分段测量（打印各阶段耗时，用 `YUXIA_TIMING=1` 打开计时日志） |
 
 ---
 
@@ -228,6 +229,36 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 - 代价：单轮约 7 秒、视觉打标约 3 秒；思考 token 计费，并会占用 `max_tokens`（视觉打标已放大到 2048）
 - 思考模式下 `temperature`/`top_p` 被忽略，本项目开启思考时不再发送这两个参数
 - 关闭：把 `DEEPSEEK_THINKING` 设为 `False`
+
+---
+
+## 延迟与性能
+
+首条消息最容易"卡"，因为除了主对话，还有两个附带任务。现在两者都不在玩家等待路径上：
+
+| 任务 | 处理方式 | 阻塞首字？ |
+|------|----------|-----------|
+| 自然情境撰写（额外 LLM 调用） | 首轮/过期时先用兜底叙述，**后台线程**撰写，下一轮生效（`CONTEXT_WRITER_BACKGROUND`） | 否 |
+| 场景环境描写（每地点每时段一次） | `/api/scene` 立即返回 `pending: true`，**后台线程**生成，前端 1.8 秒后重取 | 否 |
+| embedding 探测 | `EMBEDDING_ENABLED=False` 时完全跳过（之前每次首轮会花 4 秒连 Ollama） | 否 |
+
+实测（`deepseek-flash` + 思考模式）：
+
+```
+首轮：服务端准备 190 ms + 模型首 token → 用户看到回复约 1.2–2.0 s（优化前 8.4 s）
+后续轮：约 1.1–1.9 s
+/api/scene 冷启动：0.06 s（pending），后台约 3–5 s 后可取到描写
+```
+
+调优入口：
+
+```python
+EMBEDDING_ENABLED = False        # 装好 Ollama 模型或 sentence-transformers 后再开
+CONTEXT_WRITER_BACKGROUND = True # 关掉会用同步撰写（首轮 +3 秒）
+DEEPSEEK_REASONING_EFFORT = "high"  # 改 low 可再快一些
+```
+
+排查用：`python scripts/timing_probe.py`（打印请求内各阶段耗时），或用 `YUXIA_TIMING=1 python app.py` 在服务端日志里看分段。
 
 ---
 

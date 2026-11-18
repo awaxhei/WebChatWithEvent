@@ -8,6 +8,7 @@ import array
 import math
 import re
 
+from config import EMBEDDING_ENABLED
 from core.embedding_client import EmbeddingClient
 
 _state = {"client": None, "ok": None}
@@ -22,7 +23,13 @@ def client():
 
 
 def available():
-    """embedding 是否可用（只做一次轻量探测并缓存，不打印噪音日志）"""
+    """embedding 是否可用。
+
+    默认（EMBEDDING_ENABLED=False）直接返回 False，**不做任何网络探测**：
+    之前每次首轮都会去连 Ollama（3 秒超时）再试本地模型，白白拖慢首条消息。
+    """
+    if not EMBEDDING_ENABLED:
+        return False
     if _state["ok"] is None:
         try:
             c = client()

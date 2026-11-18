@@ -2,14 +2,23 @@
 自然情境撰写（v4）
 
 尤夏看到的上下文不再是【方括号】+ 列表，而是一段自然的中文叙述。
-结构化状态 → 上层 LLM 写成叙述 → 缓存若干轮复用，避免每轮多花一次调用。
+
+延迟策略：情境撰写是一次额外的 LLM 调用，不能卡在玩家等回复的路径上。
+- 有缓存且未过期 → 直接用
+- 首轮或缓存过期 → 立刻返回兜底叙述/旧缓存，**在后台线程刷新**，下一轮生效
+- CONTEXT_WRITER_BACKGROUND=False 时退回同步撰写
 """
-import json
+import threading
 
 import core.clock as clock
-from config import CONTEXT_WRITER_INTERVAL, CONTEXT_WRITER_PROMPT
+from config import (
+    CONTEXT_WRITER_INTERVAL, CONTEXT_WRITER_PROMPT, CONTEXT_WRITER_BACKGROUND,
+)
 
 _PHONE_LABEL = {True: "在同一个地方", False: "不在同一个地方"}
+
+_inflight = {}
+_inflight_lock = threading.Lock()
 
 
 def _facts(db, conv_id, now_minutes, location, player_location, recent_msgs, events, memories, phone_unread):
@@ -46,21 +55,16 @@ def _facts(db, conv_id, now_minutes, location, player_location, recent_msgs, eve
     return "\n".join(lines)
 
 
-def _fallback(brief_location, player_location, now_minutes):
-    co_located = brief_location == player_location
-    base = f"现在是{clock.format_time(now_minutes)}，你在{brief_location}，青梅在{player_location}。"
+def _fallback(location, player_location, now_minutes):
+    co_located = location == player_location
+    base = f"现在是{clock.format_time(now_minutes)}，你在{location}，青梅在{player_location}。"
     if co_located:
         return base + "你们在一个地方，可以当面说话。"
     return base + "你们不在一起，只能靠手机联系。"
 
 
-def compose(db, conv_id, now_minutes, location, player_location, deepseek,
-            api_key=None, turn=0, force=False):
-    """取自然情境叙述；带缓存，按轮次或强制刷新"""
-    cached_text, cached_turn = db.get_context_brief(conv_id)
-    if cached_text and not force and (turn - cached_turn) < CONTEXT_WRITER_INTERVAL:
-        return cached_text
-
+def _generate(db, conv_id, now_minutes, location, player_location, deepseek, api_key, turn):
+    """真正调用 LLM 撰写并写入缓存（可能在后台线程里执行）"""
     recent_msgs = db.get_messages(conv_id)[-8:]
     events = db.get_events(conv_id, limit=20)[-4:]
     memories = []
@@ -89,6 +93,46 @@ def compose(db, conv_id, now_minutes, location, player_location, deepseek,
     if not text or text.startswith("[生成失败"):
         text = _fallback(location, player_location, now_minutes)
 
-    text = text.strip()
-    db.set_context_brief(conv_id, text, turn)
-    return text
+    db.set_context_brief(conv_id, text.strip(), turn)
+    return text.strip()
+
+
+def _refresh_async(db, conv_id, now_minutes, location, player_location, deepseek, api_key, turn):
+    """后台刷新：同一会话同一时刻只跑一个"""
+    with _inflight_lock:
+        if _inflight.get(conv_id):
+            return
+        _inflight[conv_id] = True
+
+    def run():
+        try:
+            _generate(db, conv_id, now_minutes, location, player_location,
+                      deepseek, api_key, turn)
+        except Exception as e:
+            print(f"[情境] 后台刷新失败: {e}")
+        finally:
+            with _inflight_lock:
+                _inflight.pop(conv_id, None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def compose(db, conv_id, now_minutes, location, player_location, deepseek,
+            api_key=None, turn=0, force=False):
+    """取自然情境叙述；带缓存，必要时后台刷新"""
+    cached_text, cached_turn = db.get_context_brief(conv_id)
+    stale = force or not cached_text or (turn - cached_turn) >= CONTEXT_WRITER_INTERVAL
+
+    if cached_text and not stale:
+        return cached_text
+
+    if CONTEXT_WRITER_BACKGROUND:
+        # 先返回能用的内容，别让玩家等
+        immediate = cached_text if (cached_text and not force) else \
+            _fallback(location, player_location, now_minutes)
+        _refresh_async(db, conv_id, now_minutes, location, player_location,
+                       deepseek, api_key, turn)
+        return immediate
+
+    return _generate(db, conv_id, now_minutes, location, player_location,
+                     deepseek, api_key, turn)
