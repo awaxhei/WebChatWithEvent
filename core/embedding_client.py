@@ -12,6 +12,7 @@ class EmbeddingClient:
     def __init__(self, api_key=None):
         # 尝试初始化本地模型
         self._local_model = None
+        self._local_failed = False
         self._local_model_name = "BAAI/bge-large-zh-v1.5"
         self._ollama_url = "http://localhost:11434/api/embeddings"
         self._ollama_model = "nomic-embed-text"
@@ -26,15 +27,22 @@ class EmbeddingClient:
             return False
 
     def _get_local_model(self):
-        """惰性加载本地 sentence-transformers 模型"""
+        """惰性加载本地 sentence-transformers 模型（失败一次后不再重试）"""
         if self._local_model is not None:
             return self._local_model
+        if self._local_failed:
+            return None
         try:
             from sentence_transformers import SentenceTransformer
             self._local_model = SentenceTransformer(self._local_model_name)
             print(f"[Embedding] 本地模型已加载: {self._local_model_name}")
             return self._local_model
+        except ImportError:
+            self._local_failed = True
+            print("[Embedding] 未安装 sentence-transformers，语义检索降级为词面相似度")
+            return None
         except Exception as e:
+            self._local_failed = True
             print(f"[Embedding] 本地模型加载失败: {e}")
             return None
 

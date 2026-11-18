@@ -1,7 +1,7 @@
 """
 ChatDB: 数据库初始化、迁移、CRUD 操作封装
 """
-import os, sqlite3, uuid, hashlib
+import os, sqlite3, uuid, hashlib, json
 from threading import Lock
 
 
@@ -13,6 +13,11 @@ class ChatDB:
 
     def __init__(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        # 某些受限环境（沙箱/容器）里 SQLite 无法自己创建新文件，
+        # 先用 Python 建一个空文件，SQLite 即可正常初始化。
+        if not os.path.exists(DB_PATH):
+            with open(DB_PATH, "ab"):
+                pass
         self._init_db()
 
     def _get_conn(self):
@@ -44,6 +49,8 @@ class ChatDB:
                     conversation_id TEXT NOT NULL,
                     role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
                     content         TEXT NOT NULL,
+                    channel         TEXT DEFAULT 'chat',
+                    scene           TEXT DEFAULT '',
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -62,6 +69,7 @@ class ChatDB:
                     description     TEXT NOT NULL,
                     status          TEXT DEFAULT 'active' CHECK(status IN ('active','completed','pending')),
                     story_time      TEXT DEFAULT '',
+                    tier            TEXT DEFAULT '',
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -74,13 +82,85 @@ class ChatDB:
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+
+                -- v3：地点实体（每个会话一份地点表）
+                CREATE TABLE IF NOT EXISTS locations (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    description     TEXT DEFAULT '',
+                    variants        TEXT DEFAULT '{}',
+                    created_at      TEXT DEFAULT (datetime('now','localtime')),
+                    UNIQUE(conversation_id, name),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+
+                -- v3：AI 小镇式记忆流（观察 / 反思 / 计划）
+                CREATE TABLE IF NOT EXISTS memories (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    kind            TEXT NOT NULL DEFAULT 'observation'
+                                    CHECK(kind IN ('observation','reflection','plan')),
+                    text            TEXT NOT NULL,
+                    importance      INTEGER DEFAULT 5,
+                    story_minutes   INTEGER DEFAULT 0,
+                    embedding       BLOB,
+                    meta            TEXT DEFAULT '{}',
+                    created_at      TEXT DEFAULT (datetime('now','localtime')),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_memories_conv ON memories(conversation_id, id);
+                CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(conversation_id, kind);
+
+                -- v3：表情包索引（导入即用，缓存自动打标结果）
+                CREATE TABLE IF NOT EXISTS stickers (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path            TEXT UNIQUE NOT NULL,
+                    filename        TEXT NOT NULL,
+                    mtime           REAL DEFAULT 0,
+                    size            INTEGER DEFAULT 0,
+                    emotion         TEXT DEFAULT '',
+                    tags            TEXT DEFAULT '',
+                    caption         TEXT DEFAULT '',
+                    tagged_by       TEXT DEFAULT '',
+                    tag_attempts    INTEGER DEFAULT 0,
+                    embedding       BLOB,
+                    updated_at      TEXT DEFAULT (datetime('now','localtime'))
+                );
             """)
 
     def migrate(self):
         with self._get_conn() as conn:
-            for col, tbl in [("story_time", "events"), ("events_initialized", "conversations"), ("user_id", "conversations")]:
+            # 老库补列
+            for col, ddl in [
+                ("story_time", "TEXT DEFAULT ''"),
+                ("events_initialized", "INTEGER DEFAULT 0"),
+                ("user_id", "INTEGER DEFAULT 0"),
+                # v3：确定性故事时钟 + 尤夏所在地点
+                ("story_minutes", "INTEGER DEFAULT 0"),
+                ("current_location", "TEXT DEFAULT ''"),
+                # v4：玩家位置 / 自然情境缓存 / 手机已读位置 / 最后发言时间
+                ("player_location", "TEXT DEFAULT ''"),
+                ("context_brief", "TEXT DEFAULT ''"),
+                ("context_brief_turn", "INTEGER DEFAULT 0"),
+                ("phone_read_id", "INTEGER DEFAULT 0"),
+                ("last_user_at", "REAL DEFAULT 0"),
+            ]:
                 try:
-                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT DEFAULT ''" if col == "story_time" else f"ALTER TABLE {tbl} ADD COLUMN {col} INTEGER DEFAULT 0")
+                    conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError:
+                    pass
+
+            for table, col, ddl in [
+                ("events", "story_time", "TEXT DEFAULT ''"),
+                ("events", "tier", "TEXT DEFAULT ''"),
+                ("messages", "channel", "TEXT DEFAULT 'chat'"),
+                ("messages", "scene", "TEXT DEFAULT ''"),
+                ("locations", "description", "TEXT DEFAULT ''"),
+                ("locations", "variants", "TEXT DEFAULT '{}'"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
                 except sqlite3.OperationalError:
                     pass
 
@@ -179,14 +259,16 @@ class ChatDB:
         return [dict(r) for r in reversed(rows)]
 
     # ----- 事件 -----
-    def add_event(self, conv_id, event_type, title, description, status="active", story_time=""):
+    def add_event(self, conv_id, event_type, title, description, status="active", story_time="", tier=""):
         with self._get_conn() as conn:
-            conn.execute("INSERT INTO events(conversation_id, event_type, title, description, status, story_time) VALUES(?,?,?,?,?,?)",
-                         (conv_id, event_type, title, description, status, story_time))
+            conn.execute("INSERT INTO events(conversation_id, event_type, title, description, status, story_time, tier)"
+                         " VALUES(?,?,?,?,?,?,?)",
+                         (conv_id, event_type, title, description, status, story_time, tier))
 
     def get_events(self, conv_id, limit=30):
         with self._get_conn() as conn:
-            rows = conn.execute("SELECT id, event_type, title, description, status, story_time, created_at FROM events WHERE conversation_id=? ORDER BY id ASC LIMIT ?",
+            rows = conn.execute("SELECT id, event_type, title, description, status, story_time, tier, created_at"
+                                " FROM events WHERE conversation_id=? ORDER BY id ASC LIMIT ?",
                                 (conv_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
@@ -223,3 +305,257 @@ class ChatDB:
     def clear_summaries(self, conv_id):
         with self._get_conn() as conn:
             conn.execute("DELETE FROM conversation_summaries WHERE conversation_id=?", (conv_id,))
+
+    # ----- v3：故事时钟 -----
+    def get_story_minutes(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT story_minutes FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        if not row:
+            return None
+        return row["story_minutes"] or 0
+
+    def set_story_minutes(self, conv_id, minutes):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET story_minutes=? WHERE id=?", (int(minutes), conv_id))
+
+    # ----- v3：地点 -----
+    def add_location(self, conv_id, name, description=""):
+        with self._get_conn() as conn:
+            try:
+                conn.execute("INSERT OR IGNORE INTO locations(conversation_id, name, description) VALUES(?,?,?)",
+                             (conv_id, name, description))
+            except sqlite3.Error:
+                pass
+
+    def get_location_names(self, conv_id):
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT name FROM locations WHERE conversation_id=? ORDER BY id ASC", (conv_id,)).fetchall()
+        return [r["name"] for r in rows]
+
+    def get_current_location(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT current_location FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        return (row["current_location"] or "") if row else ""
+
+    def set_current_location(self, conv_id, name):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET current_location=? WHERE id=?", (name, conv_id))
+
+    def clear_locations(self, conv_id):
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM locations WHERE conversation_id=?", (conv_id,))
+
+    # ----- v3：记忆流 -----
+    def add_memory(self, conv_id, kind, text, importance, story_minutes, embedding=None, meta="{}"):
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO memories(conversation_id, kind, text, importance, story_minutes, embedding, meta)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (conv_id, kind, text, int(importance), int(story_minutes), embedding, meta))
+            return cur.lastrowid
+
+    def get_memories(self, conv_id, limit=600):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, kind, text, importance, story_minutes, embedding FROM memories"
+                " WHERE conversation_id=? ORDER BY id DESC LIMIT ?", (conv_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_observations_since(self, conv_id, since_id, limit=20):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, text, importance, story_minutes FROM memories"
+                " WHERE conversation_id=? AND kind='observation' AND id > ? ORDER BY id ASC LIMIT ?",
+                (conv_id, since_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_latest_reflection(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT id, text, importance, story_minutes, meta FROM memories"
+                " WHERE conversation_id=? AND kind='reflection' ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_observation_importance_sum(self, conv_id, since_id=0):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(importance),0) AS s FROM memories"
+                " WHERE conversation_id=? AND kind='observation' AND id > ?", (conv_id, since_id)).fetchone()
+        return int(row["s"]) if row else 0
+
+    def count_memories(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM memories WHERE conversation_id=?", (conv_id,)).fetchone()
+        return int(row["c"]) if row else 0
+
+    def delete_memories(self, conv_id):
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM memories WHERE conversation_id=?", (conv_id,))
+
+    # ----- v3：表情包索引 -----
+    def get_sticker(self, path):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM stickers WHERE path=?", (path,)).fetchone()
+        return dict(row) if row else None
+
+    def upsert_sticker(self, path, filename, mtime, size):
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO stickers(path, filename, mtime, size) VALUES(?,?,?,?)"
+                " ON CONFLICT(path) DO UPDATE SET filename=excluded.filename,"
+                " mtime=excluded.mtime, size=excluded.size,"
+                " emotion='', tags='', caption='', tagged_by='', tag_attempts=0, embedding=NULL",
+                (path, filename, mtime, size))
+
+    def get_all_stickers(self):
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT * FROM stickers ORDER BY path ASC").fetchall()
+        return [dict(r) for r in rows]
+
+    def get_untagged_stickers(self, limit=200):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM stickers WHERE tagged_by='' AND tag_attempts < 3 ORDER BY id ASC LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_sticker_tags(self, sticker_id, emotion, tags, caption, source):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE stickers SET emotion=?, tags=?, caption=?, tagged_by=?,"
+                " tag_attempts=tag_attempts+1, updated_at=datetime('now','localtime') WHERE id=?",
+                (emotion, tags, caption, source, sticker_id))
+
+    def bump_sticker_attempts(self, sticker_id):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE stickers SET tag_attempts=tag_attempts+1 WHERE id=?", (sticker_id,))
+
+    def get_stickers_without_embedding(self, limit=200):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM stickers WHERE embedding IS NULL AND tagged_by != '' LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_sticker_embedding(self, sticker_id, blob):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE stickers SET embedding=? WHERE id=?", (blob, sticker_id))
+
+    def delete_stickers_not_in(self, paths):
+        if not paths:
+            return 0
+        with self._get_conn() as conn:
+            marks = ",".join("?" * len(paths))
+            cur = conn.execute(f"DELETE FROM stickers WHERE path NOT IN ({marks})", tuple(paths))
+            return cur.rowcount or 0
+
+    def count_stickers(self, tagged_only=False):
+        sql = "SELECT COUNT(*) AS c FROM stickers"
+        if tagged_only:
+            sql += " WHERE tagged_by != ''"
+        with self._get_conn() as conn:
+            row = conn.execute(sql).fetchone()
+        return int(row["c"]) if row else 0
+
+    def get_sticker_emotions(self):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT emotion FROM stickers WHERE emotion != '' ORDER BY emotion").fetchall()
+        return [r["emotion"] for r in rows]
+
+    # ----- v4：双方位置 -----
+    def get_player_location(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT player_location FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        return (row["player_location"] or "") if row else ""
+
+    def set_player_location(self, conv_id, name):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET player_location=? WHERE id=?", (name, conv_id))
+
+    # ----- v4：场景描写缓存（时段 → 描写） -----
+    def get_location_variants(self, conv_id, name):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT variants FROM locations WHERE conversation_id=? AND name=?",
+                               (conv_id, name)).fetchone()
+        if not row or not row["variants"]:
+            return {}
+        try:
+            data = json.loads(row["variants"])
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def set_location_variant(self, conv_id, name, bucket, text):
+        variants = self.get_location_variants(conv_id, name)
+        variants[bucket] = text
+        with self._get_conn() as conn:
+            conn.execute("UPDATE locations SET variants=? WHERE conversation_id=? AND name=?",
+                         (json.dumps(variants, ensure_ascii=False), conv_id, name))
+
+    # ----- v4：自然情境缓存 -----
+    def get_context_brief(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT context_brief, context_brief_turn FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+        return ((row["context_brief"] or ""), (row["context_brief_turn"] or 0)) if row else ("", 0)
+
+    def set_context_brief(self, conv_id, brief, turn):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET context_brief=?, context_brief_turn=? WHERE id=?",
+                         (brief, int(turn), conv_id))
+
+    # ----- v4：消息通道（chat / phone） -----
+    def add_message(self, conv_id, role, content, channel="chat", scene=""):
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO messages(conversation_id, role, content, channel, scene) VALUES(?,?,?,?,?)",
+                (conv_id, role, content, channel, scene))
+            return cur.lastrowid
+
+    def get_messages(self, conv_id, channel=None):
+        with self._get_conn() as conn:
+            if channel:
+                rows = conn.execute(
+                    "SELECT id, role, content, channel, scene, created_at FROM messages"
+                    " WHERE conversation_id=? AND channel=? ORDER BY id ASC",
+                    (conv_id, channel)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, role, content, channel, scene, created_at FROM messages"
+                    " WHERE conversation_id=? ORDER BY id ASC", (conv_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_phone_messages(self, conv_id, since_id=0, limit=200):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, created_at FROM messages"
+                " WHERE conversation_id=? AND channel='phone' AND id > ?"
+                " ORDER BY id ASC LIMIT ?", (conv_id, since_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_phone_unread(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM messages"
+                " WHERE conversation_id=? AND channel='phone' AND role='assistant'"
+                " AND id > COALESCE((SELECT phone_read_id FROM conversations WHERE id=?),0)",
+                (conv_id, conv_id)).fetchone()
+        return int(row["c"]) if row else 0
+
+    def mark_phone_read(self, conv_id):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET phone_read_id = COALESCE("
+                "(SELECT MAX(id) FROM messages WHERE conversation_id=?),0) WHERE id=?",
+                (conv_id, conv_id))
+
+    # ----- v4：玩家最后发言时间（用于"闲置"自主行动） -----
+    def set_last_user_at(self, conv_id, ts):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET last_user_at=? WHERE id=?", (float(ts), conv_id))
+
+    def get_last_user_at(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT last_user_at FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        return float(row["last_user_at"] or 0) if row else 0.0

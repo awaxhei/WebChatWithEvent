@@ -1,19 +1,30 @@
 """
 DeepSeekClient: DeepSeek API 流式/同步调用封装
-支持用户自定义 API Key（通过请求头或参数覆盖 config.py 中的 key）
+
+- 支持用户自定义 API Key（请求头 / 参数覆盖 config.py 中的 key）
+- 默认关闭思考模式：本项目所有调用都在等严格 JSON 或短旁白，
+  思考模式（默认开启、effort=high）会白白烧 token 并拖慢响应，
+  且思考模式下 temperature 不生效。
 """
-import json, requests
-from config import DEEPSEEK_API_KEY, DEEPSEEK_MODEL, CHARACTER_NAME
+import json
+
+import requests
+
+from config import (
+    DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT,
+)
 
 DEEPSEEK_BASE = "https://api.deepseek.com/v1/chat/completions"
 
 
 class DeepSeekClient:
-    def __init__(self, base_url=DEEPSEEK_BASE, model=DEEPSEEK_MODEL, api_key=None):
+    def __init__(self, base_url=DEEPSEEK_BASE, model=DEEPSEEK_MODEL, api_key=None,
+                 thinking=None):
         self.base_url = base_url
         self.model = model
         self._default_api_key = api_key or DEEPSEEK_API_KEY
         self.api_key = self._default_api_key
+        self.thinking = DEEPSEEK_THINKING if thinking is None else thinking
 
     def _headers(self, api_key_override=None):
         key = api_key_override or self.api_key or self._default_api_key
@@ -26,9 +37,24 @@ class DeepSeekClient:
             msgs.append({"role": role, "content": msg["content"]})
         return msgs
 
-    def chat_stream(self, messages, system_prompt="", api_key_override=None):
+    def _payload(self, messages, stream, temperature):
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": stream,
+            "thinking": {"type": "enabled" if self.thinking else "disabled"},
+        }
+        if self.thinking:
+            # 思考模式下 temperature / top_p 无效（会被忽略）；top_p 只接受 0.95~1.0
+            payload["reasoning_effort"] = DEEPSEEK_REASONING_EFFORT
+        else:
+            payload["temperature"] = temperature
+            payload["top_p"] = 0.9
+        return payload
+
+    def chat_stream(self, messages, system_prompt="", api_key_override=None, temperature=0.7):
         msgs = self._build_messages(system_prompt, messages)
-        payload = {"model": self.model, "messages": msgs, "stream": True, "temperature": 0.7, "top_p": 0.9}
+        payload = self._payload(msgs, True, temperature)
         key = api_key_override or self.api_key or self._default_api_key
         if not key:
             yield "请在 config.py 中设置 DEEPSEEK_API_KEY"
@@ -61,9 +87,12 @@ class DeepSeekClient:
         except Exception as e:
             yield f"错误: {str(e)}"
 
-    def chat_sync(self, messages, system_prompt="", temperature=0.8, api_key_override=None):
+    def chat_sync(self, messages, system_prompt="", temperature=0.8, api_key_override=None,
+                  max_tokens=None):
         msgs = self._build_messages(system_prompt, messages)
-        payload = {"model": self.model, "messages": msgs, "stream": False, "temperature": temperature, "top_p": 0.9}
+        payload = self._payload(msgs, False, temperature)
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
         key = api_key_override or self.api_key or self._default_api_key
         if not key:
             return "[请在 config.py 中设置 DEEPSEEK_API_KEY]"

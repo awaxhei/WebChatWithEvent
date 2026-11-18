@@ -2,10 +2,10 @@
 AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
-import os, socket, subprocess
+import os, socket, subprocess, sys, threading
 from flask import Flask, render_template
 
-from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION, DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY
+from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION, DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY, DEEPSEEK_API_KEY
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 
@@ -55,25 +55,47 @@ def get_client_config():
         "default_location": DEFAULT_LOCATION,
         "default_story_time": DEFAULT_STORY_TIME,
         "default_story_summary": DEFAULT_STORY_SUMMARY,
+        # 仅暴露"是否存在服务端 Key"这一布尔值，绝不返回 Key 本身
+        "has_server_key": bool(DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip()),
     }
 
 
 @app.route("/api/stickers")
 def get_stickers():
-    """扫描 static/stickers/ 文件夹，返回可用情绪列表（动态，零硬编码）"""
-    sticker_dir = os.path.join(app.static_folder, "stickers")
-    folders = []
-    if os.path.isdir(sticker_dir):
-        for name in sorted(os.listdir(sticker_dir)):
-            path = os.path.join(sticker_dir, name)
-            if os.path.isdir(path):
-                images = [f for f in os.listdir(path)
-                          if f.lower().endswith(('.png', '.jpg', '.gif', '.webp'))]
-                folders.append({"name": name, "count": len(images)})
-    return {"emotions": folders}
+    """表情包状态（索引来自数据库，导入即用，无需手工分类）"""
+    from core import stickers as sticker_lib
+    emotions = [
+        {"name": name, "count": 0}
+        for name in db.get_sticker_emotions()
+    ]
+    return {
+        "emotions": emotions,
+        "total": db.count_stickers(),
+        "tagged": db.count_stickers(tagged_only=True),
+    }
+
+
+def _prepare_stickers():
+    """启动后异步：刷新索引 → 给新图片打标 → 补向量（不阻塞服务启动）"""
+    try:
+        from core import stickers as sticker_lib
+        stats = sticker_lib.refresh(db)
+        if stats["indexed"] or stats["removed"]:
+            print(f"  [表情包] 索引更新: {stats}")
+        tagged = sticker_lib.auto_tag_all(db)
+        if tagged:
+            print(f"  [表情包] 本机新打标 {tagged} 张")
+        sticker_lib.rebuild_embeddings(db)
+    except Exception as e:
+        print(f"  [表情包] 索引失败: {e}")
+
+
+threading.Thread(target=_prepare_stickers, daemon=True).start()
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows 控制台中文输出
+    PORT = int(os.environ.get("PORT", "5000"))
     ipv4 = ipv6 = ""
     try:
         for addr in socket.getaddrinfo(socket.gethostname(), None):
@@ -82,27 +104,48 @@ if __name__ == "__main__":
                 ipv4 = ip
     except Exception:
         pass
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-NetIPAddress -AddressFamily IPv6 -AddressState Preferred -SuffixOrigin Dhcp,Manual,Link | "
-             "Where-Object { $_.PrefixOrigin -ne 'WellKnown' -and $_.IPAddress -notlike 'fe80:*' } | "
-             "Select-Object -ExpandProperty IPAddress"],
-            capture_output=True, text=True, timeout=10)
-        ip_list = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        if ip_list:
-            global_ips = [ip for ip in ip_list if ip[0] in ('2', '3')]
-            ipv6 = global_ips[0] if global_ips else ip_list[0]
-    except Exception:
-        pass
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-NetIPAddress -AddressFamily IPv6 -AddressState Preferred -SuffixOrigin Dhcp,Manual,Link | "
+                 "Where-Object { $_.PrefixOrigin -ne 'WellKnown' -and $_.IPAddress -notlike 'fe80:*' } | "
+                 "Select-Object -ExpandProperty IPAddress"],
+                capture_output=True, text=True, timeout=10)
+            ip_list = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+            if ip_list:
+                global_ips = [ip for ip in ip_list if ip[0] in ('2', '3')]
+                ipv6 = global_ips[0] if global_ips else ip_list[0]
+        except Exception:
+            pass
     print("=" * 50)
-    print("  AI 情感助手 (三AI - 账号系统) 服务启动中...")
+    print("  尤夏 (三AI - 账号系统) 服务启动中...")
     print(f"  模型: {DEEPSEEK_MODEL}")
-    print(f"  API: DeepSeek")
-    print(f"  本地访问: http://127.0.0.1:5000")
+    print(f"  本地访问: http://127.0.0.1:{PORT}")
     if ipv4:
-        print(f"  IPv4 访问: http://{ipv4}:5000")
+        print(f"  IPv4 访问: http://{ipv4}:{PORT}")
     if ipv6:
-        print(f"  IPv6 访问: http://[{ipv6}]:5000")
+        print(f"  IPv6 访问: http://[{ipv6}]:{PORT}")
     print("=" * 50)
-    app.run(host="::", port=5000, debug=False, threaded=True)
+
+    # 同时监听 IPv4 与 IPv6：Windows 默认 IPV6_V6ONLY=1，可同时绑定同一端口；
+    # 若平台不允许双绑定（如 Linux），IPv6 监听失败不影响 IPv4 可用。
+    from werkzeug.serving import make_server
+
+    def _serve(host):
+        try:
+            srv = make_server(host, PORT, app, threaded=True)
+            srv.serve_forever()
+        except Exception as e:
+            print(f"  [监听 {host}:{PORT} 失败] {e}")
+
+    threads = []
+    for _host in ("0.0.0.0", "::"):
+        _t = threading.Thread(target=_serve, args=(_host,), daemon=True)
+        _t.start()
+        threads.append(_t)
+    try:
+        while any(t.is_alive() for t in threads):
+            threads[0].join(timeout=1)
+    except KeyboardInterrupt:
+        print("\n服务已停止")

@@ -1,4 +1,7 @@
 config.py
 __pycache__/
+*.pyc
 .vscode/
 data/
+.testtmp/
+.dsh-webview/

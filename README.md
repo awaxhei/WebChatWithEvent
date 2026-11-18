@@ -1,6 +1,8 @@
-# 和三无傲娇猫娘青梅同居了！————基于事件驱动的AI角色扮演聊天
+# 尤夏 — 和三无傲娇猫娘青梅同居了！
 
-基于 事件驱动 的**三 AI 架构**角色扮演聊天应用。你作为"青梅竹马"（互为青梅呢），与猫娘**尤夏**进行日常对话。AI C 作为"世界引擎"驱动故事进展，追踪事件节点与时间线。
+基于 **事件驱动 + AI 小镇式记忆 + 确定性故事时钟 + 场景化环境** 的三 AI 角色扮演聊天应用。你作为"青梅竹马"与猫娘**尤夏**同居；世界有自己的时间、地点、环境与偶发事件，尤夏也会自己行动。
+
+> **v4** 重构：尤夏只负责说话（对白/消息/表情包）、手机独立通道、环境描写绑定场景、随机事件分级抽取、尤夏自主行动
 
 ---
 
@@ -8,154 +10,218 @@
 
 | 功能 | 说明 |
 |------|------|
-| **三 AI 架构** | AI A（尤夏对话）→ AI B（环境旁白）→ AI C（世界引擎/事件管理） |
-| **流式对话** | SSE 实时推送，打字机逐字效果 |
-| **账号系统** | 多用户支持，数据完全隔离；SHA-256 密码哈希 + HttpOnly Cookie 登录 |
-| **世界引擎** | AI C 自动追踪故事时间线，记录事件节点，生成随机事件推动情节 |
-| **事件面板** | 右侧事件时间轴，展示故事时间、事件卡片（里程碑/场景/情绪/偶然） |
-| **故事推进** | 推进模式按钮，一键触发世界引擎主动推动情节发展 |
-| **随机事件** | 世界自发生成偶然事件（如路边出现小猫），以旁白形式插入对话流 |
-| **历史记录** | 多轮对话持久化（SQLite），可切换/删除历史会话 |
-| **环境叙述** | 浮动文字显示当前场景氛围与角色神态 |
-| **响应式布局** | 桌面端三栏（历史+聊天+事件）、移动端滑出面板 |
-| **Cookie 登录** | 勾选"记住"可维持 30 天免登录，HttpOnly 防 XSS |
-
-## 前端展示
-![前端展示图片](static/image/screenshot_1.png)
+| **三 AI 架构** | AI A（尤夏对话）→ AI C（世界引擎）；环境改由场景系统按需生成 |
+| **自然输出** | 尤夏只输出「对白 / 消息 / 表情包」，短句为主，不写动作和环境 |
+| **手机通道** | 手机消息不进主聊天页；左下角手机图标 + 红点，点开才看 |
+| **场景化环境** | 环境描写绑定「地点 + 时段」，首次进入生成并缓存，之后零成本复用 |
+| **真实地点** | 地点是数据库实体；玩家点地点名即可移动，尤夏也会自己走开 |
+| **异地只能手机** | 两人不在同一地点时，交流自动切到手机通道 |
+| **随机事件分级** | 程序按权重抽取强度（60/25/12/3），影响越深越稀有，再由 LLM 具体化 |
+| **尤夏自主行动** | 不等输入也会主动说话、发消息、换场景；闲置一段时间会主动找你 |
+| **AI 小镇式记忆** | 观察/反思两层，检索得分 = 时效×0.5 + 重要度×0.3 + 相关性×0.2 |
+| **确定性故事时钟** | 服务器持有唯一时间真值，每轮 +3 分钟，LLM 只能申请"跳跃类型" |
+| **自然上下文** | 上层 LLM 把结构化状态写成一段叙述再喂给尤夏，不用方括号标签 |
+| **账号系统** | SHA-256 + HttpOnly Cookie，多用户隔离 + 会话归属校验 |
+| **自助 API Key** | 页面右上角齿轮可填自己的 Key，只存本机 localStorage |
+| **PWA 支持** | manifest + Service Worker + 自动生成图标 |
 
 ---
 
 ## 项目结构
 
 ```
-WebCheck_Ollama/
-├── app.py                 # Flask 后端 (路由、JWT、SSE、三 AI 编排、账号系统)
-├── config.py              # 配置文件 (API Key、账号、JWT 密钥)
-├── config_template.py     # 配置模板
-├── requirements.txt       # Python 依赖
-├── yuxia_prompt.txt       # AI A 角色提示词（尤夏人设）
-├── README.md
-├── .gitignore
-├── static/
-│   ├── css/
-│   │   └── style.css      # 全局样式 + 动画 + 事件面板 + 登录遮罩
-│   └── js/
-│       └── app.js         # 前端 (AuthManager、ChatManager、EventPanel、SSE)
-└── templates/
-    └── index.html         # 主页面模板
+WebChatWithEvent/
+├── app.py                    # Flask 入口（蓝图注册、静态资源、启动）
+├── config.py / config_template.py
+├── yuxia_prompt.txt          # 尤夏人设（只包含对白/消息/表情包的输出规则）
+│
+├── core/
+│   ├── auth.py               # JWT / 会话归属校验 / 用户 Key
+│   ├── database.py           # SQLite（消息通道、地点、场景缓存、记忆、表情包索引）
+│   ├── deepseek_client.py    # DeepSeek 调用（思考模式开关、流式/同步、key 覆盖）
+│   ├── embedding_client.py   # 可选 embedding（Ollama / sentence-transformers）
+│   ├── textvec.py            # 向量与相似度（中文词面覆盖率降级）
+│   ├── clock.py              # 确定性故事时钟
+│   ├── locations.py          # 地点实体（归一化 / 新建 / 切换 / 双方位置）
+│   ├── scenes.py             # 场景描写（地点 × 时段 → 缓存描写）
+│   ├── memory.py             # AI 小镇记忆流（打分检索 / 反思阈值）
+│   └── stickers.py           # 表情包（导入即用 / 视觉打标 / 语义匹配）
+│
+├── routes/
+│   ├── auth_routes.py        # 登录 / 验证 / 登出
+│   ├── chat_routes.py        # 聊天 SSE、场景、移动、手机、闲置、世界引擎
+│   ├── event_routes.py       # 事件初始化 / 查询
+│   └── history_routes.py     # 会话 CRUD
+│
+├── services/
+│   ├── event_engine.py       # AI C：分级随机事件 + 事件总结
+│   ├── memory_engine.py      # 记忆编排（写入 / 事件转记忆 / 反思）
+│   ├── time_keeper.py        # 时钟编排（轮次 / 关键词 / 时间观察者）
+│   ├── context_writer.py     # 自然情境撰写（带缓存）
+│   ├── autonomy.py           # 尤夏自主行动（说话 / 发消息 / 换场景）
+│   └── atmosphere.py         # 文本解析辅助
+│
+├── scripts/                  # 检测、测试、图标、隔离实例
+├── static/                   # css / js / stickers / image
+└── templates/index.html
 ```
 
 ---
 
 ## 快速开始
 
-### 1. 安装依赖
-
 ```bash
 pip install -r requirements.txt
+copy config_template.py config.py      # Windows
+python app.py                          # http://127.0.0.1:5000
 ```
 
-### 2. 配置文件
-
-从模板复制：
+检查 Key：
 
 ```bash
-copy config_template.py config.py    # Windows
-cp config_template.py config.py      # macOS/Linux
+python scripts/check_api_key.py
 ```
 
-编辑 `config.py`：
-
-```python
-# DeepSeek API Key
-DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-
-# 预置账号（用户名: SHA-256(密码)）
-# 生成密码哈希：python -c "import hashlib; print(hashlib.sha256('mypass'.encode()).hexdigest())"
-PRESET_ACCOUNTS = {
-    "admin": hashlib.sha256("admin123".encode()).hexdigest(),
-}
-```
-
-### 3. 启动
-
-```bash
-python app.py
-```
-
-浏览器打开 `http://127.0.0.1:5000`，用预设账号登录。
+两种填 Key 的方式：`config.py` 里写死，或页面右上角齿轮填自己的（只存本机，通过 `X-DeepSeek-API-Key` 头透传，不落库）。
 
 ---
 
-## 三 AI 架构
+## 交互模型
 
-```
-用户输入 → Flask /api/chat
-    │
-    ├── AI A (尤夏对话) — 流式 SSE
-    │   └── 角色扮演回复 + 注入事件上下文
-    │
-    ├── AI B (环境叙述) — 同步调用
-    │   └── 环境描写 + 地点标签（浮动文字显示）
-    │
-    └── AI C (世界引擎) — 每 N 轮触发（或 /推进）
-        ├── 追踪故事时间线
-        ├── 识别并记录事件节点（里程碑/场景/情绪/时间）
-        ├── 生成随机事件（概率性，有逻辑关联）
-        ├── 推送到事件面板 + 世界旁白插入对话流
-        └── 判断是否需要推进故事
-```
+### 输出格式
 
----
+尤夏每次回复是一个或多个 JSON 对象，字段只有三个：
 
-## 账号系统
-
-| 特性 | 说明 |
+| 字段 | 去处 |
 |------|------|
-| 密码安全 | SHA-256 哈希存储，config.py 中直接写哈希值 |
-| 登录方式 | 用户名 + 密码，HttpOnly Cookie（30 天/1 天） |
-| 数据隔离 | 每个用户只能看到自己的对话历史 |
-| 预置账号 | 在 `config.py` 的 `PRESET_ACCOUNTS` 中配置 |
-| 旧数据迁移 | 启动时自动将旧对话归属到第一个管理员 |
+| `对白` | 主聊天页的对话气泡（仅当两人同处一地） |
+| `消息` | 手机面板（不进主页，亮红点提醒） |
+| `表情包` | 主聊天页的表情图片 |
 
-**添加新用户**：在 `config.py` 增加一行并重启：
+动作、神态、环境一律不由尤夏输出——环境交给场景系统，动作由玩家自行想象。
 
-```python
-PRESET_ACCOUNTS = {
-    "admin": hashlib.sha256("admin123".encode()).hexdigest(),
-    "alice": hashlib.sha256("alice_pass".encode()).hexdigest(),
-}
+### 场景与环境
+
+- 环境描写绑定「地点 + 时段（清晨/白天/傍晚/夜晚）」，首次进入时生成一次并写入 `locations.variants`
+- 主界面顶部显示当前地点，下面一行是该场景的环境描写，随进入的场景和时段切换
+- 点击地点名可以打开地点列表，选择后玩家移动过去
+- 两人不在同一地点时：顶部显示"尤夏在 X（你在 Y）"，输入框变成发手机消息
+
+### 自主行动
+
+尤夏会在两种时机自己做决定（说话 / 发手机消息 / 走去别的地点）：
+
+1. 每轮对话结束后按概率 + 冷却轮次触发
+2. 玩家长时间没动静时，前端每 60 秒轮询 `/api/idle`，服务端按真实时间阈值与概率决定
+
+---
+
+## API 一览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/chat` | 主聊天（SSE），自动按同处/异地选通道 |
+| GET | `/api/scene/<conv>` | 场景视图（地点、时段、双方描写、可选地点） |
+| POST | `/api/move/<conv>` | 移动（`who=player|yuxia`） |
+| GET | `/api/phone/<conv>` | 手机消息 + 未读数 |
+| POST | `/api/phone/read/<conv>` | 标记已读 |
+| POST | `/api/idle/<conv>` | 闲置时让尤夏自主行动 |
+| POST | `/api/atmosphere/<conv>` | 时间观察者 / 随机事件 / 事件总结 / 反思 / 自主行动（SSE） |
+| GET/POST | `/api/history*`、`/api/events*` | 会话与事件 |
+| GET | `/api/stickers/match`、`/api/stickers/stats` | 表情包 |
+
+---
+
+## 时间系统
+
+时间真值是 `conversations.story_minutes`（显示为 `第一天 07:03`）。
+
+| 层级 | 规则 | 是否用 LLM |
+|------|------|-----------|
+| 基础推进 | 每条用户消息 +3 分钟（`CLOCK_MINUTES_PER_TURN`） | 否 |
+| 关键词跳跃 | 晚安→次日 07:00、午饭→12:00、放学→16:30、晚饭→18:00、深夜→22:30、明天→次日 08:00 | 否 |
+| 时间观察者 | 隔 2 轮询问一次，只返回枚举（NONE/NEXT_MORNING/NOON/...） | 是（只给枚举） |
+
+LLM 永远不输出时间字符串；服务端负责换算、禁止倒退、单次跳跃上限 3 天。
+
+---
+
+## 随机事件分级
+
+程序按权重抽取强度，再交给 LLM 具体化，强度写进 `events.tier`：
+
+| 等级 | 权重 | 影响 |
+|------|------|------|
+| `low` | 60% | 环境层面小变化，可以完全不理 |
+| `medium` | 25% | 小意外，话题偏转 |
+| `high` | 12% | 打断当前场景，必须反应 |
+| `major` | 3% | 剧情级转折 |
+
+---
+
+## 记忆系统
+
+```
+score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 ```
 
----
-
-## 事件面板
-
-桌面端右侧常驻面板，展示：
-
-- **故事时间**：当前故事内时间（如"第一天下午 15:20"）
-- **事件卡片**：按时间排列的事件节点
-  - 🏆 里程碑 / 🚪 场景转换 / 💭 情绪转折 / ⏰ 时间推进 / 🎲 偶然事件
-  - 每张卡片显示标题、描述、状态（进行中/已完成）、时间点
-- **故事摘要**：一句话概括当前进展
-- **推进提示**：AI C 的建议
-
-移动端通过点击顶部标题切换显示。面板可折叠（桌面端）或滑出（移动端）。
+- 每轮对话写入观察；里程碑/情绪转折等事件写成高重要度记忆
+- 累计重要度 ≥ 80 触发"反思"，把零散观察归纳成高层认知
+- 相关性优先用向量余弦；没有 embedding 时降级为中文二元组覆盖率 + Jaccard
+- 老会话首次进入 v4 时自动回填最近 60 条消息
 
 ---
 
-## 配置说明
+## 表情包（等你导入）
 
-| 配置项 | 说明 |
-|--------|------|
-| `CHARACTER_NAME` | 角色名，默认"尤夏" |
-| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 |
-| `DEEPSEEK_MODEL` | 模型名称 |
-| `PRESET_ACCOUNTS` | 预置账号字典（用户名: SHA-256 哈希） |
-| `JWT_SECRET_KEY` | JWT 签名密钥 |
-| `JWT_EXPIRE_DAYS` | "记住"时的 Cookie 有效期（天） |
-| `EVENT_AI_INTERVAL` | AI C 触发间隔（默认每 2 轮对话） |
-| `yuxia_prompt.txt` | AI A 角色人设（启动时自动加载） |
+把图片丢进 `static/stickers/` 任意子目录、任意文件名，重启或调 `POST /api/stickers/refresh` 即可：
+
+1. 手动旁注（同名 `.txt` 第一行）优先
+2. 视觉模型自动打标（`deepseek-flash` 多模态，结果缓存，同图只花一次 token）
+3. 文件名/目录名兜底
+
+匹配顺序：精确情绪词 → 标签命中 → 语义/词面相似 → 随机兜底。
+
+---
+
+## 脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `python scripts/check_api_key.py` | 验证 Key、列模型、跑一次最小对话 |
+| `python scripts/make_icons.py` | 重新生成 PWA 图标 |
+| `python scripts/smoke_test.py` | 接口冒烟测试（隔离库 + 测试桩，零额度） |
+| `python scripts/test_v3.py` | 时钟/地点/场景/手机/记忆/表情包/迁移 离线单元测试 |
+| `python scripts/e2e_chat.py` | 真实浏览器链路的对话验证（消耗额度，跑在隔离临时库） |
+| `python scripts/e2e_server.py` | 开发用隔离实例：临时库 + 端口 5050 + 账号 `e2e/e2e123` |
+
+---
+
+## 思考模式
+
+`deepseek-flash` 默认开启思考模式，本项目跟随默认值（`DEEPSEEK_THINKING = True`，`DEEPSEEK_REASONING_EFFORT = "high"`）。
+
+- 代价：单轮约 7 秒、视觉打标约 3 秒；思考 token 计费，并会占用 `max_tokens`（视觉打标已放大到 2048）
+- 思考模式下 `temperature`/`top_p` 被忽略，本项目开启思考时不再发送这两个参数
+- 关闭：把 `DEEPSEEK_THINKING` 设为 `False`
+
+---
+
+## 安全
+
+- 所有按 `conversation_id` 的接口都做归属校验（用户 2 读不到用户 1 的场景/手机/事件）
+- `config.py` 在 `.gitignore` 中，不会误提交
+- 用户 Key 只存浏览器 localStorage，仅请求头透传
+- `/api/config` 只暴露"服务端是否配置了 Key"的布尔值
+
+---
+
+## 已知限制
+
+- 官方 API 没有 embeddings 接口，语义检索依赖本地 Ollama / sentence-transformers，都没有时用中文词面相似度
+- 时间观察者会依据语义跳跃（例如提到吃饭可能直接跳到饭点），觉得太激进可以调大 `TIME_OBSERVER_INTERVAL`
+- 思考模式偶尔会让模型漏掉严格 JSON 格式，服务端会把纯文本按当前通道兜底存成一条消息
+- 老库里的 `conversation_summaries` / `prompt_config` 是历史遗留表（数据保留，代码不再写入）
 
 ---
 
@@ -163,10 +229,10 @@ PRESET_ACCOUNTS = {
 
 | 层级 | 技术 |
 |------|------|
-| 后端 | Flask 3.x |
-| AI | DeepSeek API (OpenAI 兼容) |
-| 数据库 | SQLite (WAL 模式) |
+| 后端 | Flask 3.x（蓝图 + 模块级依赖注入） |
+| LLM | DeepSeek `deepseek-flash`（多模态，思考模式可配） |
+| 存储 | SQLite（WAL）：消息、事件、地点、场景缓存、记忆、表情包索引 |
+| 检索 | 向量余弦 / 中文二元组覆盖率（自动降级） |
 | 认证 | PyJWT + HttpOnly Cookie |
-| 前端 | 原生 HTML/CSS/JS，零框架依赖 |
-| 通信 | Server-Sent Events (SSE) |
-| 样式 | CSS 变量 + 动画关键帧 + 响应式 |
+| 前端 | 原生 HTML/CSS/JS，SSE 流式，手机面板 + 场景卡 |
+| 离线 | PWA（manifest + Service Worker + 自动生成图标） |

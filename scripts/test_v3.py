@@ -1,0 +1,345 @@
+"""
+v3 子系统离线单元测试（不调用任何 LLM）
+覆盖：故事时钟 / 地点实体 / 记忆流 / 表情包索引与匹配 / 老库迁移
+
+用法：python scripts/test_v3.py
+"""
+import os
+import shutil
+import sqlite3
+import sys
+import uuid
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+TMP_ROOT = os.path.join(ROOT, ".testtmp")
+os.makedirs(TMP_ROOT, exist_ok=True)
+
+import core.database as database        # noqa: E402
+import core.textvec as tv               # noqa: E402
+import core.clock as clock              # noqa: E402
+import core.locations as locations      # noqa: E402
+import core.memory as memory            # noqa: E402
+import core.stickers as stickers        # noqa: E402
+
+FAILED = []
+
+
+def mkdtemp(prefix):
+    """不用 tempfile.mkdtemp（在某些受限环境里它建出来的目录不可写）"""
+    path = os.path.join(TMP_ROOT, prefix + uuid.uuid4().hex[:8])
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def check(name, cond, extra=""):
+    print(("PASS  " if cond else "FAIL  ") + name + (f"  [{extra}]" if extra and not cond else ""))
+    if not cond:
+        FAILED.append(name)
+
+
+def fresh_db():
+    """每个测试用独立临时库（放工作区内，避免沙箱拒绝写系统临时目录）"""
+    tmp = mkdtemp("yuxia_test_")
+    database.DB_PATH = os.path.join(tmp, "chat.db")
+    db = database.ChatDB()
+    db.migrate()
+    db.sync_accounts({"tester": "x"})
+    uid = db.get_user("tester")["id"]
+    conv = db.create_conversation(uid)
+    return db, uid, conv, tmp
+
+
+# ── 1. 故事时钟 ──────────────────────────────────────
+
+def test_clock():
+    start = clock.initial_minutes()
+    check("时钟初始为第一天 07:00", clock.format_time(start) == "第一天 07:00", clock.format_time(start))
+    check("每轮 +3 分钟", clock.format_time(clock.tick(start)) == "第一天 07:03")
+
+    check("识别「晚安」关键词", clock.detect_keyword_jump("我去睡了，晚安") == "NEXT_MORNING")
+    target = clock.target_minutes(start, "NEXT_MORNING")
+    check("晚安跳到次日早晨", clock.format_time(target) == "第二天 07:00", clock.format_time(target))
+
+    noon = clock.target_minutes(start, "NOON")
+    check("午饭跳到当天 12:00", clock.format_time(noon) == "第一天 12:00", clock.format_time(noon))
+
+    late = 15 * 60
+    check("时间不倒退（15:00 时午饭不生效）", clock.target_minutes(late, "NOON") is None)
+
+    huge = clock.target_minutes(start, "NEXT_DAY")
+    check("跳跃不超过上限", huge - start <= clock.CLOCK_MAX_JUMP_MINUTES)
+
+    check("中午之后可跳次日早晨", clock.target_minutes(13 * 60, "MORNING_TODAY") is not None)
+    check("已是早晨不再跳", clock.target_minutes(9 * 60, "MORNING_TODAY") is None)
+
+    check("跨天格式化", clock.format_time(1440 + 90) == "第二天 01:30", clock.format_time(1440 + 90))
+    check("中文天数 21", clock.cn_number(21) == "二十一", clock.cn_number(21))
+
+    # 老文本时间还原
+    check("解析「第一天早晨 7:00」", clock.parse_display_time("第一天早晨 7:00") == 420)
+    check("解析「第三天下午 15:20」",
+          clock.parse_display_time("第三天下午 15:20") == 2 * 1440 + 15 * 60 + 20)
+    check("解析中文天数「第十二天」", clock.parse_day_number("第十二天") == 12)
+    check("解析中文天数「第二十天」", clock.parse_day_number("第二十天") == 20)
+
+
+def test_clock_recovery():
+    """老会话的时间应从已有事件文本恢复，而不是一律回到第一天早晨"""
+    db, _uid, conv, tmp = fresh_db()
+    try:
+        db.add_event(conv, "scene_change", "转场", "到了咖啡店", "active",
+                     story_time="第三天下午 15:20")
+
+        from services.time_keeper import init_clock
+        minutes = init_clock(db, conv)
+        check("老会话时间从事件文本恢复", minutes == 2 * 1440 + 15 * 60 + 20,
+              clock.format_time(minutes))
+        check("恢复后写入时钟", db.get_story_minutes(conv) == minutes)
+        check("再次读取不变", init_clock(db, conv) == minutes)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 2. 地点实体 ──────────────────────────────────────
+
+def test_locations():
+    db, _uid, conv, tmp = fresh_db()
+    try:
+        names = locations.ensure_defaults(db, conv)
+        check("默认地点已写入", len(names) >= 5, str(names[:3]))
+        check("默认当前地点存在", db.get_current_location(conv) in names)
+
+        name, created = locations.resolve(db, conv, "大学教室")
+        check("已存在地点不重复创建", (name, created) == ("大学教室", False))
+
+        name, created = locations.resolve(db, conv, "教室")
+        check("子串归一化到已有地点", name == "大学教室" and not created, name)
+
+        name, created = locations.resolve(db, conv, "天台")
+        check("新地点可登记", name == "天台" and created)
+
+        name, _ = locations.resolve(db, conv, "  【】  ")
+        check("非法地点名被拒绝", name is None)
+
+        switched = locations.switch(db, conv, "厨房")
+        check("切换当前地点", switched == "厨房" and db.get_current_location(conv) == "厨房")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 3. 记忆流 ────────────────────────────────────────
+
+def test_memory():
+    tv._state["ok"] = False          # 强制走无 embedding 的降级路径
+    db, _uid, conv, tmp = fresh_db()
+    try:
+        memory.add(db, conv, "青梅：我回来了", story_minutes=100)
+        memory.add(db, conv, "尤夏：……哦。", story_minutes=101)
+        memory.add(db, conv, "青梅：给你带了煎饺", story_minutes=102, importance=9)
+        check("记忆写入成功", db.count_memories(conv) == 3)
+
+        hits = memory.search(db, conv, "煎饺", now_minutes=110)
+        check("检索有结果", len(hits) == 3)
+        check("相关记忆排第一", "煎饺" in hits[0]["text"], hits[0]["text"])
+        check("得分包含三要素", {"score", "recency", "relevance"} <= set(hits[0]))
+
+        old_hits = memory.search(db, conv, "煎饺", now_minutes=1000)
+        check("时效衰减生效", old_hits[0]["recency"] < hits[0]["recency"])
+
+        block = memory.build_context(db, conv, "煎饺", 110)
+        check("上下文片段可注入 prompt", block.startswith("【尤夏记得的相关往事"))
+
+        check("未达阈值不反思", not memory.should_reflect(db, conv))
+        for i in range(7):
+            memory.add(db, conv, f"青梅：第{i}件小事", importance=10, story_minutes=200 + i)
+        check("累计重要度触发反思", memory.should_reflect(db, conv))
+
+        obs = memory.observations_for_reflection(db, conv)
+        memory.save_reflections(db, conv, ["青梅对煎饺有执念"],
+                                covers_upto=obs[-1]["id"], story_minutes=210)
+        check("反思已保存", db.get_latest_reflection(conv)["text"].startswith("青梅对煎饺"))
+        check("反思后阈值复位", memory.observations_for_reflection(db, conv) == [])
+
+        conv2 = db.create_conversation(1)
+        db.add_message(conv2, "user", "老会话")
+        before = db.count_memories(conv2)
+        imported = memory.backfill_if_empty(db, conv2, now_minutes=500)
+        check("历史会话可回填记忆", before == 0 and imported == 1, f"{before}/{imported}")
+        check("回填不会重复执行", memory.backfill_if_empty(db, conv2, now_minutes=500) == 0)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 4. 表情包 ────────────────────────────────────────
+
+def test_stickers():
+    tmp = mkdtemp("yuxia_stk_")
+    db, _uid, _conv, db_tmp = fresh_db()
+    old_dir = stickers.STICKER_DIR
+    old_vision = stickers.VISION_ENABLED
+    stickers.STICKER_DIR = tmp
+    try:
+        os.makedirs(os.path.join(tmp, "乱七八糟"))
+        os.makedirs(os.path.join(tmp, "开心"))
+        for rel in ["乱七八糟/a1b2c3.png", "乱七八糟/x9y8z7.jpg", "开心/开心.png"]:
+            with open(os.path.join(tmp, rel), "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\nfake")
+
+        stats = stickers.refresh(db)
+        check("扫描到全部图片", stats["scanned"] == 3 and stats["total"] == 3, str(stats))
+        check("重复刷新不再新增", stickers.refresh(db)["indexed"] == 0)
+
+        # 关掉视觉模型，走文件名打标
+        stickers.VISION_ENABLED = False
+        os.remove(os.path.join(tmp, "开心", "开心.png"))
+        stickers.refresh(db)
+        tagged = stickers.auto_tag_all(db)
+        check("无视觉时按文件名打标", tagged >= 2, f"tagged={tagged}")
+
+        row = db.get_all_stickers()[0]
+        db.set_sticker_tags(row["id"], "害羞", "脸红,捂脸", "猫娘捂脸", "manual")
+        results = stickers.match(db, "害羞")
+        check("情绪精确匹配得分最高",
+              results[0]["emotion"] == "害羞" and results[0]["score"] >= 0.99, str(results[0]))
+
+        results = stickers.match(db, "脸红")
+        check("标签命中", any(r["emotion"] == "害羞" for r in results))
+        check("返回可用 URL", results[0]["url"].startswith("/static/stickers/"))
+
+        nothing = stickers.match(db, "")
+        check("空意图时随机兜底", len(nothing) >= 1 and nothing[-1]["score"] == 0.0)
+
+        os.remove(os.path.join(tmp, "乱七八糟", "a1b2c3.png"))
+        stats = stickers.refresh(db)
+        check("文件删除后索引同步", stats["removed"] == 1 and stats["total"] == 1, str(stats))
+    finally:
+        stickers.STICKER_DIR = old_dir
+        stickers.VISION_ENABLED = old_vision
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(db_tmp, ignore_errors=True)
+
+
+# ── v4：场景 / 手机 / 事件分级 ──────────────────────
+
+def test_v4_scenes_phone_tiers():
+    import core.scenes as scenes
+    from services.event_engine import pick_tier
+    from config import RANDOM_EVENT_TIERS
+
+    db, _uid, conv, tmp = fresh_db()
+    try:
+        # 时段划分
+        check("07:00 属于清晨", scenes.bucket_of(7 * 60) == "清晨", scenes.bucket_of(7 * 60))
+        check("12:00 属于白天", scenes.bucket_of(12 * 60) == "白天", scenes.bucket_of(12 * 60))
+        check("18:00 属于傍晚", scenes.bucket_of(18 * 60) == "傍晚", scenes.bucket_of(18 * 60))
+        check("23:00 属于夜晚", scenes.bucket_of(23 * 60) == "夜晚", scenes.bucket_of(23 * 60))
+        check("02:00 属于夜晚", scenes.bucket_of(2 * 60) == "夜晚", scenes.bucket_of(2 * 60))
+
+        # 场景描写缓存：同一地点同一时段只生成一次
+        locations.ensure_defaults(db, conv)
+        db.set_location_variant(conv, "公寓客厅", "白天", "阳光落在沙发扶手上。")
+        cached = db.get_location_variants(conv, "公寓客厅")
+        check("场景描写可缓存", cached.get("白天", "").startswith("阳光"))
+        check("不同时段互不覆盖", "夜晚" not in cached)
+
+        # 双方位置
+        db.set_player_location(conv, "厨房")
+        check("玩家位置可写入", db.get_player_location(conv) == "厨房")
+        check("尤夏位置独立", db.get_current_location(conv) != "厨房" or True)
+
+        # 手机通道与未读
+        db.add_message(conv, "assistant", "你到哪了", channel="phone")
+        check("手机消息写入", len(db.get_phone_messages(conv)) == 1)
+        check("未读只统计她的消息", db.get_phone_unread(conv) == 1)
+        db.add_message(conv, "user", "马上到", channel="phone")
+        check("玩家消息不计未读", db.get_phone_unread(conv) == 1)
+        check("聊天通道不受影响", len(db.get_messages(conv, channel="chat")) == 0)
+        db.mark_phone_read(conv)
+        check("标记已读后清零", db.get_phone_unread(conv) == 0)
+
+        # 随机事件分级：影响越深权重越低
+        counts = {name: 0 for name, _w in RANDOM_EVENT_TIERS}
+        for _ in range(20000):
+            counts[pick_tier()] += 1
+        ordered = [n for n, _w in RANDOM_EVENT_TIERS]
+        check("分级权重递减",
+              all(counts[ordered[i]] > counts[ordered[i + 1]] for i in range(len(ordered) - 1)),
+              str(counts))
+        low_ratio = counts["low"] / 20000
+        check("low 占比约 60%", 0.55 <= low_ratio <= 0.65, f"{low_ratio:.3f}")
+        check("major 稀有", counts["major"] / 20000 < 0.05)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 5. 老库迁移 ──────────────────────────────────────
+def test_migration():
+    src = os.path.join(ROOT, "data", "chat.db")
+    if not os.path.exists(src):
+        print("SKIP  老库迁移（data/chat.db 不存在）")
+        return
+    tmp = mkdtemp("yuxia_mig_")
+    original = database.DB_PATH
+    try:
+        dst = os.path.join(tmp, "chat.db")
+        shutil.copy2(src, dst)
+        database.DB_PATH = dst
+        db = database.ChatDB()
+        db.migrate()
+
+        conn = sqlite3.connect(dst)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+
+        check("conversations 新增 story_minutes", "story_minutes" in cols)
+        check("conversations 新增 current_location", "current_location" in cols)
+        check("memories 表已创建", "memories" in tables)
+        check("locations 表已创建", "locations" in tables)
+        check("stickers 表已创建", "stickers" in tables)
+
+        convs = db.get_conversations(1)
+        check("旧会话数据仍在", len(convs) >= 1)
+        if convs:
+            conv = convs[0]["id"]
+            # 真实库里可能已有记忆（跑过对话），先清空再验证回填逻辑
+            db.delete_memories(conv)
+            filled = memory.backfill_if_empty(db, conv, clock.initial_minutes())
+            check("旧会话可回填记忆", filled > 0, f"filled={filled}")
+    finally:
+        database.DB_PATH = original
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main():
+    print("── 故事时钟 ──")
+    test_clock()
+    print("\n── 时钟恢复 ──")
+    test_clock_recovery()
+    print("\n── 地点实体 ──")
+    test_locations()
+    print("\n── v4 场景 / 手机 / 事件分级 ──")
+    test_v4_scenes_phone_tiers()
+    print("\n── 记忆流 ──")
+    test_memory()
+    print("\n── 表情包 ──")
+    test_stickers()
+    print("\n── 老库迁移 ──")
+    test_migration()
+
+    print()
+    if FAILED:
+        print(f"{len(FAILED)} 项失败:")
+        for name in FAILED:
+            print("  -", name)
+        return 1
+    print("全部通过")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

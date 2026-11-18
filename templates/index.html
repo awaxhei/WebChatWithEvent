@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>尤夏 - AI 角色扮演</title>
     <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/image/icon-192.png">
+    <link rel="icon" type="image/png" href="/static/image/icon-192.png">
     <meta name="theme-color" content="#6366f1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -32,6 +36,24 @@
         </div>
     </div>
 
+    <!-- API Key 设置面板 -->
+    <div class="login-overlay hidden" id="settingsOverlay">
+        <div class="login-box settings-box">
+            <svg class="login-lock" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <div class="settings-title">DeepSeek API Key</div>
+            <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" spellcheck="false">
+            <div class="settings-hint" id="apiKeyHint">留空则使用服务器 config.py 中配置的 Key</div>
+            <div class="settings-actions">
+                <button class="btn-settings primary" id="btnApiKeySave">保存</button>
+                <button class="btn-settings" id="btnApiKeyClear">清除</button>
+                <button class="btn-settings" id="btnSettingsClose">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 移动端顶部导航 -->
     <header class="mobile-header" id="mobileHeader">
         <button class="nav-btn" data-panel="history" title="历史">
@@ -46,19 +68,27 @@
 
         <!-- 左侧：历史记录面板 -->
         <aside class="sidebar history-panel" id="historyPanel">
-            <div class="panel-header">
+                <div class="panel-header">
                 <button class="btn-icon" id="btnNewChat" title="新对话">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                     </svg>
                 </button>
-                <button class="btn-icon btn-logout" id="btnLogout" title="退出登录">
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                        <polyline points="16 17 21 12 16 7"/>
-                        <line x1="21" y1="12" x2="9" y2="12"/>
-                    </svg>
-                </button>
+                <div class="panel-header-actions">
+                    <button class="btn-icon" id="btnSettings" title="API Key 设置">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </button>
+                    <button class="btn-icon btn-logout" id="btnLogout" title="退出登录">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
             <ul class="history-list" id="historyList"></ul>
         </aside>
@@ -67,10 +97,11 @@
         <main class="chat-main">
             <div class="char-title" id="charTitle">
                 <span class="char-name">尤夏</span>
-                <span class="location-tag" id="locationTag">公寓客厅</span>
+                <button class="location-tag" id="locationTag" title="点击切换场景">公寓客厅</button>
+                <ul class="location-picker" id="locationPicker"></ul>
             </div>
-            <div class="narration-bar" id="narrationBar">
-                <div class="narration-track" id="narrationTrack"></div>
+            <div class="scene-card" id="sceneCard" style="display:none;">
+                <div class="scene-desc" id="sceneDesc"></div>
             </div>
             <div class="chat-messages" id="chatMessages">
                 <div class="welcome-message">
@@ -125,9 +156,43 @@
 
     </div>
 
+    <!-- 手机（左下角） -->
+    <button class="phone-fab" id="btnPhone" title="手机">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="6" y="2" width="12" height="20" rx="2.5"/>
+            <line x1="10" y1="5" x2="14" y2="5"/>
+            <circle cx="12" cy="18.5" r="1"/>
+        </svg>
+        <span class="phone-badge" id="phoneBadge" style="display:none;">0</span>
+    </button>
+
+    <!-- 手机面板 -->
+    <div class="phone-overlay" id="phoneOverlay">
+        <div class="phone-shell">
+            <div class="phone-header">
+                <span class="phone-title">手机 · 与尤夏</span>
+                <button class="btn-icon" id="phoneClose" title="关闭">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="phone-list" id="phoneList"></div>
+            <div class="phone-input-row">
+                <input type="text" id="phoneInput" placeholder="发消息..." autocomplete="off">
+                <button class="phone-send" id="phoneSend" title="发送">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- 移动端遮罩 -->
     <div class="overlay" id="overlay"></div>
 
+    <script src="/static/js/api_key.js"></script>
     <script src="/static/js/app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {

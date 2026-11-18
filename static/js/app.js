@@ -46,7 +46,14 @@ class AuthManager {
     _showOverlay() { this.overlay.classList.remove('hidden'); this.usernameInput.focus(); }
     _hideOverlay() { this.overlay.classList.add('hidden'); }
 }
-const authFetch = (url, options = {}) => fetch(url, { ...options, credentials: 'include' });
+const authFetch = (url, options = {}) => {
+    const extra = (window.apiKeyManager && window.apiKeyManager.getHeaders()) || {};
+    return fetch(url, {
+        ...options,
+        credentials: 'include',
+        headers: { ...(options.headers || {}), ...extra },
+    });
+};
 
 const SVG_ICONS = {
     milestone: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6366f1" stroke-width="1.5"><polygon points="8 1.5 10 6 15 6 11.2 9 12.5 13.5 8 11 3.5 13.5 4.8 9 1 6 6 6"/></svg>',
@@ -57,16 +64,15 @@ const SVG_ICONS = {
     misc: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#a0aec0" stroke-width="1.5"><circle cx="8" cy="8" r="2"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2"/></svg>',
 };
 
-// ── 表情包：动态从 /api/stickers 加载，零硬编码 ──
-let STICKER_FOLDERS = []; // {name: "害羞", count: 3}
+// ── 表情包：导入即用，由后端按情绪语义匹配（无需人工分类） ──
+let STICKER_STATS = { total: 0, tagged: 0, emotions: [] };
 
-async function loadStickerFolders() {
+async function loadStickerStats() {
     try {
-        const res = await fetch('/api/stickers');
-        const data = await res.json();
-        STICKER_FOLDERS = data.emotions || [];
+        const res = await fetch('/api/stickers/stats');
+        STICKER_STATS = await res.json();
     } catch (e) {
-        STICKER_FOLDERS = [];
+        STICKER_STATS = { total: 0, tagged: 0, emotions: [] };
     }
 }
 
@@ -82,13 +88,15 @@ class AnimationEngine {
 class ChatManager {
     constructor() {
         this.currentConvId = ''; this.isProcessing = false; this.pushMode = false;
+        this.coLocated = true;
         this.messagesContainer = document.getElementById('chatMessages');
         this.inputEl = document.getElementById('messageInput');
         this.btnSend = document.getElementById('btnSend');
         this.btnPushMode = document.getElementById('btnPushMode');
-        this.narrationTrack = document.getElementById('narrationTrack');
-        this.narrationBar = document.getElementById('narrationBar');
         this.locationTag = document.getElementById('locationTag');
+        this.locationPicker = document.getElementById('locationPicker');
+        this.sceneDesc = document.getElementById('sceneDesc');
+        this.sceneCard = document.getElementById('sceneCard');
         this.welcomeEl = document.querySelector('.welcome-message');
         this._bindEvents();
     }
@@ -96,15 +104,81 @@ class ChatManager {
         this.btnSend.addEventListener('click', () => this.sendMessage());
         this.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } });
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
-        this.btnPushMode.addEventListener('click', () => this.togglePushMode());
+        if (this.btnPushMode) this.btnPushMode.addEventListener('click', () => this.togglePushMode());
+        if (this.locationTag) this.locationTag.addEventListener('click', () => this._toggleLocationPicker());
+        if (this.locationPicker) {
+            this.locationPicker.addEventListener('click', (e) => {
+                const item = e.target.closest('[data-loc]');
+                if (!item) return;
+                this.moveTo(item.dataset.loc);
+                this._toggleLocationPicker(false);
+            });
+        }
     }
-    togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this.inputEl.placeholder = '输入消息...'; } }
-    _disableInput() { this.inputEl.disabled = true; this.btnSend.disabled = true; this.btnPushMode.disabled = true; }
-    _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; this.btnPushMode.disabled = false; this.inputEl.focus(); }
+    togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
+    _updatePlaceholder() {
+        this.inputEl.placeholder = this.coLocated ? '跟尤夏说点什么...' : '不在同一个地方，发消息给她...';
+    }
+    _disableInput() { this.inputEl.disabled = true; this.btnSend.disabled = true; if (this.btnPushMode) this.btnPushMode.disabled = true; }
+    _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; if (this.btnPushMode) this.btnPushMode.disabled = false; this.inputEl.focus(); }
 
-    async sendMessage() {
+    // ── 场景 ──
+    async loadScene() {
+        if (!this.currentConvId) return;
+        try {
+            const res = await authFetch(`/api/scene/${this.currentConvId}`);
+            if (!res.ok) return;
+            this.applyScene(await res.json());
+        } catch (e) {}
+    }
+    applyScene(scene) {
+        if (!scene) return;
+        this.coLocated = !!scene.co_located;
+        const yuxiaLoc = scene.location || '';
+        const playerLoc = scene.player_location || yuxiaLoc;
+        if (this.locationTag) {
+            this.locationTag.textContent = this.coLocated
+                ? yuxiaLoc
+                : `${yuxiaLoc}（你在${playerLoc}）`;
+        }
+        const desc = this.coLocated
+            ? (scene.player_description || scene.description)
+            : (scene.player_description || scene.description);
+        if (this.sceneDesc && desc) {
+            this.sceneDesc.textContent = desc;
+            if (this.sceneCard) this.sceneCard.style.display = 'block';
+        }
+        if (scene.locations && this.locationPicker) {
+            this.locationPicker.innerHTML = scene.locations
+                .map(name => `<li data-loc="${this._e(name)}"${name === playerLoc ? ' class="current"' : ''}>${this._e(name)}</li>`)
+                .join('');
+        }
+        if (scene.story_time && window.emotionAssistant && window.emotionAssistant.eventPanel) {
+            window.emotionAssistant.eventPanel.updateStoryTime(scene.story_time);
+        }
+        this._updatePlaceholder();
+    }
+    _toggleLocationPicker(force) {
+        if (!this.locationPicker) return;
+        const show = force === undefined ? this.locationPicker.style.display !== 'block' : force;
+        this.locationPicker.style.display = show ? 'block' : 'none';
+    }
+    async moveTo(name) {
+        if (!this.currentConvId || !name) return;
+        try {
+            const res = await authFetch(`/api/move/${this.currentConvId}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ who: 'player', location: name }),
+            });
+            if (!res.ok) return;
+            this.applyScene(await res.json());
+        } catch (e) {}
+    }
+
+    async sendMessage(forceChannel) {
         const message = this.inputEl.value.trim();
         if (!message || this.isProcessing) return;
+        this._lastRenderedCount = 0;
         this.isProcessing = true; this._disableInput();
         this.inputEl.value = ''; this.inputEl.style.height = 'auto';
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
@@ -112,16 +186,22 @@ class ChatManager {
         const serverMsg = this.pushMode ? `/推进 ${message}` : message;
         const isPushCmd = this.pushMode;
         if (this.pushMode) this.togglePushMode();
-        this._addBubble('user', displayMsg);
+        const viaPhone = forceChannel === 'phone' || !this.coLocated;
+        if (viaPhone) {
+            if (window.phonePanel) window.phonePanel.push('user', displayMsg, false);
+        } else {
+            this._addBubble(this._looksLikeSceneNote(displayMsg) ? 'narration' : 'user', displayMsg);
+        }
         AnimationEngine.showThinking(this.messagesContainer);
         try {
-            const response = await authFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation_id: this.currentConvId, message: serverMsg }) });
+            const payload = { conversation_id: this.currentConvId, message: serverMsg };
+            if (forceChannel) payload.channel = forceChannel;
+            const response = await authFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const reader = response.body.getReader(); const decoder = new TextDecoder();
-            let fullText = '', buffer = '', atmData = null;
+            let fullText = '', atmData = null;
             AnimationEngine.hideThinking();
 
-            // 先处理流式 JSON 累积
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
@@ -134,8 +214,13 @@ class ChatManager {
                             if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id);
                         } else if (data.type === 'chunk') {
                             fullText += data.content;
-                            // 流式渲染：尝试解析已累积的完整 JSON 行
                             this._renderStreamingJSON(fullText);
+                        } else if (data.type === 'story_time') {
+                            this.storyTime = data.content;
+                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
+                                window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                        } else if (data.type === 'scene_changed' && data.scene) {
+                            this.applyScene(data.scene);
                         } else if (data.type === 'done') {
                             atmData = { conv_id: data.conv_id, msg_count: data.msg_count, is_push_cmd: data.is_push_cmd || isPushCmd };
                         }
@@ -143,10 +228,8 @@ class ChatManager {
                 }
             }
 
-            // 流结束后最终渲染
             this._finalizeStreamingJSON(fullText);
 
-            // ── 异步调用氛围/事件 API ──
             if (atmData) {
                 this._fetchAtmosphere(atmData.conv_id, atmData.msg_count, atmData.is_push_cmd);
             }
@@ -157,6 +240,7 @@ class ChatManager {
             return;
         }
         this.isProcessing = false; this._enableInput();
+        this.loadScene();
         if (window.emotionAssistant && window.emotionAssistant.historyManager) window.emotionAssistant.historyManager.loadHistory();
     }
 
@@ -165,75 +249,84 @@ class ChatManager {
 
     _renderStreamingJSON(fullText) {
         const lines = fullText.split('\n').filter(l => l.trim());
-        const newLines = lines.slice(this._lastRenderedCount);
-        if (newLines.length === 0) return;
-
-        for (const line of newLines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('{')) continue;
-            try {
-                const obj = JSON.parse(trimmed);
-                this._renderJSONObject(obj);
-            } catch (e) {
-                // JSON 不完整，等待更多数据
+        // 只推进到"成功解析"的最后一行：遇到半个 JSON 就停下，等下一个 chunk
+        while (this._lastRenderedCount < lines.length) {
+            const trimmed = lines[this._lastRenderedCount].trim();
+            if (!trimmed.startsWith('{')) {
+                this._lastRenderedCount++;
+                continue;
             }
+            let obj = null;
+            try {
+                obj = JSON.parse(trimmed);
+            } catch (e) {
+                break;  // 还没收到完整对象
+            }
+            this._renderJSONObject(obj);
+            this._lastRenderedCount++;
         }
-        this._lastRenderedCount = lines.length;
     }
 
     _finalizeStreamingJSON(fullText) {
-        // 清除之前的流式渲染残留
-        document.querySelectorAll('.stream-temp').forEach(el => el.classList.remove('stream-temp'));
+        // 先把流式阶段卡住的部分补上
+        this._renderStreamingJSON(fullText);
 
-        // 最终 JSON 解析
-        const lines = fullText.split('\n').filter(l => l.trim());
-        const rendered = new Set();
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('{')) continue;
-            try {
-                const obj = JSON.parse(trimmed);
-                const key = JSON.stringify(obj);
-                if (!rendered.has(key)) {
-                    // 检查是否已存在相同对象（避免重复）
-                    // 简单去重：如果流式阶段已渲染，跳过
-                    rendered.add(key);
-                }
-            } catch (e) {}
+        const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
+        let rendered = this._lastRenderedCount;
+
+        // 模型把 JSON 折成多行时，按括号配对整段提取后补渲染
+        if (rendered === 0 && lines.length) {
+            const objs = this._extractJSONObjects(fullText);
+            objs.forEach(obj => this._renderJSONObject(obj));
+            rendered = objs.length;
         }
 
-        // 清除所有 stream-temp 标记
-        document.querySelectorAll('.stream-temp').forEach(el => {
-            el.classList.remove('stream-temp');
-        });
+        // 最终兜底：模型完全没按 JSON 输出（例如 API 鉴权失败），
+        // 就把原文当成一条消息显示，避免"点了发送却什么都没发生"
+        if (rendered === 0 && fullText.trim()) {
+            this._addBubble('assistant', fullText.trim());
+        }
+        document.querySelectorAll('.stream-temp').forEach(el => el.classList.remove('stream-temp'));
+    }
+
+    _extractJSONObjects(text) {
+        const out = [];
+        let depth = 0, start = -1, inStr = false, esc = false;
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (inStr) {
+                if (esc) esc = false;
+                else if (ch === '\\') esc = true;
+                else if (ch === '"') inStr = false;
+                continue;
+            }
+            if (ch === '"') { inStr = true; continue; }
+            if (ch === '{') { if (depth === 0) start = i; depth++; }
+            else if (ch === '}') {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    try { out.push(JSON.parse(text.slice(start, i + 1))); } catch (e) { /* 忽略损坏片段 */ }
+                    start = -1;
+                }
+            }
+        }
+        return out;
     }
 
     _renderJSONObject(obj) {
-        // 动作：居中灰色文字（不在气泡内）
-        if (obj["动作"]) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'message-row action-row stream-temp';
-            const action = document.createElement('div');
-            action.className = 'action-text';
-            action.textContent = obj["动作"];
-            wrapper.appendChild(action);
-            this.messagesContainer.appendChild(wrapper);
-            AnimationEngine.fadeIn(action);
-        }
-
-        // 对白：对话气泡
+        // 主页面只呈现「对白」和「表情包」；动作与神态由系统的场景描写负责
         if (obj["对白"]) {
             this._addBubble('assistant', obj["对白"], true);
         }
 
-        // 消息：手机消息气泡
+        // 手机消息：不进主页面，交给手机面板并亮红点
         if (obj["消息"]) {
-            this._addMessageBubble(obj["消息"]);
+            if (window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
         }
 
-        // 表情包：从表情库选取
+        // 表情包
         if (obj["表情包"]) {
-            this._addSticker(obj["表情包"]);
+            String(obj["表情包"]).split(/[,，]/).filter(Boolean).forEach(name => this._addSticker(name.trim()));
         }
 
         AnimationEngine.scrollToBottom(this.messagesContainer);
@@ -259,8 +352,18 @@ class ChatManager {
                         const data = JSON.parse(line.slice(6));
                         if (data.type === 'location') {
                             this.locationTag.textContent = data.content;
-                        } else if (data.type === 'atmosphere') {
-                            this._addNarrationCard(data.content);
+                        } else if (data.type === 'scene_changed' && data.scene) {
+                            this.applyScene(data.scene);
+                        } else if (data.type === 'autonomy') {
+                            // 尤夏自己开口 / 发消息 / 换场景
+                            if (data.action === 'move') {
+                                this._addWorldNarration(data.content || '尤夏走开了', 'low');
+                                this.loadScene();
+                            } else if (data.channel === 'phone' || !this.coLocated) {
+                                if (window.phonePanel) window.phonePanel.push('assistant', data.content, true);
+                            } else {
+                                this._addBubble('assistant', data.content);
+                            }
                         } else if (data.type === 'world_narration') {
                             this._addWorldNarration(data.content, data.intensity || 'low');
                         } else if (data.type === 'event_organizing') {
@@ -275,6 +378,10 @@ class ChatManager {
                         } else if (data.type === 'story_time') {
                             if (window.emotionAssistant && window.emotionAssistant.eventPanel)
                                 window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                            // 时间跳跃时给一条提示，让玩家知道时间被推进了
+                            if (data.jump && data.jump !== 'NONE' && data.from && data.to) {
+                                this._addWorldNarration(`时间流转：${data.from} → ${data.to}`, 'low');
+                            }
                         } else if (data.type === 'story_summary') {
                             if (window.emotionAssistant && window.emotionAssistant.eventPanel)
                                 window.emotionAssistant.eventPanel.updateSummary(data.content);
@@ -295,9 +402,11 @@ class ChatManager {
     // ── 渲染方法 ──
     _addBubble(role, content, isStream) {
         const row = document.createElement('div');
-        row.className = `message-row ${role}` + (isStream ? ' stream-temp' : '');
+        const isNote = role === 'narration';
+        row.className = isNote ? 'message-row narration-row' : `message-row ${role}`;
+        if (isStream) row.classList.add('stream-temp');
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble';
+        bubble.className = isNote ? 'scene-note' : 'message-bubble';
         bubble.textContent = content;
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
@@ -307,49 +416,39 @@ class ChatManager {
     }
 
     _addMessageBubble(content) {
-        const row = document.createElement('div');
-        row.className = 'message-row assistant message-row-app stream-temp';
-        const bubble = document.createElement('div');
-        bubble.className = 'message-bubble message-phone-bubble';
-        bubble.textContent = content;
-        row.appendChild(bubble);
-        this.messagesContainer.appendChild(row);
-        AnimationEngine.slideIn(row);
+        // 兼容旧数据：以前存在主聊天里的手机消息，直接丢给手机面板
+        if (window.phonePanel) window.phonePanel.push('assistant', content, false);
     }
 
-    _addSticker(emotion) {
-        // 动态从 API 获取的文件夹列表中查找匹配项
-        const found = STICKER_FOLDERS.find(f => f.name === emotion);
-        if (!found && STICKER_FOLDERS.length === 0) {
-            // API 尚未加载，显示 fallback
-            const wrapper = document.createElement('div');
-            wrapper.className = 'message-row assistant sticker-row stream-temp';
-            wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
-            this.messagesContainer.appendChild(wrapper);
-            AnimationEngine.fadeIn(wrapper.firstChild);
-            return;
-        }
-        // 文件夹名即情绪词
+    async _addSticker(emotion) {
+        // 后端按「情绪词 → 表情包标签/语义」匹配，前端只负责渲染
         const wrapper = document.createElement('div');
         wrapper.className = 'message-row assistant sticker-row stream-temp';
-        const img = document.createElement('img');
-        img.className = 'sticker-img';
-        // 随机选取该文件夹下的一张图片（如果有 count > 1）
-        if (found && found.count > 1) {
-            const idx = Math.floor(Math.random() * found.count) + 1;
-            const padded = String(idx).padStart(2, '0');
-            img.src = `/static/stickers/${encodeURIComponent(emotion)}/${encodeURIComponent(emotion)}_${padded}.png`;
-        } else {
-            img.src = `/static/stickers/${encodeURIComponent(emotion)}/${encodeURIComponent(emotion)}_01.png`;
-        }
-        img.alt = emotion;
-        img.title = emotion;
-        img.onerror = () => {
-            wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
-        };
-        wrapper.appendChild(img);
+        wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
         this.messagesContainer.appendChild(wrapper);
-        AnimationEngine.fadeIn(img);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+
+        try {
+            const res = await fetch(`/api/stickers/match?q=${encodeURIComponent(emotion)}&k=3`);
+            const data = await res.json();
+            const pick = (data.matches || [])[0];
+            if (!pick || !pick.url) return;  // 没有素材就保留文字兜底
+
+            const img = document.createElement('img');
+            img.className = 'sticker-img';
+            img.src = pick.url;
+            img.alt = pick.emotion || emotion;
+            img.title = [pick.emotion, pick.tags].filter(Boolean).join(' / ') || emotion;
+            img.onerror = () => { /* 保持文字兜底 */ };
+            img.onload = () => {
+                wrapper.innerHTML = '';
+                wrapper.appendChild(img);
+                AnimationEngine.fadeIn(img);
+                AnimationEngine.scrollToBottom(this.messagesContainer);
+            };
+        } catch (e) {
+            // 静默失败，保留文字兜底
+        }
     }
 
     _addEventOrganizing() {
@@ -384,31 +483,33 @@ class ChatManager {
 
     async loadConversation(convId) {
         this.currentConvId = convId;
+        this._lastRenderedCount = 0;
         this.messagesContainer.innerHTML = '';
-        this.narrationTrack.innerHTML = '';
-        this.narrationBar.style.display = 'none';
         try {
             const res = await authFetch(`/api/history/${convId}`);
             const data = await res.json();
-            if (data.messages && data.messages.length > 0) {
-                data.messages.forEach((msg) => {
+            const chatMsgs = (data.messages || []).filter(m => (m.channel || 'chat') !== 'phone');
+            if (chatMsgs.length > 0) {
+                chatMsgs.forEach((msg) => {
                     if (msg.role === 'user') {
-                        this._addBubble('user', msg.content);
+                        this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
                     } else {
-                        // 尝试解析 JSON 格式的历史消息
                         this._parseAndRenderHistory(msg.content);
                     }
                 });
             } else {
                 this._showWelcome();
             }
-            if (data.atmosphere && data.atmosphere.length > 0) {
-                data.atmosphere.forEach((text) => {
-                    const d = text.replace(/【地点】\s*.+\n?/g, '').trim();
-                    if (d) this._addNarrationCard(d);
+            if (window.phonePanel) window.phonePanel.setMessages(data.phone || [], data.unread || 0);
+            if (data.location) {
+                this.applyScene({
+                    location: data.location,
+                    player_location: data.player_location,
+                    co_located: data.co_located,
+                    story_time: data.story_time,
                 });
             }
-            if (data.location) this.locationTag.textContent = data.location;
+            this.loadScene();
             if (window.emotionAssistant && window.emotionAssistant.eventPanel) {
                 if (data.story_time) window.emotionAssistant.eventPanel.updateStoryTime(data.story_time);
                 if (data.story_summary) window.emotionAssistant.eventPanel.updateSummary(data.story_summary);
@@ -423,41 +524,28 @@ class ChatManager {
         AnimationEngine.scrollToBottom(this.messagesContainer);
     }
 
+    _looksLikeSceneNote(text) {
+        return /^（.*）$/.test((text || '').trim());
+    }
+
     _parseAndRenderHistory(content) {
-        // 尝试按行解析 JSON 对象
         const lines = content.split('\n').filter(l => l.trim());
         let parsedAny = false;
         for (const line of lines) {
             const trimmed = line.trim();
-            if (trimmed.startsWith('{')) {
-                try {
-                    const obj = JSON.parse(trimmed);
-                    if (obj["动作"]) {
-                        const wrapper = document.createElement('div');
-                        wrapper.className = 'message-row action-row';
-                        const action = document.createElement('div');
-                        action.className = 'action-text';
-                        action.textContent = obj["动作"];
-                        wrapper.appendChild(action);
-                        this.messagesContainer.appendChild(wrapper);
-                    }
-                    if (obj["对白"]) {
-                        this._addBubble('assistant', obj["对白"]);
-                    }
-                    if (obj["消息"]) {
-                        this._addMessageBubble(obj["消息"]);
-                    }
-                    if (obj["表情包"]) {
-                        this._addSticker(obj["表情包"]);
-                    }
-                    parsedAny = true;
-                } catch (e) {}
-            }
+            if (!trimmed.startsWith('{')) continue;
+            try {
+                const obj = JSON.parse(trimmed);
+                if (obj["对白"]) this._addBubble('assistant', obj["对白"]);
+                if (obj["消息"] && window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
+                if (obj["表情包"]) {
+                    String(obj["表情包"]).split(/[,，]/).filter(Boolean)
+                        .forEach(name => this._addSticker(name.trim()));
+                }
+                parsedAny = true;
+            } catch (e) {}
         }
-        if (!parsedAny) {
-            // 旧格式：纯文本
-            this._addBubble('assistant', content);
-        }
+        if (!parsedAny) this._addBubble('assistant', content);
     }
 
     async _initEventsForConversation(convId) {
@@ -474,20 +562,15 @@ class ChatManager {
 
     newConversation() {
         this.currentConvId = ''; this.messagesContainer.innerHTML = '';
-        this.narrationTrack.innerHTML = ''; this.narrationBar.style.display = 'none';
-        this.locationTag.textContent = '公寓客厅'; this._showWelcome();
+        this.coLocated = true;
+        if (this.sceneCard) this.sceneCard.style.display = 'none';
+        if (window.phonePanel) window.phonePanel.setMessages([], 0);
+        this._showWelcome();
         if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.clear();
         this.inputEl.focus();
     }
 
-    _addNarrationCard(text) {
-        this.narrationTrack.innerHTML = '';
-        const card = document.createElement('div');
-        card.className = 'narration-card';
-        card.textContent = text;
-        this.narrationTrack.appendChild(card);
-        this.narrationBar.style.display = 'block';
-    }
+    _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 
     _showWelcome() {
         this.welcomeEl = document.createElement('div');
@@ -498,6 +581,86 @@ class ChatManager {
 }
 
 // ── EventPanel / HistoryManager / UIController ──
+
+/** 手机面板：所有手机通道消息都在这里，主聊天页不出现 */
+class PhonePanel {
+    constructor() {
+        this.btn = document.getElementById('btnPhone');
+        this.badge = document.getElementById('phoneBadge');
+        this.overlay = document.getElementById('phoneOverlay');
+        this.list = document.getElementById('phoneList');
+        this.input = document.getElementById('phoneInput');
+        this.btnSend = document.getElementById('phoneSend');
+        this.btnClose = document.getElementById('phoneClose');
+        this.messages = [];
+        this.unread = 0;
+        this.isOpen = false;
+        this._bind();
+    }
+    _bind() {
+        if (this.btn) this.btn.addEventListener('click', () => this.toggle());
+        if (this.btnClose) this.btnClose.addEventListener('click', () => this.close());
+        if (this.overlay) this.overlay.addEventListener('click', (e) => { if (e.target === this.overlay) this.close(); });
+        if (this.btnSend) this.btnSend.addEventListener('click', () => this.send());
+        if (this.input) {
+            this.input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
+            });
+        }
+    }
+    setMessages(msgs, unread) {
+        this.messages = msgs || [];
+        this.render();
+        this.setUnread(unread || 0);
+    }
+    push(role, text, markUnread) {
+        this.messages.push({ role, content: text });
+        this.render();
+        if (markUnread && !this.isOpen) this.setUnread(this.unread + 1);
+    }
+    setUnread(n) {
+        this.unread = n;
+        if (!this.badge) return;
+        this.badge.textContent = n > 99 ? '99+' : String(n);
+        this.badge.style.display = n > 0 ? 'flex' : 'none';
+    }
+    render() {
+        if (!this.list) return;
+        this.list.innerHTML = this.messages.length === 0
+            ? '<div class="phone-empty">还没有消息</div>'
+            : this.messages.map(m => `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${this._e(m.content)}</div>`).join('');
+        this.list.scrollTop = this.list.scrollHeight;
+    }
+    async send() {
+        const text = (this.input.value || '').trim();
+        if (!text) return;
+        this.input.value = '';
+        const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
+        if (!cm) return;
+        cm.inputEl.value = text;
+        await cm.sendMessage('phone');
+    }
+    openPhone() {
+        if (!this.overlay) return;
+        this.overlay.classList.add('show');
+        this.isOpen = true;
+        this.setUnread(0);
+        this._markRead();
+        if (this.input) this.input.focus();
+    }
+    close() {
+        if (!this.overlay) return;
+        this.overlay.classList.remove('show');
+        this.isOpen = false;
+    }
+    toggle() { this.isOpen ? this.close() : this.openPhone(); }
+    async _markRead() {
+        const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
+        if (!cm || !cm.currentConvId) return;
+        try { await authFetch(`/api/phone/read/${cm.currentConvId}`, { method: 'POST' }); } catch (e) {}
+    }
+    _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+}
 
 class EventPanel {
     constructor() { this.panel = document.getElementById('eventPanel'); this.storyTimeEl = document.querySelector('#eventStoryTime .time-text'); this.summaryEl = document.getElementById('eventSummary'); this.eventList = document.getElementById('eventList'); this.pushHint = document.getElementById('eventPushHint'); this.pushHintText = document.getElementById('pushHintText'); this.btnClose = document.getElementById('btnEventClose'); if (this.btnClose) this.btnClose.addEventListener('click', () => this.close()); }
@@ -597,10 +760,123 @@ class UIController {
     closeAllPanels() { this.historyPanel.classList.remove('open'); this.overlay.classList.remove('show'); this.currentPanel = null; }
 }
 
+/** API Key 设置面板：用户可覆盖服务器 config.py 中的 Key（仅本机 localStorage） */
+class SettingsPanel {
+    constructor() {
+        this.overlay = document.getElementById('settingsOverlay');
+        this.input = document.getElementById('apiKeyInput');
+        this.hint = document.getElementById('apiKeyHint');
+        this.hasServerKey = true;
+        this._bindEvents();
+    }
+    _bindEvents() {
+        const btnOpen = document.getElementById('btnSettings');
+        if (btnOpen) btnOpen.addEventListener('click', () => this.open());
+        const btnSave = document.getElementById('btnApiKeySave');
+        if (btnSave) btnSave.addEventListener('click', () => this.save());
+        const btnClear = document.getElementById('btnApiKeyClear');
+        if (btnClear) btnClear.addEventListener('click', () => this.clear());
+        const btnClose = document.getElementById('btnSettingsClose');
+        if (btnClose) btnClose.addEventListener('click', () => this.close());
+        if (this.overlay) this.overlay.addEventListener('click', (e) => { if (e.target === this.overlay) this.close(); });
+        if (this.input) {
+            this.input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') this.save();
+                else if (e.key === 'Escape') this.close();
+            });
+        }
+    }
+    setServerKeyState(hasKey) {
+        this.hasServerKey = !!hasKey;
+        if (this.overlay && !this.overlay.classList.contains('hidden')) this._renderHint();
+    }
+    open() {
+        this.input.value = (window.apiKeyManager && window.apiKeyManager.get()) || '';
+        this._renderHint();
+        this.overlay.classList.remove('hidden');
+        this.input.focus();
+    }
+    close() { this.overlay.classList.add('hidden'); }
+    save() {
+        const value = this.input.value.trim();
+        if (window.apiKeyManager) window.apiKeyManager.set(value);
+        this._renderHint(value ? '已保存到本机浏览器，仅本设备生效' : '');
+        if (value) setTimeout(() => this.close(), 700);
+    }
+    clear() {
+        this.input.value = '';
+        if (window.apiKeyManager) window.apiKeyManager.clear();
+        this._renderHint('已清除，将使用服务器配置的 Key');
+    }
+    _renderHint(msg) {
+        const isSet = !!(window.apiKeyManager && window.apiKeyManager.isSet());
+        let text = msg;
+        if (!text) {
+            if (isSet) text = '当前使用你填写的 Key';
+            else if (this.hasServerKey) text = '留空则使用服务器 config.py 中配置的 Key';
+            else text = '服务器未配置 Key，请填写你自己的 DeepSeek Key';
+        }
+        this.hint.textContent = text;
+        this.hint.className = 'settings-hint' + (isSet ? ' ok' : (this.hasServerKey ? '' : ' warn'));
+    }
+}
+
 class EmotionAssistant {
-    constructor() { this.chatManager = new ChatManager(); this.historyManager = new HistoryManager(this.chatManager); this.eventPanel = new EventPanel(); this.uiController = new UIController(); window.emotionAssistant = this; this._init(); }
-    async _init() { await this._loadClientConfig(); this.historyManager.loadHistory(); document.getElementById('messageInput').focus(); }
-    async _loadClientConfig() { try { const res = await fetch('/api/config'); this.eventPanel.init(await res.json()); } catch (e) { this.eventPanel.init({ default_story_time: '第一天早晨', default_story_summary: '与尤夏的故事，从这里开始...' }); } }
+    constructor() {
+        this.chatManager = new ChatManager();
+        this.historyManager = new HistoryManager(this.chatManager);
+        this.eventPanel = new EventPanel();
+        this.phonePanel = new PhonePanel();
+        window.phonePanel = this.phonePanel;
+        this.settingsPanel = new SettingsPanel();
+        this.uiController = new UIController();
+        window.emotionAssistant = this;
+        this._idleTimer = null;
+        this._init();
+    }
+    async _init() {
+        await this._loadClientConfig();
+        this.historyManager.loadHistory();
+        document.getElementById('messageInput').focus();
+        this._startIdlePolling();
+    }
+    _startIdlePolling() {
+        if (this._idleTimer) clearInterval(this._idleTimer);
+        // 每分钟问一次：玩家长时间没动静时，让尤夏自主行动
+        this._idleTimer = setInterval(() => this._pollIdle(), 60000);
+    }
+    async _pollIdle() {
+        const cm = this.chatManager;
+        if (!cm || !cm.currentConvId || cm.isProcessing) return;
+        if (document.hidden) return;
+        try {
+            const res = await authFetch(`/api/idle/${cm.currentConvId}`, { method: 'POST' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.acted) {
+                if (data.unread) this.phonePanel.setUnread(data.unread);
+                return;
+            }
+            if (data.action === 'move') {
+                cm._addWorldNarration('尤夏走开了', 'low');
+                if (data.scene) cm.applyScene(data.scene);
+            } else if (data.channel === 'phone') {
+                this.phonePanel.push('assistant', data.text, true);
+            } else {
+                cm._addBubble('assistant', data.text);
+            }
+        } catch (e) {}
+    }
+    async _loadClientConfig() {
+        try {
+            const res = await fetch('/api/config');
+            const cfg = await res.json();
+            this.eventPanel.init(cfg);
+            this.settingsPanel.setServerKeyState(cfg.has_server_key);
+        } catch (e) {
+            this.eventPanel.init({ default_story_time: '第一天 07:00', default_story_summary: '与尤夏的故事，从这里开始...' });
+        }
+    }
     onConvIdChange(convId) { this.historyManager.loadHistory(); }
 }
 
