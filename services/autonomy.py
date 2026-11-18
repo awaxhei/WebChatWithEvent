@@ -166,6 +166,9 @@ def _assistant_streak(db, conv_id):
 def _allowed(db, conv_id, idle):
     if not AUTONOMY_ENABLED:
         return False
+    # 玩家按了暂停：连模型都不问，省额度也给玩家一个安静的世界
+    if db.is_paused(conv_id):
+        return False
     if _assistant_streak(db, conv_id) >= 1 + AUTONOMY_MAX_CONSECUTIVE:
         return False
     if idle:

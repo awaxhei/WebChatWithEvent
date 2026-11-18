@@ -150,6 +150,8 @@ class ChatDB:
                 ("yuxia_activity_at", "INTEGER DEFAULT 0"),
                 # v5：自主行动流水（防重复、算连续次数），JSON 数组
                 ("autonomy_tail", "TEXT DEFAULT '[]'"),
+                # v7：暂停自动推进（她不再自主行动、世界引擎停转）
+                ("paused", "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -619,3 +621,14 @@ class ChatDB:
             conn.execute("UPDATE conversations SET autonomy_tail=? WHERE id=?",
                          (json.dumps(tail, ensure_ascii=False), conv_id))
         return tail
+
+    # ----- v7：暂停自动推进 -----
+    def set_paused(self, conv_id, paused):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET paused=? WHERE id=?",
+                         (1 if paused else 0, conv_id))
+
+    def is_paused(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT paused FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        return bool(row and row["paused"])

@@ -119,10 +119,12 @@ class ChatManager {
     constructor() {
         this.currentConvId = ''; this.isProcessing = false; this.pushMode = false;
         this.coLocated = true;
+        this.paused = false;
         this.messagesContainer = document.getElementById('chatMessages');
         this.inputEl = document.getElementById('messageInput');
         this.btnSend = document.getElementById('btnSend');
         this.btnPushMode = document.getElementById('btnPushMode');
+        this.btnPause = document.getElementById('btnPause');
         this.locationTag = document.getElementById('locationTag');
         this.locationPicker = document.getElementById('locationPicker');
         this.sceneDesc = document.getElementById('sceneDesc');
@@ -135,6 +137,10 @@ class ChatManager {
         this.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } });
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
         if (this.btnPushMode) this.btnPushMode.addEventListener('click', () => this.togglePushMode());
+        if (this.btnPause) this.btnPause.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.togglePause();
+        });
         // 地点按钮：阻止冒泡，否则会连带触发"点击标题切换故事面板"
         if (this.locationTag) this.locationTag.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -164,6 +170,32 @@ class ChatManager {
         document.addEventListener('click', () => this._toggleLocationPicker(false));
     }
     togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
+
+    // ── 暂停自动推进（她不自主行动、世界引擎停转；正常对话不受影响） ──
+    async togglePause() {
+        this._setPaused(!this.paused);
+        const id = this.currentConvId;
+        if (!id) return;
+        try {
+            await authFetch(`/api/pause/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paused: this.paused }),
+            });
+        } catch (e) { /* 本地状态已切换，下一个场景刷新会对齐 */ }
+    }
+    _setPaused(paused) {
+        this.paused = !!paused;
+        if (this.btnPause) {
+            this.btnPause.classList.toggle('paused', this.paused);
+            this.btnPause.title = this.paused ? '已暂停：她不会自己行动，点此继续' : '暂停自动推进';
+            this.btnPause.setAttribute('aria-pressed', this.paused ? 'true' : 'false');
+        }
+        if (window.emotionAssistant && window.emotionAssistant._startIdlePolling) {
+            window.emotionAssistant._startIdlePolling();
+        }
+    }
+
     _updatePlaceholder() {
         this.inputEl.placeholder = this.coLocated ? '跟尤夏说点什么...' : '不在同一个地方，发消息给她...';
     }
@@ -182,6 +214,9 @@ class ChatManager {
     applyScene(scene) {
         if (!scene) return;
         this.coLocated = !!scene.co_located;
+        if (typeof scene.paused === 'boolean' && scene.paused !== this.paused) {
+            this._setPaused(scene.paused);
+        }
         const yuxiaLoc = scene.location || '';
         const playerLoc = scene.player_location || yuxiaLoc;
         if (this.locationTag) {
@@ -342,7 +377,9 @@ class ChatManager {
             this._finalizeStreamingJSON(fullText);
 
             if (atmData) {
-                this._fetchAtmosphere(atmData.conv_id, atmData.msg_count, atmData.is_push_cmd);
+                // 暂停时只刷新场景，不推进世界
+                if (this.paused) this.loadScene();
+                else this._fetchAtmosphere(atmData.conv_id, atmData.msg_count, atmData.is_push_cmd);
             }
         } catch (error) {
             AnimationEngine.hideThinking();
@@ -1044,7 +1081,10 @@ class EmotionAssistant {
         this._startIdlePolling();
     }
     _startIdlePolling() {
-        if (this._idleTimer) clearInterval(this._idleTimer);
+        if (this._idleTimer) { clearInterval(this._idleTimer); this._idleTimer = null; }
+        // 暂停时完全不轮询：既省额度，也不会突然冒出她的行动
+        const cm = this.chatManager;
+        if (cm && cm.paused) return;
         // 每 N 秒问一次：她是否要自己接着做点什么（是否行动由服务端/模型判断）
         const seconds = this.idlePollSeconds || 20;
         this._idleTimer = setInterval(() => this._pollIdle(), seconds * 1000);
@@ -1052,6 +1092,7 @@ class EmotionAssistant {
     async _pollIdle() {
         const cm = this.chatManager;
         if (!cm || !cm.currentConvId || cm.isProcessing) return;
+        if (cm.paused) return;
         if (document.hidden) return;
         try {
             const res = await authFetch(`/api/idle/${cm.currentConvId}`, { method: 'POST' });

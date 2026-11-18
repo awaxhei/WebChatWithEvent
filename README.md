@@ -226,6 +226,21 @@ python scripts/check_api_key.py
 
 > 想直观观察，可以跑 `python scripts/auto_test_server.py`：临时库 + 端口 5051 + 最小间隔 5 秒。
 
+### 暂停自动推进（右上角 ⏸）
+
+聊天区右上角有两个常驻按钮：**暂停** 与 **手机**（不再用左下角悬浮球，避免压住消息）。
+
+点暂停后：
+
+| 暂停的内容 | 实现位置 |
+|------|------|
+| 她的自主行动（不含你主动发消息后的正常回复） | `autonomy._allowed` → 直接返回，连模型都不调用 |
+| 闲置轮询 | 前端 `_startIdlePolling` 不启动定时器 |
+| 随机事件 / 时间观察 / 事件总结 / 反思 / 场景观察 / 神态描写 | `atmosphere` 进 SSE 后立刻 `done` |
+
+状态按会话存在 `conversations.paused`，刷新页面、换设备都会保持一致（`/api/scene` 会回传）。
+正常对话不受影响——暂停只是让"世界别自己动"。
+
 ---
 
 ## API 一览
@@ -239,6 +254,7 @@ python scripts/check_api_key.py
 | GET | `/api/phone/<conv>` | 手机消息 + 未读数 |
 | POST | `/api/phone/read/<conv>` | 标记已读 |
 | POST | `/api/idle/<conv>` | 闲置时让尤夏自主行动 |
+| POST | `/api/pause/<conv>` | 暂停 / 继续自动推进（`{"paused": true}`） |
 | POST | `/api/atmosphere/<conv>` | 时间观察者 / 随机事件 / 事件总结 / 反思 / 自主行动（SSE） |
 | GET/POST | `/api/history*`、`/api/events*` | 会话与事件 |
 | GET | `/api/stickers/match`、`/api/stickers/stats` | 表情包 |

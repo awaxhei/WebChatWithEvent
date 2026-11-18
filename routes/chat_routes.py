@@ -125,6 +125,7 @@ def _scene_payload(conv_id, api_key):
     view["locations"] = locations.list_names(db, conv_id)
     view["story_time"] = clock.format_time(now)
     view["unread"] = db.get_phone_unread(conv_id)
+    view["paused"] = db.is_paused(conv_id)
     return view
 
 
@@ -363,6 +364,23 @@ def phone_read(conv_id):
     return jsonify({"success": True, "unread": 0})
 
 
+@chat_bp.route("/api/pause/<conv_id>", methods=["POST"])
+@require_auth
+def pause_auto(conv_id):
+    """暂停 / 继续自动推进：她不自主开口、不自己做事，随机事件与世界引擎也停转。
+
+    普通对话不受影响——暂停只是让"世界别自己动"。
+    """
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    paused = bool(data.get("paused", True))
+    db.set_paused(conv_id, paused)
+    return jsonify({"paused": paused})
+
+
 @chat_bp.route("/api/idle/<conv_id>", methods=["POST"])
 @require_auth
 def idle(conv_id):
@@ -370,6 +388,10 @@ def idle(conv_id):
     denied = ensure_conversation_owner(db, conv_id, request.user_id)
     if denied:
         return denied
+
+    if db.is_paused(conv_id):
+        return jsonify({"acted": False, "paused": True,
+                        "unread": db.get_phone_unread(conv_id)})
 
     api_key = request_api_key()
     now = time_keeper.init_clock(db, conv_id)
@@ -417,6 +439,10 @@ def atmosphere(conv_id):
 
     def generate():
         yield _sse({"type": "start"})
+        # 暂停时不推进世界：没有随机事件、没有时间观察、没有自主行动
+        if db.is_paused(conv_id):
+            yield _sse({"type": "done", "paused": True})
+            return
         all_messages = db.get_messages(conv_id)
         now = time_keeper.init_clock(db, conv_id)
 

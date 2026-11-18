@@ -771,27 +771,44 @@ html, body {
 }
 
 /* ============================================================
-   v4：手机面板
+   v4：手机面板入口 + v7：暂停自动推进
+   放在标题栏右上角（不落在聊天内容上，避免遮挡消息）
    ============================================================ */
-.phone-fab {
-    position: absolute; left: 14px; bottom: 104px; z-index: 30;
-    width: 46px; height: 46px; border: none; border-radius: 50%;
-    background: var(--bg-secondary); color: var(--accent);
-    box-shadow: var(--shadow-md); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: transform var(--transition), box-shadow var(--transition);
+.chat-tools {
+    position: absolute; top: 6px; right: 12px; z-index: 31;
+    display: flex; align-items: center; gap: 6px;
 }
-.phone-fab:hover { transform: scale(1.08); box-shadow: var(--shadow-lg); }
+.chat-tool {
+    position: relative;
+    width: 32px; height: 32px; border: 1px solid rgba(99,102,241,0.18);
+    border-radius: 50%; background: var(--bg-secondary); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; box-shadow: var(--shadow-sm);
+    transition: transform var(--transition), box-shadow var(--transition),
+                color var(--transition), border-color var(--transition), background var(--transition);
+}
+.chat-tool:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.chat-tool .icon-play { display: none; }
+.chat-tool.paused {
+    color: #b45309; border-color: rgba(245,158,11,0.5);
+    background: rgba(245,158,11,0.12);
+}
+.chat-tool.paused .icon-pause { display: none; }
+.chat-tool.paused .icon-play { display: block; }
 .phone-badge {
-    position: absolute; top: -2px; right: -2px;
-    min-width: 18px; height: 18px; padding: 0 4px;
-    border-radius: 9px; background: #ef4444; color: #fff;
-    font-size: 11px; line-height: 18px; text-align: center;
+    position: absolute; top: -4px; right: -4px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: #ef4444; color: #fff;
+    font-size: 10px; line-height: 16px; text-align: center;
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 1px 4px rgba(239,68,68,0.5);
     animation: badgePop 0.3s ease-out;
 }
 @keyframes badgePop { from { transform: scale(0); } to { transform: scale(1); } }
+@media (max-width: 768px) {
+    .chat-tools { top: 4px; right: 8px; gap: 4px; }
+    .chat-tool { width: 28px; height: 28px; }
+}
 
 .phone-overlay {
     position: fixed; inset: 0; z-index: 400;

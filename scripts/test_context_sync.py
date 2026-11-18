@@ -153,6 +153,43 @@ def main():
     check("异地 act 生成成功", bool(acted) and acted["action"] == "act", str(acted))
     check("异地 act 对玩家不可见", acted is not None and acted.get("visible") is False)
 
+    # ── 6) 暂停自动推进：她不自己动、世界引擎停转，但对话照常
+    conv5 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv5)
+    app_db.add_message(conv5, "user", "先说句话", channel="chat")
+    app_db.set_last_user_at(conv5, 0)
+
+    r = c.post(f"/api/pause/{conv5}", json={"paused": True})
+    check("暂停接口可用", r.status_code == 200 and (r.get_json() or {}).get("paused") is True)
+    check("暂停状态落库", app_db.is_paused(conv5) is True)
+
+    scene = c.get(f"/api/scene/{conv5}").get_json() or {}
+    check("场景接口回传暂停状态（刷新后能恢复按钮）", scene.get("paused") is True, str(scene.get("paused")))
+
+    class CountingStub:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_sync(self, *a, **kw):
+            self.calls += 1
+            return '{"action": "act", "text": "偷偷擦桌子", "location": ""}'
+
+    stub = CountingStub()
+    check("暂停后不产生自主行动",
+          autonomy.maybe_act(app_db, conv5, stub, 600, "情境", idle=False) is None)
+    check("暂停后连模型都不调用（省额度）", stub.calls == 0, f"calls={stub.calls}")
+
+    idle = c.post(f"/api/idle/{conv5}").get_json() or {}
+    check("暂停时闲置接口直接返回", idle.get("acted") is False and idle.get("paused") is True, str(idle))
+
+    atm = c.post(f"/api/atmosphere/{conv5}", json={"msg_count": 5, "is_push_cmd": True})
+    body = atm.data.decode("utf-8")
+    check("暂停时世界引擎不运行（直接 done）",
+          '"type": "start"' in body and '"paused": true' in body, body[:120])
+
+    r = c.post(f"/api/pause/{conv5}", json={"paused": False})
+    check("可以恢复", (r.get_json() or {}).get("paused") is False and app_db.is_paused(conv5) is False)
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")
