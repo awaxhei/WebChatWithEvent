@@ -85,6 +85,21 @@ python app.py                          # http://127.0.0.1:5000
 python scripts/check_api_key.py
 ```
 
+### 登录时提示"连不上本地服务器"
+
+说明 `5000` 端口上已经没有进程在监听 —— 常见于终端被关掉、或 `python app.py` 启动失败。
+页面能打开但不代表服务在跑：Service Worker 会缓存静态资源，旧版本还会把缓存里的首页
+当正常页面返回，让人误以为一切正常。
+
+现在的行为是：
+
+- 页面导航连不上后端时，直接显示"服务器未启动"页，并每 3 秒自动重试；
+- 登录页会探测 `/api/ping`，失败时给出明确提示和"立即重试"，每 5 秒自动重连；
+- 重启 `python app.py` 后，页面自己恢复，不用手动刷新。
+
+排查步骤：看终端有没有退出/报错 → 重新 `python app.py` → 浏览器 `http://127.0.0.1:5000/api/ping`
+应返回 `{"ok": true, ...}`。若端口被占，用 `PORT=5001 python app.py` 换端口。
+
 两种填 Key 的方式：`config.py` 里写死，或页面右上角齿轮填自己的（只存本机，通过 `X-DeepSeek-API-Key` 头透传，不落库）。
 
 ---
@@ -173,6 +188,7 @@ python scripts/check_api_key.py
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/ping` | 健康检查（不碰数据库/模型），前端用它判断"后端是否还活着" |
 | POST | `/api/chat` | 主聊天（SSE），自动按同处/异地选通道 |
 | GET | `/api/scene/<conv>` | 场景视图（地点、时段、双方描写、可选地点） |
 | POST | `/api/move/<conv>` | 移动（`who=player|yuxia`） |

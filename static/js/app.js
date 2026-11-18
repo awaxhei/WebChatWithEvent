@@ -12,17 +12,37 @@ class AuthManager {
         this.rememberCheck = document.getElementById('rememberPwd');
         this.btnLogin = document.getElementById('btnLogin');
         this.errorEl = document.getElementById('loginError');
+        this.offlineEl = document.getElementById('loginOffline');
+        this.retryBtn = document.getElementById('btnRetryConnect');
+        this._retryTimer = null;
         this._bindEvents();
     }
     _bindEvents() {
         this.btnLogin.addEventListener('click', () => this._handleLogin());
         this.passwordInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._handleLogin(); });
         this.usernameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.passwordInput.focus(); });
+        if (this.retryBtn) this.retryBtn.addEventListener('click', () => this._reconnect());
     }
     async init() {
+        if (!await this._ping()) { this._showOverlay(); this._showOffline(); return false; }
+        this._hideOffline();
         const valid = await this._verifyToken();
         if (valid) { this._hideOverlay(); return true; }
         this._showOverlay(); return false;
+    }
+    async _reconnect() {
+        const ok = await this.init();
+        if (ok) onAuthSuccess();
+    }
+    // 后端存活探测：区别于"未登录"，只是证明 127.0.0.1:PORT 上的进程还在
+    async _ping() {
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 3000);
+            const res = await fetch('/api/ping', { cache: 'no-store', signal: ctrl.signal });
+            clearTimeout(timer);
+            return res.ok;
+        } catch { return false; }
     }
     async _verifyToken() {
         try { const res = await fetch('/api/auth/verify', { credentials: 'include' }); return (await res.json()).valid === true; }
@@ -37,10 +57,20 @@ class AuthManager {
         try {
             const res = await fetch('/api/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, remember }) });
             const data = await res.json();
-            if (data.success) { this._hideOverlay(); onAuthSuccess(); }
+            if (data.success) { this._hideOffline(); this._hideOverlay(); onAuthSuccess(); }
             else { this._showError(data.error || '登录失败'); this.passwordInput.value = ''; this.passwordInput.focus(); }
-        } catch { this._showError('网络错误'); }
+        } catch { this._showOffline(); }
         this.btnLogin.disabled = false;
+    }
+    // 后端掉线：明确告知原因，并每 5 秒自动重连（重启 python app.py 后页面自己恢复）
+    _showOffline() {
+        if (this.offlineEl) this.offlineEl.classList.remove('hidden');
+        if (this._retryTimer) return;
+        this._retryTimer = setInterval(() => this._reconnect(), 5000);
+    }
+    _hideOffline() {
+        if (this.offlineEl) this.offlineEl.classList.add('hidden');
+        if (this._retryTimer) { clearInterval(this._retryTimer); this._retryTimer = null; }
     }
     _showError(msg) { this.errorEl.textContent = msg; this.errorEl.style.animation = 'none'; this.errorEl.offsetHeight; this.errorEl.style.animation = 'fadeIn 0.3s ease-out'; setTimeout(() => { this.errorEl.textContent = ''; }, 3000); }
     _showOverlay() { this.overlay.classList.remove('hidden'); this.usernameInput.focus(); }

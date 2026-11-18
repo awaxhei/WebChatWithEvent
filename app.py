@@ -3,7 +3,7 @@ AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
 import os, socket, subprocess, sys, threading
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template
 
 from config import (
     PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION,
@@ -66,6 +66,19 @@ def service_worker():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/ping")
+def ping():
+    """健康检查：不碰数据库、不调模型，只证明"后端进程还活着"。
+
+    前端用它区分两种情况：进程没了（请求直接失败）和 未登录（正常返回）。
+    如果没有这一步，后端一退出，页面还能靠 Service Worker 缓存照常显示，
+    点登录只会得到一句笼统的"网络错误"，看不出真正原因。
+    """
+    out = jsonify({"ok": True, "app": "yuxia", "port": int(os.environ.get("PORT", "5000"))})
+    out.headers["Cache-Control"] = "no-store"
+    return out
 
 
 @app.route("/api/config", methods=["GET"])
