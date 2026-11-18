@@ -8,6 +8,7 @@ import json
 import threading
 
 from config import SCENE_TIME_BUCKETS, SCENE_DESCRIPTION_PROMPT
+import core.pronoun as pronoun
 
 BUCKETS = [b[0] for b in SCENE_TIME_BUCKETS]
 DEFAULT_BUCKET = "白天"
@@ -55,7 +56,7 @@ def generate_description(location, bucket, deepseek, api_key=None):
     for prefix in ("【地点】", "地点：", "描写：", "环境："):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
-    return text[:200] or _fallback(location, bucket)
+    return pronoun.fix(text[:200]) or _fallback(location, bucket)
 
 
 def ensure_description(db, conv_id, location, minutes, deepseek, api_key=None,

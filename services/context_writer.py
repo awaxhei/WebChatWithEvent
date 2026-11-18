@@ -11,6 +11,7 @@
 import threading
 
 import core.clock as clock
+import core.pronoun as pronoun
 from config import (
     CONTEXT_WRITER_INTERVAL, CONTEXT_WRITER_PROMPT, CONTEXT_WRITER_BACKGROUND,
 )
@@ -72,7 +73,9 @@ def _fallback(location, player_location, now_minutes):
 
 def _generate(db, conv_id, now_minutes, location, player_location, deepseek, api_key, turn):
     """真正调用 LLM 撰写并写入缓存（可能在后台线程里执行）"""
-    recent_msgs = db.get_messages(conv_id)[-8:]
+    # 只看两个对话通道：state（旁白描写）不该被当成"刚才说的话"再喂回去
+    recent_msgs = [m for m in db.get_messages(conv_id)
+                   if (m.get("channel") or "chat") in ("chat", "phone")][-8:]
     events = db.get_recent_events(conv_id, limit=4)
     memories = []
     try:
@@ -100,8 +103,8 @@ def _generate(db, conv_id, now_minutes, location, player_location, deepseek, api
     if not text or text.startswith("[生成失败"):
         text = _fallback(location, player_location, now_minutes)
 
-    db.set_context_brief(conv_id, text.strip(), turn)
-    return text.strip()
+    db.set_context_brief(conv_id, pronoun.fix(text.strip()), turn)
+    return pronoun.fix(text.strip())
 
 
 def _refresh_async(db, conv_id, now_minutes, location, player_location, deepseek, api_key, turn):

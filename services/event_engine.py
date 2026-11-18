@@ -108,7 +108,8 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
                       now_minutes=0, api_key=None):
     from config import RANDOM_EVENT_SYSTEM_PROMPT
     try:
-        messages = db.get_messages(conv_id)
+        messages = [m for m in db.get_messages(conv_id)
+                    if (m.get('channel') or 'chat') in ('chat', 'phone')]
         if len(messages) < 4:
             return None
         recent = messages[-6:]
@@ -155,7 +156,8 @@ def _run_event_summary(conv_id, db: ChatDB, deepseek: DeepSeekClient,
                        api_key=None, now_minutes=0):
     """分析对话并生成事件节点（时间由系统提供，不由模型输出）"""
     try:
-        messages = db.get_messages(conv_id)
+        messages = [m for m in db.get_messages(conv_id)
+                    if (m.get('channel') or 'chat') in ('chat', 'phone')]
         existing_events = db.get_recent_events(conv_id, limit=20)
         story_time = clock.format_time(now_minutes)
 

@@ -9,6 +9,7 @@
 import re
 
 from config import CHARACTER_DESC_ENABLED, CHARACTER_DESC_PROMPT
+import core.pronoun as pronoun
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -28,7 +29,7 @@ def _clean(text):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
     text = text.strip('"“”「」『』 ')
-    return text[:160]
+    return pronoun.fix(text[:160])
 
 
 def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
@@ -36,7 +37,9 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
     if not CHARACTER_DESC_ENABLED:
         return ""
 
-    recent = db.get_messages(conv_id)[-6:]
+    # 只看对话通道：上一次的 state 描写不再回灌，否则"他"这种错会一直自我强化
+    recent = [m for m in db.get_messages(conv_id)
+              if (m.get("channel") or "chat") in ("chat", "phone")][-6:]
     recent_text = "\n".join(
         f"{'青梅' if m['role'] == 'user' else '尤夏'}"
         f"（{'手机' if m.get('channel') == 'phone' else '当面'}）：{m['content']}"

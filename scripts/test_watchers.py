@@ -97,6 +97,13 @@ def main():
     check("动作描写不混入聊天通道",
           all(m["channel"] == "chat" for m in db.get_messages(conv, channel="chat")))
 
+    # 青梅是女生：模型写成「他」也要被纠正
+    male_llm = CaptureLLM()
+    male_llm.desc = "尤夏抬眼看他，把杯子往他那边推了推，其他人都没注意。"
+    fixed = cw.describe(db, conv, male_llm, 640, "现在是傍晚", api_key=None)
+    check("指代青梅的「他」被改成「她」", "他" not in fixed.replace("其他", ""), fixed)
+    check("正常词（其他）不被误伤", "其他" in fixed, fixed)
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")
