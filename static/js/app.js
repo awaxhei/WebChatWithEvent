@@ -105,15 +105,22 @@ class ChatManager {
         this.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } });
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
         if (this.btnPushMode) this.btnPushMode.addEventListener('click', () => this.togglePushMode());
-        if (this.locationTag) this.locationTag.addEventListener('click', () => this._toggleLocationPicker());
+        // 地点按钮：阻止冒泡，否则会连带触发"点击标题切换故事面板"
+        if (this.locationTag) this.locationTag.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleLocationPicker();
+        });
         if (this.locationPicker) {
             this.locationPicker.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const item = e.target.closest('[data-loc]');
                 if (!item) return;
                 this.moveTo(item.dataset.loc);
                 this._toggleLocationPicker(false);
             });
         }
+        // 点空白处收起地点列表
+        document.addEventListener('click', () => this._toggleLocationPicker(false));
     }
     togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
     _updatePlaceholder() {
@@ -158,13 +165,52 @@ class ChatManager {
         }
         this._updatePlaceholder();
     }
-    _toggleLocationPicker(force) {
+    async _toggleLocationPicker(force) {
         if (!this.locationPicker) return;
-        const show = force === undefined ? this.locationPicker.style.display !== 'block' : force;
-        this.locationPicker.style.display = show ? 'block' : 'none';
+        const wantShow = force === undefined
+            ? this.locationPicker.style.display !== 'block'
+            : force;
+        if (!wantShow) {
+            this.locationPicker.style.display = 'none';
+            return;
+        }
+        // 还没有会话时先建一个，否则拿不到地点列表（之前会弹出空下拉）
+        if (!this.currentConvId) await this.ensureConversation();
+        if (this.locationPicker.children.length === 0) {
+            // 首次打开要生成场景描写，先给个反馈，别让用户以为没反应
+            this.locationPicker.innerHTML = '<li class="loading">场景加载中…</li>';
+            this.locationPicker.style.display = 'block';
+            await this.loadScene();
+        }
+        this.locationPicker.style.display = 'block';
     }
+
+    async ensureConversation() {
+        if (this.currentConvId) return this.currentConvId;
+        try {
+            const res = await authFetch('/api/history/new', { method: 'POST' });
+            const data = await res.json();
+            if (data && data.id) {
+                this.currentConvId = data.id;
+                if (window.emotionAssistant) window.emotionAssistant.onConvIdChange(data.id);
+            }
+        } catch (e) {}
+        return this.currentConvId;
+    }
+
+    _setSceneLoading(on) {
+        if (!this.sceneCard || !this.sceneDesc) return;
+        if (on) {
+            this.sceneCard.style.display = 'block';
+            this.sceneDesc.textContent = '正在切换场景…';
+        }
+    }
+
     async moveTo(name) {
-        if (!this.currentConvId || !name) return;
+        if (!name) return;
+        if (!this.currentConvId) await this.ensureConversation();
+        if (!this.currentConvId) return;
+        this._setSceneLoading(true);
         try {
             const res = await authFetch(`/api/move/${this.currentConvId}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -172,7 +218,10 @@ class ChatManager {
             });
             if (!res.ok) return;
             this.applyScene(await res.json());
-        } catch (e) {}
+        } catch (e) {
+        } finally {
+            this._setSceneLoading(false);
+        }
     }
 
     async sendMessage(forceChannel) {
@@ -755,7 +804,7 @@ class HistoryManager {
 
 class UIController {
     constructor() { this.historyPanel = document.getElementById('historyPanel'); this.overlay = document.getElementById('overlay'); this.currentPanel = null; this._bindEvents(); }
-    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', () => { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } const btnLogout = document.getElementById('btnLogout'); if (btnLogout) btnLogout.addEventListener('click', async () => { await authFetch('/api/auth/logout', { method: 'POST' }); location.reload(); }); }
+    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', (e) => { if (e.target.closest('#locationTag') || e.target.closest('#locationPicker')) return; if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } const btnLogout = document.getElementById('btnLogout'); if (btnLogout) btnLogout.addEventListener('click', async () => { await authFetch('/api/auth/logout', { method: 'POST' }); location.reload(); }); }
     togglePanel(panelName) { if (panelName === 'events') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); return; } if (panelName !== 'history') return; if (this.currentPanel === 'history') { this.closeAllPanels(); return; } this.closeAllPanels(); this.historyPanel.classList.add('open'); this.overlay.classList.add('show'); this.currentPanel = 'history'; }
     closeAllPanels() { this.historyPanel.classList.remove('open'); this.overlay.classList.remove('show'); this.currentPanel = null; }
 }
