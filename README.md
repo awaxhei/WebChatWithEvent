@@ -133,21 +133,27 @@ python scripts/check_api_key.py
 
 ### 自主行动
 
-尤夏会在两种时机自己做决定（说话 / 发手机消息 / 走去别的地点 / 什么都不做）：
+尤夏是否行动**由她自己判断**（不再掷骰子）。两种时机：
 
-| 触发 | 门槛 | 默认值 |
-|------|------|--------|
-| 每轮对话后 | 用户发言轮数 % `AUTONOMY_COOLDOWN_TURNS` == 0，再按概率 | 2 轮 / 35% |
-| 闲置轮询 | 前端每 60 秒请求 `/api/idle`；距上次发言 ≥ `IDLE_THRESHOLD_SECONDS`，再按概率 | 120 秒 / 25% |
+| 触发 | 说明 |
+|------|------|
+| 每轮对话后 | 都会问她一次"要不要接着做点什么"，由模型决定 none / 开口 / 发消息 / 换场景 |
+| 闲置轮询 | 前端每 20 秒请求 `/api/idle`，同样由模型判断（会告知她玩家已经多少秒没说话） |
 
-行动类型由 LLM 判断（`none/speak/phone/move`），服务端负责校验：
-同处一地才能 `speak`（异地强制改成 `phone`），`move` 会登记地点并记一条 `scene_change` 事件；
-走到清单外的新地点时事件标题会标注「（新场景）」。
+判断依据（写在她的提示词里）：上一句说了要做的事就做完 → 有悬着的话题就接上 → 都没有才选 `none`。
+所以「尤夏边走边想……」这种半截话，会在下一次闲置轮询时自己接上，不需要你输入。
 
-想让她更主动，调大 `AUTONOMY_CHANCE` / `IDLE_CHANCE`、调小 `AUTONOMY_COOLDOWN_TURNS` / `IDLE_THRESHOLD_SECONDS` 即可。
+服务端只保留两条**防刷硬限制**（不是概率）：
 
-> 想直观验证这条链路，可以跑 `python scripts/auto_test_server.py`：
-> 它用临时库起一个端口 5051 的实例，并把概率门槛全部调到 100%。
+| 限制 | 默认 |
+|------|------|
+| 连续自主输出上限（玩家一直不开口时，最多接着说几句） | `AUTONOMY_MAX_CONSECUTIVE = 3` |
+| 闲置行动最小间隔（秒） | `AUTONOMY_MIN_INTERVAL_SECONDS = 20` |
+
+行动类型由模型判断，服务端负责校验：同处一地才能 `speak`（异地强制改成 `phone`），
+`move` 会登记地点并记一条 `scene_change` 事件；走到清单外的新地点时事件标题会标注「（新场景）」。
+
+> 想直观观察，可以跑 `python scripts/auto_test_server.py`：临时库 + 端口 5051 + 最小间隔 5 秒。
 
 ---
 
@@ -232,6 +238,7 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/auto_test_server.py` | 自主行动演示实例：概率门槛 100% + 端口 5051，用来观察尤夏自己行动 |
 | `python scripts/test_scene_creation.py` | 场景创建探针：玩家/尤夏新建场景、自动描写、上限与开关 |
 | `python scripts/test_watchers.py` | 场景观察者 + 神态描写探针（桩模型，零额度） |
+| `python scripts/test_autonomy.py` | 自主行动探针（桩模型）：通道约束、连续上限、最小间隔 |
 | `python scripts/timing_probe.py` | 首轮延迟分段测量（打印各阶段耗时，用 `YUXIA_TIMING=1` 打开计时日志） |
 
 ---

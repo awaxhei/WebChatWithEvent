@@ -69,8 +69,6 @@ def main():
 
     # 2) 尤夏自主前往不存在的地点
     autonomy.AUTONOMY_ENABLED = True
-    autonomy.AUTONOMY_CHANCE = 1.0
-    autonomy.AUTONOMY_COOLDOWN_TURNS = 1
     autonomy.AUTONOMY_ALLOW_NEW_LOCATION = True
     acted = autonomy.maybe_act(db, conv, StubLLM("学校天台"), 18 * 60, "情境", msg_count=1)
     check("尤夏可自主创建新场景", acted and acted.get("created"), str(acted))

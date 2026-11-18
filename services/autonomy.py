@@ -1,22 +1,19 @@
 """
-尤夏的自主行动（v4）
+尤夏的自主行动（v6：由她自己判断，不掷骰子）
 
-她不必等玩家输入：可以主动开口、发手机消息、或者自己走去别的场景。
-- 每轮结束后按概率尝试（受冷却轮次限制）
-- 玩家长时间没动静时，由前端轮询 /api/idle 触发（受真实时间阈值限制）
-- 行动类型由 LLM 判断，服务端负责校验与落库
+- 每轮对话结束后都会问她一次"要不要接着做点什么"，但不给概率，由她决定 none / speak / phone / move
+- 玩家长时间不说话时，前端定时轮询 /api/idle，同样由她判断（只保留最小间隔防刷）
+- 唯一硬限制是"连续自主输出上限"，避免她自言自语刷屏
 """
 import json
-import random
 import re
 import time
 
 import core.clock as clock
 import core.locations as locations
 from config import (
-    AUTONOMY_ENABLED, AUTONOMY_CHANCE, AUTONOMY_COOLDOWN_TURNS,
-    AUTONOMY_PROMPT, IDLE_CHANCE, IDLE_THRESHOLD_SECONDS,
-    AUTONOMY_ALLOW_NEW_LOCATION,
+    AUTONOMY_ENABLED, AUTONOMY_PROMPT, AUTONOMY_ALLOW_NEW_LOCATION,
+    AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -49,42 +46,62 @@ def _parse(raw_text):
     }
 
 
-def _gate(db, conv_id, msg_count, idle):
+def _assistant_streak(db, conv_id):
+    """统计"最后一条用户消息之后"尤夏一共说了几句（含正常回复）"""
+    streak = 0
+    for msg in reversed(db.get_messages(conv_id)):
+        if msg["role"] == "user":
+            break
+        if (msg.get("channel") or "chat") in ("chat", "phone"):
+            streak += 1
+    return streak
+
+
+def _allowed(db, conv_id, idle):
+    """只保留防刷与防刷屏的硬限制，是否行动交给 LLM 判断"""
     if not AUTONOMY_ENABLED:
         return False
+
+    # 连续自主输出的硬上限（正常回复算 1 句）
+    if _assistant_streak(db, conv_id) >= 1 + AUTONOMY_MAX_CONSECUTIVE:
+        return False
+
     if idle:
         last = db.get_last_user_at(conv_id)
-        if time.time() - last < IDLE_THRESHOLD_SECONDS:
+        if time.time() - last < AUTONOMY_MIN_INTERVAL_SECONDS:
             return False
-        return random.random() < IDLE_CHANCE
-    if msg_count % max(1, AUTONOMY_COOLDOWN_TURNS) != 0:
-        return False
-    return random.random() < AUTONOMY_CHANCE
+    return True
 
 
 def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
               msg_count=0, idle=False):
-    """尝试一次自主行动；返回行动详情或 None"""
-    if not _gate(db, conv_id, msg_count, idle):
+    """问她要不要自主行动；返回行动详情或 None"""
+    if not _allowed(db, conv_id, idle):
         return None
 
     yuxia_loc = db.get_current_location(conv_id)
     player_loc = db.get_player_location(conv_id)
     co_located = yuxia_loc == player_loc
 
-    recent = db.get_messages(conv_id)[-6:]
+    recent = [m for m in db.get_messages(conv_id) if (m.get("channel") or "chat") in ("chat", "phone")][-8:]
     recent_text = "\n".join(
         f"{'青梅' if m['role'] == 'user' else '你'}"
         f"（{'手机' if m.get('channel') == 'phone' else '当面'}）：{m['content']}"
         for m in recent
     )
     known = "、".join(locations.list_names(db, conv_id)[-20:])
+
+    idle_seconds = int(time.time() - db.get_last_user_at(conv_id))
+    timing = (f"青梅已经 {idle_seconds} 秒没有说话了。" if idle
+              else "青梅刚刚说完话。")
+
     user_msg = (
         f"{context_brief}\n\n"
+        f"{timing}\n"
         f"最近的消息：\n{recent_text or '（还没有说话）'}\n\n"
         f"已知地点：{known}\n"
         f"你们当前{'' if co_located else '不'}在同一个地方。\n"
-        "请判断你此刻要不要主动做点什么。"
+        "请判断你此刻要不要接着做点什么。"
     )
 
     try:
@@ -108,8 +125,6 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     # 通道约束：不同处一地时不能"当面说话"
     if action == "speak" and not co_located:
         action = "phone"
-    if action == "phone" and co_located and text:
-        pass  # 同处一地也可以发手机消息（她的典型行为）
 
     if action == "move":
         target = decision["location"]
@@ -120,7 +135,6 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
         candidate = locations.normalize(target)
         if not candidate:
             return None
-        # 清单外的新地点：受开关与数量上限约束，避免失控扩张
         if candidate not in names:
             if not AUTONOMY_ALLOW_NEW_LOCATION:
                 return None

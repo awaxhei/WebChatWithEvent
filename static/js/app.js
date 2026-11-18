@@ -999,8 +999,8 @@ class EmotionAssistant {
     }
     _startIdlePolling() {
         if (this._idleTimer) clearInterval(this._idleTimer);
-        // 每分钟问一次：玩家长时间没动静时，让尤夏自主行动
-        this._idleTimer = setInterval(() => this._pollIdle(), 60000);
+        // 每 20 秒问一次：她是否要自己接着做点什么（是否行动由服务端/模型判断）
+        this._idleTimer = setInterval(() => this._pollIdle(), 20000);
     }
     async _pollIdle() {
         const cm = this.chatManager;

@@ -1,8 +1,8 @@
 """
-自主行动测试实例（端口 5051）
+自主行动演示实例（端口 5051）
 - 临时库，不碰 data/chat.db
-- 把自主行动的概率门槛调到 100%，用来验证链路是否真的通
-用法：python scripts/_auto_test_server.py
+- 把"闲置最小间隔"调小，方便观察她自己连续行动（是否行动仍由模型判断，无概率门槛）
+用法：python scripts/auto_test_server.py
 """
 import hashlib
 import os
@@ -26,12 +26,8 @@ boot.sync_accounts({"e2e": hashlib.sha256("e2e123".encode()).hexdigest()})
 from app import app                       # noqa: E402
 import services.autonomy as autonomy      # noqa: E402
 
-# 测试专用：把门槛调到必然触发
-autonomy.AUTONOMY_ENABLED = True
-autonomy.AUTONOMY_CHANCE = 1.0
-autonomy.AUTONOMY_COOLDOWN_TURNS = 1
-autonomy.IDLE_THRESHOLD_SECONDS = 0
-autonomy.IDLE_CHANCE = 1.0
+# 演示用：把最小间隔调小；是否行动由模型判断
+autonomy.AUTONOMY_MIN_INTERVAL_SECONDS = 5
 
 if __name__ == "__main__":
     from werkzeug.serving import make_server
@@ -45,6 +41,6 @@ if __name__ == "__main__":
     for host in ("0.0.0.0", "::"):
         threading.Thread(target=serve, args=(host,), daemon=True).start()
 
-    print("autonomy test server: http://127.0.0.1:5051  db =", database.DB_PATH)
-    print("autonomy: chance=1.0 cooldown=1 idle_threshold=0 idle_chance=1.0")
+    print("autonomy demo server: http://127.0.0.1:5051  db =", database.DB_PATH)
+    print("autonomy: LLM 判断 + 最小间隔 5s（无概率门槛）")
     threading.Event().wait()
