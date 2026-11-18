@@ -211,10 +211,17 @@ def chat():
         CHAT_CHANNEL if co_located else PHONE_CHANNEL)
     can_speak = channel == CHAT_CHANNEL
 
-    # 现场有没有玩家正在搭话的 NPC：先找现成的，没有再按称呼动态补一个
+    # 现场有没有玩家正在搭话的 NPC：先找现成的，再按称呼补，最后交给小模型判别
     addressed_npc = npc.find_addressed(db, conv_id, player_loc, user_message)
     if not addressed_npc:
         addressed_npc = npc.spawn_placeholder(db, conv_id, player_loc, user_message)
+    if not addressed_npc:
+        decision = npc.detect_addressed(db, conv_id, player_loc, user_message,
+                                        deepseek, api_key=api_key)
+        if decision and decision.get("addressed"):
+            who = decision.get("who") or ""
+            addressed_npc = (db.find_npc(conv_id, who, player_loc) if who else None) \
+                or npc.spawn_named(db, conv_id, player_loc, who)
 
     db.add_message(conv_id, "user", user_message, channel=channel, scene=player_loc)
     db.touch_conversation(conv_id)

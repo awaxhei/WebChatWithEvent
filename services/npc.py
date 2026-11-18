@@ -15,7 +15,7 @@ import json
 import re
 import time
 
-from config import NPC_ENABLED, NPC_PROMPT, NPC_CAP
+from config import NPC_ENABLED, NPC_PROMPT, NPC_CAP, NPC_LLM_DETECT, NPC_DETECT_PROMPT
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -49,6 +49,8 @@ _VOCATIVE_STOP = {
     "你", "您", "尤夏", "我", "喂", "那个", "这个", "我说", "然后", "所以",
     "不过", "而且", "就是", "今天", "明天", "昨天", "现在", "刚才", "老板们",
 }
+# 称呼里不该出现的字（动词/语气词/指示词）——用来把"给我来个煎饼"挡在外面
+_VOCATIVE_BLOCK = set("给我你您他她它们吗呢吧了啊呀哦啦要帮买卖吃喝看做走拿这那怎么谁是")
 # 常见身份后缀：用来把"算命先生"这类称呼拆出身份
 ROLE_SUFFIXES = (
     "老板娘", "老板", "店主", "摊主", "店长", "经理", "掌柜", "店员", "店员",
@@ -70,7 +72,7 @@ def extract_vocative(message):
     m = _VOCATIVE_RE.match(text)
     if m:
         cand = m.group(1)
-        if cand not in _VOCATIVE_STOP:
+        if cand not in _VOCATIVE_STOP and not (set(cand) & _VOCATIVE_BLOCK):
             return cand
     return None
 
@@ -183,14 +185,9 @@ def _prune(db, conv_id, location):
         pass
 
 
-def spawn_placeholder(db, conv_id, location, message):
-    """现场没有这个人，但玩家喊了他的称呼 → 当场生成一个
-
-    称呼不限于固定词表：句首「算命先生，……」这种写法也能认出来。
-    """
-    if not NPC_ENABLED:
-        return None
-    name = extract_vocative(message)
+def _create(db, conv_id, location, name):
+    """按称呼建一个 NPC；同名/同身份已存在就直接复用"""
+    name = (name or "").strip()[:12]
     if not name:
         return None
     role = _role_of(name)
@@ -209,6 +206,38 @@ def spawn_placeholder(db, conv_id, location, message):
     persona = f"{location}的{role}，说话随意、简短，只管自己眼前的事。"
     npc_id = db.add_npc(conv_id, name, role, location, persona)
     return db.get_npc(npc_id)
+
+
+def spawn_placeholder(db, conv_id, location, message):
+    """现场没有这个人，但玩家喊了他的称呼 → 当场生成一个
+
+    称呼不限于固定词表：句首「算命先生，……」这种写法也能认出来。
+    """
+    if not NPC_ENABLED:
+        return None
+    name = extract_vocative(message)
+    if not name:
+        return None
+    return _create(db, conv_id, location, name)
+
+
+def _default_name(location):
+    """判别结果只说了"在对第三人说话"却没给称呼时，按地点猜一个"""
+    loc = location or ""
+    if any(k in loc for k in ("摊", "市场", "集市")):
+        return "摊主"
+    if any(k in loc for k in ("店", "铺", "馆", "吧", "超市", "商场")):
+        return "店员"
+    if any(k in loc for k in ("站", "场", "厅", "银行", "医院", "学校")):
+        return "工作人员"
+    return "路人"
+
+
+def spawn_named(db, conv_id, location, name):
+    """按判别结果给出的称呼生成（称呼可能写在句子中间）"""
+    if not NPC_ENABLED:
+        return None
+    return _create(db, conv_id, location, name or _default_name(location))
 
 
 def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
@@ -243,6 +272,53 @@ def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
                    channel="npc", scene=npc.get("location") or "")
     db.touch_npc(npc["id"], time.time())
     return text
+
+
+def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
+    """用一个小模型判断"这句话是不是在跟第三人说话"。
+
+    只在固定规则识别不出称呼时用：玩家把称呼写在句子中间、或者干脆没写称呼，
+    规则会漏掉，这里补一次判断。关掉思考、限制 120 token，尽量不拖慢首字。
+    返回 {"addressed": bool, "who": str} 或 None。
+    """
+    if not NPC_LLM_DETECT or not message:
+        return None
+    try:
+        present = db.get_npcs(conv_id, location=location)
+    except Exception:
+        present = []
+    names = "、".join(n.get("name") or "" for n in present) or "（现场暂时没有第三人）"
+    system = NPC_DETECT_PROMPT.replace("{present}", names)
+    try:
+        raw = deepseek.chat_sync(
+            [{"role": "user", "content": message}],
+            system_prompt=system,
+            temperature=0.0,
+            api_key_override=api_key,
+            max_tokens=120,
+            thinking=False,
+        )
+    except Exception as e:
+        print(f"[NPC] 判别失败: {e}")
+        return None
+    if not raw or raw.startswith("[生成失败"):
+        return None
+    text = raw.strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    addressed = bool(data.get("addressed"))
+    who = str(data.get("who") or "").strip()[:12]
+    return {"addressed": addressed, "who": who}
 
 
 def present_block(db, conv_id, location):

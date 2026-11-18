@@ -184,6 +184,57 @@ def main():
           bool(extra) and len(app_db.get_npcs(conv4, location="街上")) <= npc.PER_LOCATION_CAP,
           str(len(app_db.get_npcs(conv4, location="街上"))))
 
+    # ── 9) LLM 判别：没有句首称呼也能认出"在跟第三人说话"
+    class DetectStub(StubLLM):
+        def __init__(self, verdict):
+            super().__init__()
+            self.verdict = verdict
+            self.detect_kwargs = {}
+            self.detect_prompt = ""
+
+        def chat_sync(self, messages, system_prompt="", **kw):
+            if "addressed" in (system_prompt or ""):
+                self.detect_prompt = system_prompt
+                self.detect_kwargs = kw
+                return self.verdict
+            return super().chat_sync(messages, system_prompt, **kw)
+
+    conv5 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv5)
+    locations.switch_both(app_db, conv5, "煎饼摊")
+    stub = DetectStub('{"addressed": true, "who": "卖煎饼的"}')
+    chat_mod.deepseek = stub
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv5, "message": "给我来个煎饼，多加辣"})
+        events = sse(r)
+        kinds = [e.get("type") for e in events]
+        check("没有句首称呼时由模型判别出第三人", "npc" in kinds, str(kinds))
+        created = app_db.get_npcs(conv5, location="煎饼摊")
+        check("判别出的称呼被建成 NPC",
+              any(n["name"] == "卖煎饼的" for n in created), str([n["name"] for n in created]))
+        check("判别调用关掉了思考", stub.detect_kwargs.get("thinking") is False,
+              str(stub.detect_kwargs))
+        check("判别调用限制输出长度", bool(stub.detect_kwargs.get("max_tokens")),
+              str(stub.detect_kwargs))
+        check("判别提示词里有现场名单", "现场的人" in stub.detect_prompt, stub.detect_prompt[:80])
+    finally:
+        chat_mod.deepseek = real
+
+    # 判别为"没在跟第三人说话"时不生成
+    conv6 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv6)
+    locations.switch_both(app_db, conv6, "煎饼摊")
+    none_stub = DetectStub('{"addressed": false, "who": ""}')
+    chat_mod.deepseek = none_stub
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv6, "message": "我今天有点累"})
+        events = sse(r)
+        check("对着尤夏说话不会生成 NPC",
+              "npc" not in [e.get("type") for e in events]
+              and not app_db.get_npcs(conv6), str(app_db.get_npcs(conv6)))
+    finally:
+        chat_mod.deepseek = real
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

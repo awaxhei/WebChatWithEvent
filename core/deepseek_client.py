@@ -37,14 +37,15 @@ class DeepSeekClient:
             msgs.append({"role": role, "content": msg["content"]})
         return msgs
 
-    def _payload(self, messages, stream, temperature):
+    def _payload(self, messages, stream, temperature, thinking=None):
+        think = self.thinking if thinking is None else bool(thinking)
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "thinking": {"type": "enabled" if self.thinking else "disabled"},
+            "thinking": {"type": "enabled" if think else "disabled"},
         }
-        if self.thinking:
+        if think:
             # 思考模式下 temperature / top_p 无效（会被忽略）；top_p 只接受 0.95~1.0
             payload["reasoning_effort"] = DEEPSEEK_REASONING_EFFORT
         else:
@@ -88,9 +89,9 @@ class DeepSeekClient:
             yield f"错误: {str(e)}"
 
     def chat_sync(self, messages, system_prompt="", temperature=0.8, api_key_override=None,
-                  max_tokens=None):
+                  max_tokens=None, thinking=None):
         msgs = self._build_messages(system_prompt, messages)
-        payload = self._payload(msgs, False, temperature)
+        payload = self._payload(msgs, False, temperature, thinking=thinking)
         if max_tokens:
             payload["max_tokens"] = max_tokens
         key = api_key_override or self.api_key or self._default_api_key
