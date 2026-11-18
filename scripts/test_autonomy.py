@@ -150,6 +150,38 @@ def main():
     check("act 计入连续上限", autonomy.maybe_act(db, conv12, llm12, 600, "x", idle=False) is None)
     check("超限后不调用模型", llm12.calls == 0)
 
+    # 13) act 会占用故事时间（否则多次行动全挤在同一分钟）
+    conv13 = fresh()
+    db.set_story_minutes(conv13, 600)
+    acted13 = autonomy.maybe_act(
+        db, conv13, StubLLM('{"action": "act", "text": "把窗帘拉开一条缝", "location": ""}'),
+        600, "x", idle=False)
+    check("act 已执行", bool(acted13) and acted13["action"] == "act", str(acted13))
+    check("act 推进了故事时间",
+          db.get_story_minutes(conv13) == 600 + autonomy.AUTONOMY_ACT_MINUTES,
+          str(db.get_story_minutes(conv13)))
+    check("act 事件标记为 self（不能当世界事件喂回去）",
+          any(e.get("tier") == "self" for e in db.get_recent_events(conv13, limit=5)))
+
+    # 14) 同一时间窗内动手次数有预算，防止一分钟做完一整顿早饭
+    conv14 = fresh()
+    db.set_story_minutes(conv14, 600)
+    for i in range(autonomy.AUTONOMY_ACT_PER_WINDOW):
+        db.push_autonomy(conv14, {"action": "act", "text": f"第{i}件事",
+                                  "at": time.time(), "at_minutes": 600 + i})
+    llm14 = StubLLM('{"action": "act", "text": "又把灶台擦了一遍", "location": ""}')
+    check("同窗动手次数用完后不再 act",
+          autonomy.maybe_act(db, conv14, llm14, 605, "x", idle=False) is None)
+    check("预算用完后仍然问了模型（判断在服务端）", llm14.calls == 1, f"calls={llm14.calls}")
+    check("预算用完时提示词里会说明",
+          "已经动过手了" in llm14.last_user_msg, llm14.last_user_msg[-120:])
+
+    # 15) 时间窗过了就又能动手
+    stale = StubLLM('{"action": "act", "text": "把买回来的菜放进冰箱", "location": ""}')
+    acted15 = autonomy.maybe_act(db, conv14, stale,
+                                 605 + autonomy.AUTONOMY_ACT_WINDOW_MINUTES + 1, "x", idle=False)
+    check("过了时间窗可以重新动手", bool(acted15) and acted15["action"] == "act", str(acted15))
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

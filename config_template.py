@@ -370,6 +370,13 @@ LOCATION_CAP = 40
 AUTONOMY_MAX_CONSECUTIVE = 12
 # 闲置自主行动的最小间隔（秒）：只是防刷，不是概率；是否行动由她自己判断
 AUTONOMY_MIN_INTERVAL_SECONDS = 8
+# 她动手做事（act）会占掉的故事时间（分钟）：不然五次行动全挤在同一分钟
+AUTONOMY_ACT_MINUTES = 2
+# 自主说一句 / 发一条消息占掉的故事时间（分钟）
+AUTONOMY_SPEAK_MINUTES = 1
+# 同一段时间窗内她最多动手几次（防止一分钟内煎蛋、炒蛋、切菜连着来）
+AUTONOMY_ACT_WINDOW_MINUTES = 10
+AUTONOMY_ACT_PER_WINDOW = 2
 # 前端轮询闲置的间隔（秒）
 IDLE_POLL_SECONDS = 8
 AUTONOMY_PROMPT = (

@@ -225,9 +225,12 @@ def chat():
                    "不要用纯文本回应，哪怕只有一个字或一个颜文字，也要包进 JSON。")
     # 世界块放在最前面：她得先知道刚刚出了什么事，才谈得上回应
     world = world_context.world_block(db, conv_id, now_minutes, events_limit=6)
+    # 她自己的动作用第二人称单独给，不能混进「最近发生的事」里
+    self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
+    blocks = "\n\n".join(b for b in (world, self_acts) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
-    if world:
-        system_prompt += f"{world}\n\n"
+    if blocks:
+        system_prompt += f"{blocks}\n\n"
     system_prompt += f"{channel_rule}\n\n{format_rule}"
     context_messages = _context_window(conv_id, limit=10)
     _mark("提示词组装完成（准备开始流式）")
@@ -418,6 +421,8 @@ def idle(conv_id):
         payload["scene"] = _scene_payload(conv_id, api_key)
     if acted and acted.get("action") == "act":
         payload["events"] = db.get_recent_events(conv_id, limit=50)
+    if acted:
+        payload["story_time"] = clock.format_time(db.get_story_minutes(conv_id))
     return jsonify(payload)
 
 
@@ -525,6 +530,12 @@ def atmosphere(conv_id):
             else:
                 yield _sse({"type": "autonomy", "action": acted["action"],
                             "content": acted["text"], "channel": acted.get("channel", "")})
+            # 自主行动也会推进故事时间（做事 2 分钟、说话 1 分钟），页面上的时钟要跟上
+            try:
+                yield _sse({"type": "story_time",
+                            "content": clock.format_time(db.get_story_minutes(conv_id))})
+            except Exception:
+                pass
 
         yield _sse({"type": "done"})
 

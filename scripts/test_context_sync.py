@@ -190,6 +190,42 @@ def main():
     r = c.post(f"/api/pause/{conv5}", json={"paused": False})
     check("可以恢复", (r.get_json() or {}).get("paused") is False and app_db.is_paused(conv5) is False)
 
+    # ── 7) 她自己的动作不能混进「最近发生的事」，且必须是第二人称
+    conv6 = app_db.create_conversation(user)
+    app_db.add_event(conv6, "random", "楼上传来一阵拖椅子的声音", "刺啦一声", "active",
+                     story_time="第一天 07:05", tier="low")
+    app_db.add_event(conv6, "misc", "尤夏从沙发上起身", "尤夏从沙发上起身，赤脚走进厨房。",
+                     "completed", story_time="第一天 07:03", tier="self")
+    block = world_context.recent_events_block(app_db, conv6, limit=6)
+    check("世界事件仍然在", "楼上传来一阵拖椅子的声音" in block, block[:160])
+    check("她自己的动作不算世界事件", "从沙发上起身" not in block, block[:160])
+
+    app_db.set_yuxia_activity(conv6, "尤夏把碗摞起来", 429)
+    line = world_context.activity_line(app_db, conv6, 430)
+    check("活动行改成第二人称（去掉「尤夏」主语）",
+          "尤夏" not in line and "把碗摞起来" in line, line)
+
+    app_db.push_autonomy(conv6, {"action": "act", "text": "尤夏把灶台擦了一遍",
+                                 "at": 1.0, "at_minutes": 426})
+    acts_block = world_context.self_actions_block(app_db, conv6, 430)
+    check("自己的动作用「你刚才做了」单独给", "你刚才做了" in acts_block and "尤夏" not in acts_block,
+          acts_block)
+
+    # ── 8) 对话提示词里带上「你刚才做了」
+    llm2 = CaptureLLM()
+    chat_mod.deepseek = llm2
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv6, "message": "你刚才在忙什么"})
+        body = r.data.decode("utf-8")   # 必须消费流，生成器才会真正跑起来
+        check("聊天接口正常返回（第二人称场景）", r.status_code == 200 and '"type": "done"' in body,
+              str(r.status_code))
+        check("提示词含「你刚才做了」", "你刚才做了" in llm2.system_prompt,
+              llm2.system_prompt[:400])
+        check("提示词里她自己的动作不再是第三人称",
+              "尤夏把灶台擦了一遍" not in llm2.system_prompt)
+    finally:
+        chat_mod.deepseek = real
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

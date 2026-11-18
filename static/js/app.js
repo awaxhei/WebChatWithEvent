@@ -1113,6 +1113,7 @@ class EmotionAssistant {
             } else {
                 cm._addBubble('assistant', data.text);
             }
+            if (data.story_time && this.eventPanel) this.eventPanel.updateStoryTime(data.story_time);
         } catch (e) {}
     }
     async _loadClientConfig() {

@@ -171,6 +171,15 @@ class ChatDB:
                 except sqlite3.OperationalError:
                     pass
 
+            # v7：早期自主行动事件没有 tier 标记，按"misc + completed"回填成 self，
+            # 否则她自己的动作会被当成"世界发生的事"喂回给她（AI C 产出的 misc 都是 active）
+            try:
+                conn.execute("UPDATE events SET tier='self'"
+                             " WHERE event_type='misc' AND status='completed'"
+                             " AND (tier IS NULL OR tier='')")
+            except Exception:
+                pass
+
             # 将旧对话 (user_id=0) 迁移到第一个用户
             try:
                 first_user = conn.execute("SELECT MIN(id) as uid FROM users").fetchone()

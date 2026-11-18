@@ -24,6 +24,8 @@ import services.world_context as world_context
 from config import (
     AUTONOMY_ENABLED, AUTONOMY_PROMPT, AUTONOMY_ALLOW_NEW_LOCATION,
     AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
+    AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
+    AUTONOMY_SPEAK_MINUTES,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -193,7 +195,7 @@ def _scene_line(db, conv_id, yuxia_loc, now_minutes):
 
 
 def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
-                  co_located, idle, idle_seconds):
+                  co_located, idle, idle_seconds, can_act=True):
     recent = [m for m in db.get_messages(conv_id)
               if (m.get("channel") or "chat") in ("chat", "phone")][-8:]
     recent_text = "\n".join(
@@ -228,6 +230,9 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
     parts.append(f"最近的消息：\n{recent_text or '（还没有说话）'}")
     parts.append(f"已知地点：{known}")
     parts.append(f"你们当前{'' if co_located else '不'}在同一个地方。")
+    if not can_act:
+        # 提前告诉模型"这段时间别再动手"，比它选完 act 再被服务端丢掉划算
+        parts.append("你这段时间已经动过手了，这次只能说话（speak / phone）或者不动（none）。")
     parts.append("请判断你此刻要不要接着做点什么。")
     return "\n\n".join(p for p in parts if p)
 
@@ -244,7 +249,8 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     idle_seconds = int(time.time() - db.get_last_user_at(conv_id))
 
     user_msg = _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
-                             co_located, idle, idle_seconds)
+                             co_located, idle, idle_seconds,
+                             can_act=_act_budget_left(db, conv_id, now_minutes))
 
     try:
         raw = deepseek.chat_sync(
@@ -278,16 +284,42 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
         return _do_move(db, conv_id, decision, yuxia_loc, now_minutes)
 
     if action == "act" and text:
+        if not _act_budget_left(db, conv_id, now_minutes):
+            print("[自主行动] 这段时间已经动过手了，跳过 act")
+            return None
         return _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located)
 
     if action in ("speak", "phone") and text:
         channel = "phone" if action == "phone" else "chat"
         db.add_message(conv_id, "assistant", text, channel=channel, scene=yuxia_loc)
-        db.push_autonomy(conv_id, {"action": action, "text": text, "at": time.time()},
-                        keep=_TAIL_KEEP)
+        db.push_autonomy(conv_id, {"action": action, "text": text, "at": time.time(),
+                                   "at_minutes": int(now_minutes)},
+                         keep=_TAIL_KEEP)
+        # 说话也占一点时间，否则一整天停在同一个分钟里
+        try:
+            db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_SPEAK_MINUTES)
+        except Exception:
+            pass
         return {"action": action, "text": text, "channel": channel, "visible": True}
 
     return None
+
+
+def _act_budget_left(db, conv_id, now_minutes):
+    """同一时间窗内的动手次数预算。
+
+    没有这个限制时，闲置轮询每 8 秒一次、而 act 不推进故事时间，
+    会出现"07:03 起床 → 07:03 开冰箱 → 07:03 拿锅 → 07:03 敲蛋"这种
+    一分钟内做完一整顿早饭、且完全盖过对话的情况。
+    """
+    try:
+        tail = db.get_autonomy_tail(conv_id)
+    except Exception:
+        return True
+    recent = [t for t in tail
+              if t.get("action") == "act"
+              and int(now_minutes) - int(t.get("at_minutes") or 0) < AUTONOMY_ACT_WINDOW_MINUTES]
+    return len(recent) < AUTONOMY_ACT_PER_WINDOW
 
 
 def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
@@ -314,8 +346,14 @@ def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
                  f"尤夏去了{new_loc}" + ("（新场景）" if created else ""),
                  "她自己走开了。", "active",
                  story_time=clock.format_time(now_minutes))
-    db.push_autonomy(conv_id, {"action": "move", "text": f"去了{new_loc}", "at": time.time()},
-                    keep=_TAIL_KEEP)
+    db.push_autonomy(conv_id, {"action": "move", "text": f"去了{new_loc}", "at": time.time(),
+                               "at_minutes": int(now_minutes)},
+                     keep=_TAIL_KEEP)
+    # 走路也要花时间
+    try:
+        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
+    except Exception:
+        pass
     return {"action": "move", "location": new_loc, "text": "", "created": created, "visible": True}
 
 
@@ -334,10 +372,18 @@ def _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located):
     if not text:
         return None
     db.set_yuxia_activity(conv_id, text, now_minutes)
+    # tier=self 标记这条事件是她自己干的，不能再当成"世界发生的事"喂回给她
     db.add_event(conv_id, "misc", _short_title(text), text, "completed",
-                 story_time=clock.format_time(now_minutes))
-    db.push_autonomy(conv_id, {"action": "act", "text": text, "at": time.time()},
-                    keep=_TAIL_KEEP)
+                 story_time=clock.format_time(now_minutes),
+                 tier=world_context.SELF_TIER)
+    db.push_autonomy(conv_id, {"action": "act", "text": text, "at": time.time(),
+                               "at_minutes": int(now_minutes)},
+                     keep=_TAIL_KEEP)
+    # 做事要占时间：否则多次行动全挤在同一分钟，看起来像一口气干完一整顿早饭
+    try:
+        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
+    except Exception:
+        pass
     # 不在同一个地方时，玩家看不到，只在故事进展里留痕
     return {"action": "act", "text": text, "activity": text,
             "location": yuxia_loc, "visible": bool(co_located)}
