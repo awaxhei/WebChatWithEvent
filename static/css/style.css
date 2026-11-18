@@ -194,6 +194,9 @@ html, body {
     background: rgba(245,158,11,0.07); border-color: rgba(245,158,11,0.35);
     color: #92400e;
 }
+/* 连续同类旁白：只保留第一条的标签，后面的紧贴上去 */
+.world-narration.cont { margin-top: -12px; }
+.world-narration.cont .world-narration-label { display: none; }
 
 /* 欢迎消息 */
 .welcome-message { text-align: center; padding: 60px 20px; animation: fadeInUp 0.6s ease-out; }

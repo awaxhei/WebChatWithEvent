@@ -35,9 +35,14 @@ class StubLLM:
     def __init__(self, payload):
         self.payload = payload
         self.calls = 0
+        self.last_user_msg = ""
 
-    def chat_sync(self, *a, **kw):
+    def chat_sync(self, messages, *a, **kw):
         self.calls += 1
+        try:
+            self.last_user_msg = messages[0]["content"]
+        except Exception:
+            self.last_user_msg = ""
         return self.payload
 
 
@@ -102,6 +107,48 @@ def main():
     db.set_last_user_at(conv6, time.time() - autonomy.AUTONOMY_MIN_INTERVAL_SECONDS - 5)
     acted6 = autonomy.maybe_act(db, conv6, llm6, 600, "x", idle=True)
     check("超过最小间隔后由模型判断", bool(acted6) and llm6.calls == 1, str(acted6))
+
+    # 7) 她能读到随机事件（提示词里带最近事件）
+    conv7 = fresh()
+    db.add_event(conv7, "random", "水槽水管爆开", "旧水管突然爆开，水漫了一地", "active",
+                 story_time="第一天 07:12", tier="high")
+    llm7 = StubLLM('{"action": "act", "text": "去关水阀，顺手把地上的水擦掉", "location": ""}')
+    acted7 = autonomy.maybe_act(db, conv7, llm7, 600, "情境", idle=False)
+    check("随机事件进入了自主行动提示词", "水槽水管爆开" in llm7.last_user_msg, llm7.last_user_msg[:200])
+    check("提示词里带时间与场景", "第一天 07:12" in llm7.last_user_msg or "此刻" in llm7.last_user_msg)
+
+    # 8) act：她真的做一件事，写进活动与事件
+    check("act 被识别为行动", bool(acted7) and acted7["action"] == "act", str(acted7))
+    activity, _at = db.get_yuxia_activity(conv7)
+    check("活动已记录", activity == "去关水阀，顺手把地上的水擦掉", activity)
+    kinds = [e["event_type"] for e in db.get_recent_events(conv7, limit=10)]
+    check("act 记进事件表", "misc" in kinds, str(kinds))
+    check("同处一地时 act 对玩家可见", acted7.get("visible") is True)
+
+    # 9) 防重复：和刚才做过的高度相似 → 丢弃
+    again = StubLLM('{"action": "act", "text": "去关水阀，把地上的水擦掉", "location": ""}')
+    check("重复的 act 被拦截", autonomy.maybe_act(db, conv7, again, 610, "情境", idle=False) is None)
+
+    # 10) 换了内容就可以继续
+    newone = StubLLM('{"action": "act", "text": "把湿掉的抹布拿去阳台晾着", "location": ""}')
+    acted9 = autonomy.maybe_act(db, conv7, newone, 620, "情境", idle=False)
+    check("不同内容可以继续行动", bool(acted9) and acted9["action"] == "act", str(acted9))
+    activity2, _at2 = db.get_yuxia_activity(conv7)
+    check("活动被更新", activity2 == "把湿掉的抹布拿去阳台晾着", activity2)
+
+    # 11) 重复的台词同样拦截
+    conv11 = fresh()
+    db.add_message(conv11, "assistant", "你饿不饿", channel="chat")
+    dup = StubLLM('{"action": "speak", "text": "你饿不饿", "location": ""}')
+    check("重复的台词被拦截", autonomy.maybe_act(db, conv11, dup, 600, "x", idle=False) is None)
+
+    # 12) act 也计入连续自主次数
+    conv12 = fresh()
+    for i in range(autonomy.AUTONOMY_MAX_CONSECUTIVE + 1):
+        db.push_autonomy(conv12, {"action": "act", "text": f"第{i}件事", "at": time.time()})
+    llm12 = StubLLM('{"action": "act", "text": "再擦一次", "location": ""}')
+    check("act 计入连续上限", autonomy.maybe_act(db, conv12, llm12, 600, "x", idle=False) is None)
+    check("超限后不调用模型", llm12.calls == 0)
 
     print()
     if FAILED:

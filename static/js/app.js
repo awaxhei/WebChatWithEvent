@@ -483,10 +483,12 @@ class ChatManager {
                         } else if (data.type === 'scene_changed' && data.scene) {
                             this.applyScene(data.scene);
                         } else if (data.type === 'autonomy') {
-                            // 尤夏自己开口 / 发消息 / 换场景
+                            // 尤夏自己开口 / 发消息 / 换场景 / 动手做点什么
                             if (data.action === 'move') {
                                 this._addWorldNarration(data.content || '尤夏走开了', 'low');
                                 this.loadScene();
+                            } else if (data.action === 'act') {
+                                if (data.content) this._addWorldNarration(this._asYuxiaAction(data.content), 'low', '尤夏');
                             } else if (data.channel === 'phone' || !this.coLocated) {
                                 if (window.phonePanel) window.phonePanel.push('assistant', data.content, true);
                             } else {
@@ -600,11 +602,25 @@ class ChatManager {
         }
     }
 
-    _addWorldNarration(text, intensity) {
+    // 自主行动 act：模型写的是"她在做什么"，补上主语后再当旁白渲染
+    _asYuxiaAction(text) {
+        let t = (text || '').trim();
+        if (!t) return '尤夏动了动。';
+        if (/^我/.test(t)) return '她' + t.slice(1);          // 第一人称兜底
+        return /^(她|尤夏)/.test(t) ? t : `尤夏${t}`;
+    }
+
+    _addWorldNarration(text, intensity, label = '世界') {
         this._removeEventOrganizing();
         const wrapper = document.createElement('div');
-        wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`;
-        wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— 世界 —</div><div class="world-narration-text">${text}</div></div>`;
+        wrapper.className = `world-narration ${intensity === 'medium' ? 'medium' : ''}`.trim();
+        wrapper.dataset.label = label;
+        // 连续的同类旁白只保留第一个标签，避免一屏三个「— 世界 —」
+        const prev = this.messagesContainer.lastElementChild;
+        if (prev && prev.classList.contains('world-narration') && prev.dataset.label === label) {
+            wrapper.classList.add('cont');
+        }
+        wrapper.innerHTML = `<div class="world-narration-inner"><div class="world-narration-label">— ${label} —</div><div class="world-narration-text">${text}</div></div>`;
         this.messagesContainer.appendChild(wrapper);
         AnimationEngine.scrollToBottom(this.messagesContainer);
     }
@@ -1048,6 +1064,9 @@ class EmotionAssistant {
             if (data.action === 'move') {
                 cm._addWorldNarration('尤夏走开了', 'low');
                 if (data.scene) cm.applyScene(data.scene);
+            } else if (data.action === 'act') {
+                if (data.visible && data.text) cm._addWorldNarration(cm._asYuxiaAction(data.text), 'low', '尤夏');
+                if (data.events && this.eventPanel) this.eventPanel.renderEvents(data.events, false, '');
             } else if (data.channel === 'phone') {
                 this.phonePanel.push('assistant', data.text, true);
             } else {

@@ -37,6 +37,13 @@ def _facts(db, conv_id, now_minutes, location, player_location, recent_msgs, eve
         for e in events[-4:]:
             lines.append(f"- {e['title']}：{e['description']}")
 
+    try:
+        activity, at = db.get_yuxia_activity(conv_id)
+        if activity and (not at or int(now_minutes) - int(at) <= 180):
+            lines.append(f"你此刻正在做的事：{activity}")
+    except Exception:
+        pass
+
     if memories:
         lines.append("你记得的近期片段：")
         for m in memories[:4]:
@@ -66,7 +73,7 @@ def _fallback(location, player_location, now_minutes):
 def _generate(db, conv_id, now_minutes, location, player_location, deepseek, api_key, turn):
     """真正调用 LLM 撰写并写入缓存（可能在后台线程里执行）"""
     recent_msgs = db.get_messages(conv_id)[-8:]
-    events = db.get_events(conv_id, limit=20)[-4:]
+    events = db.get_recent_events(conv_id, limit=4)
     memories = []
     try:
         import core.memory as memory

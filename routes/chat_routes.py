@@ -24,6 +24,7 @@ from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
     autonomy, character_writer, context_writer, memory_engine, scene_watcher, time_keeper,
+    world_context,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
@@ -92,6 +93,29 @@ def _extract_json_objects(text):
 
 def _co_located(conv_id):
     return db.get_player_location(conv_id) == db.get_current_location(conv_id)
+
+
+def _as_context_content(row):
+    """把一条库里的消息转成喂给模型的内容。
+
+    - 手机通道的她本人的话是纯文本，包回 {"消息": ...}，让历史看起来和输出格式一致；
+    - 当面通道存的就是她输出的 JSON（对白/表情包），原样回灌，顺带强化格式。
+    """
+    content = row.get("content") or ""
+    if row["role"] == "assistant" and (row.get("channel") or "chat") == PHONE_CHANNEL:
+        return json.dumps({"消息": content}, ensure_ascii=False)
+    return content
+
+
+def _context_window(conv_id, limit=10):
+    """当面 + 手机两条通道合成一条时间线。
+
+    之前只取当前通道的历史：切到手机就忘了刚当面说过的话，切回当面又不记得
+    手机里聊了什么，两边各说各的。
+    """
+    rows = [m for m in db.get_messages(conv_id)
+            if (m.get("channel") or "chat") in (CHAT_CHANNEL, PHONE_CHANNEL)][-limit:]
+    return [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
 
 
 def _scene_payload(conv_id, api_key):
@@ -198,8 +222,13 @@ def chat():
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
     format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
                    "不要用纯文本回应，哪怕只有一个字或一个颜文字，也要包进 JSON。")
-    system_prompt = f"{CHAT_PROMPT}\n\n{channel_rule}\n\n{format_rule}"
-    context_messages = db.get_messages(conv_id, channel=channel)[-6:]
+    # 世界块放在最前面：她得先知道刚刚出了什么事，才谈得上回应
+    world = world_context.world_block(db, conv_id, now_minutes, events_limit=6)
+    system_prompt = f"{CHAT_PROMPT}\n\n"
+    if world:
+        system_prompt += f"{world}\n\n"
+    system_prompt += f"{channel_rule}\n\n{format_rule}"
+    context_messages = _context_window(conv_id, limit=10)
     _mark("提示词组装完成（准备开始流式）")
 
     def generate():
@@ -361,9 +390,12 @@ def idle(conv_id):
                "text": (acted or {}).get("text", ""),
                "channel": (acted or {}).get("channel", ""),
                "location": (acted or {}).get("location", ""),
+               "visible": (acted or {}).get("visible", True),
                "unread": db.get_phone_unread(conv_id)}
     if acted and acted.get("action") == "move":
         payload["scene"] = _scene_payload(conv_id, api_key)
+    if acted and acted.get("action") == "act":
+        payload["events"] = db.get_recent_events(conv_id, limit=50)
     return jsonify(payload)
 
 
@@ -419,7 +451,7 @@ def atmosphere(conv_id):
                 if summary.get("story_summary"):
                     yield _sse({"type": "story_summary", "content": summary["story_summary"]})
                 yield _sse({"type": "event_update",
-                            "events": db.get_events(conv_id, limit=50),
+                            "events": db.get_recent_events(conv_id, limit=50),
                             "has_push": summary.get("should_push", False),
                             "push_hint": summary.get("push_hint", "")})
 
@@ -456,6 +488,14 @@ def atmosphere(conv_id):
                             "scene": _scene_payload(conv_id, api_key)})
                 yield _sse({"type": "autonomy", "action": "move",
                             "content": f"尤夏去了{acted['location']}"})
+            elif acted["action"] == "act":
+                # 她动手做了件事：同处一地时玩家看得见，异地时只在故事进展里留痕
+                yield _sse({"type": "autonomy", "action": "act",
+                            "content": acted["text"] if acted.get("visible") else "",
+                            "visible": bool(acted.get("visible"))})
+                yield _sse({"type": "event_update",
+                            "events": db.get_recent_events(conv_id, limit=50),
+                            "has_push": False, "push_hint": ""})
             else:
                 yield _sse({"type": "autonomy", "action": acted["action"],
                             "content": acted["text"], "channel": acted.get("channel", "")})

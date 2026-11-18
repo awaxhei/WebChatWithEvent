@@ -37,7 +37,7 @@ def init_events(conv_id):
             "success": True,
             "story_time": clock.format_time(now),
             "story_summary": result.get("story_summary", ""),
-            "events": db.get_events(conv_id, limit=50),
+            "events": db.get_recent_events(conv_id, limit=50),
             "has_push": result.get("should_push", False),
             "push_hint": result.get("push_hint", ""),
         })
@@ -53,7 +53,7 @@ def get_events(conv_id):
         return denied
     now = init_clock(db, conv_id)
     return jsonify({
-        "events": db.get_events(conv_id, limit=50),
+        "events": db.get_recent_events(conv_id, limit=50),
         "story_time": clock.format_time(now),
         "initialized": db.is_events_initialized(conv_id),
         "location": db.get_current_location(conv_id),

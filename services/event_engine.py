@@ -156,7 +156,7 @@ def _run_event_summary(conv_id, db: ChatDB, deepseek: DeepSeekClient,
     """分析对话并生成事件节点（时间由系统提供，不由模型输出）"""
     try:
         messages = db.get_messages(conv_id)
-        existing_events = db.get_events(conv_id, limit=20)
+        existing_events = db.get_recent_events(conv_id, limit=20)
         story_time = clock.format_time(now_minutes)
 
         recent = messages[-10:] if not is_initializing else messages[-40:]
@@ -262,7 +262,7 @@ def init_events_from_history(conv_id, db: ChatDB, deepseek: DeepSeekClient,
 
 def build_event_context(conv_id, db: ChatDB, now_minutes=None):
     """给 AI A 的事件上下文（时间来自系统时钟）"""
-    events = db.get_events(conv_id, limit=20)
+    events = db.get_recent_events(conv_id, limit=20)
     lines = []
     if now_minutes is not None:
         lines.append(f"【故事时间】{clock.format_time(now_minutes)}")

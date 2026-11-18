@@ -28,7 +28,7 @@ def get_conversation(conv_id):
 
     messages = db.get_messages(conv_id)
     atmo = db.get_atmosphere(conv_id, limit=100)
-    events = db.get_events(conv_id, limit=50)
+    events = db.get_recent_events(conv_id, limit=50)
     now = init_clock(db, conv_id)
     location = locations.get_current(db, conv_id)
     player_location = db.get_player_location(conv_id)

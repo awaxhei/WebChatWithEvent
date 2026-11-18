@@ -145,6 +145,11 @@ class ChatDB:
                 ("context_brief_turn", "INTEGER DEFAULT 0"),
                 ("phone_read_id", "INTEGER DEFAULT 0"),
                 ("last_user_at", "REAL DEFAULT 0"),
+                # v5：她此刻正在做的事（自主行动 act 写入，喂给情境/对话提示词）
+                ("yuxia_activity", "TEXT DEFAULT ''"),
+                ("yuxia_activity_at", "INTEGER DEFAULT 0"),
+                # v5：自主行动流水（防重复、算连续次数），JSON 数组
+                ("autonomy_tail", "TEXT DEFAULT '[]'"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -271,6 +276,19 @@ class ChatDB:
                                 " FROM events WHERE conversation_id=? ORDER BY id ASC LIMIT ?",
                                 (conv_id, limit)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_recent_events(self, conv_id, limit=20):
+        """最近 N 条事件（按时间正序返回）。
+
+        get_events 是 ORDER BY id ASC LIMIT N，取的是**最早**的 N 条；
+        事件超过 N 条之后，新发生的随机事件就再也进不了上下文，
+        她会一直读不到眼前刚发生的事。
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT id, event_type, title, description, status, story_time, tier, created_at"
+                                " FROM events WHERE conversation_id=? ORDER BY id DESC LIMIT ?",
+                                (conv_id, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
 
     def update_event_status(self, event_id, status):
         with self._get_conn() as conn:
@@ -559,3 +577,45 @@ class ChatDB:
         with self._get_conn() as conn:
             row = conn.execute("SELECT last_user_at FROM conversations WHERE id=?", (conv_id,)).fetchone()
         return float(row["last_user_at"] or 0) if row else 0.0
+
+    # ----- v5：尤夏此刻的活动 + 自主行动流水 -----
+    def set_yuxia_activity(self, conv_id, text, story_minutes=0):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET yuxia_activity=?, yuxia_activity_at=? WHERE id=?",
+                         (text or "", int(story_minutes or 0), conv_id))
+
+    def get_yuxia_activity(self, conv_id):
+        """她此刻在做的事；太久以前的（超过一个时段）就当已经做完了"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT yuxia_activity, yuxia_activity_at FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        if not row:
+            return ("", 0)
+        return ((row["yuxia_activity"] or ""), int(row["yuxia_activity_at"] or 0))
+
+    def clear_yuxia_activity(self, conv_id):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET yuxia_activity='', yuxia_activity_at=0 WHERE id=?",
+                         (conv_id,))
+
+    def get_autonomy_tail(self, conv_id, limit=8):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT autonomy_tail FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        if not row or not row["autonomy_tail"]:
+            return []
+        try:
+            data = json.loads(row["autonomy_tail"])
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def push_autonomy(self, conv_id, entry, keep=16):
+        """记录一次自主行动（action/text/at），用于防重复与连续次数统计"""
+        tail = self.get_autonomy_tail(conv_id, keep)
+        tail.append(entry)
+        tail = tail[-keep:]
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET autonomy_tail=? WHERE id=?",
+                         (json.dumps(tail, ensure_ascii=False), conv_id))
+        return tail

@@ -3,7 +3,7 @@ AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
 import os, socket, subprocess, sys, threading
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from config import (
     PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION,
@@ -76,7 +76,7 @@ def ping():
     如果没有这一步，后端一退出，页面还能靠 Service Worker 缓存照常显示，
     点登录只会得到一句笼统的"网络错误"，看不出真正原因。
     """
-    out = jsonify({"ok": True, "app": "yuxia", "port": int(os.environ.get("PORT", "5000"))})
+    out = jsonify({"ok": True, "app": "yuxia", "host": request.host})
     out.headers["Cache-Control"] = "no-store"
     return out
 
