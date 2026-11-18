@@ -22,7 +22,9 @@ import core.stickers as stickers
 from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
-from services import autonomy, context_writer, memory_engine, time_keeper
+from services import (
+    autonomy, character_writer, context_writer, memory_engine, scene_watcher, time_keeper,
+)
 from services.event_engine import (
     _run_event_summary, _run_random_event,
     should_run_random_event, should_run_event_summary,
@@ -418,6 +420,26 @@ def atmosphere(conv_id):
             yield _sse({"type": "reflections", "items": reflections})
 
         brief, _turn = db.get_context_brief(conv_id)
+
+        # 场景观察者：读对话上下文，发现地点表之外的新场所就登记并更新位置
+        discovered = scene_watcher.observe(db, conv_id, deepseek, now,
+                                           brief or "", api_key=api_key)
+        if discovered:
+            yield _sse({"type": "scene_discovered",
+                        "location": discovered["location"],
+                        "created": discovered["created"],
+                        "entered_by": discovered["entered_by"],
+                        "reason": discovered.get("reason", "")})
+            if discovered["moved_player"] or discovered["moved_yuxia"]:
+                yield _sse({"type": "scene_changed",
+                            "scene": _scene_payload(conv_id, api_key)})
+
+        # 尤夏的神态描写（她本人只说话，描写由这里生成）
+        state_text = character_writer.describe(db, conv_id, deepseek, now,
+                                               brief or "", api_key=api_key)
+        if state_text:
+            yield _sse({"type": "yuxia_state", "content": state_text})
+
         acted = autonomy.maybe_act(db, conv_id, deepseek, now, brief or "",
                                    api_key=api_key, msg_count=msg_count, idle=False)
         if acted:

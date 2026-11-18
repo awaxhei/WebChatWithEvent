@@ -1,0 +1,94 @@
+"""
+v5 探针：场景观察者 + 神态描写（不耗 API，用桩模型）
+"""
+import os
+import sys
+import uuid
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.stdout.reconfigure(encoding="utf-8")
+
+import core.database as database    # noqa: E402
+
+tmp = os.path.join(ROOT, ".testtmp", "watch_" + uuid.uuid4().hex[:6])
+os.makedirs(tmp, exist_ok=True)
+database.DB_PATH = os.path.join(tmp, "chat.db")
+
+from app import app                          # noqa: E402
+import core.locations as locations            # noqa: E402
+import services.character_writer as cw        # noqa: E402
+import services.scene_watcher as sw           # noqa: E402
+
+db = database.ChatDB()
+FAILED = []
+
+
+def check(name, cond, extra=""):
+    print(("PASS  " if cond else "FAIL  ") + name + (f"  [{extra}]" if extra and not cond else ""))
+    if not cond:
+        FAILED.append(name)
+
+
+class StubLLM:
+    """按 system_prompt 内容区分调用方"""
+    def __init__(self, scene_json='{"new_location": "学校天台", "entered_by": "both", "reason": "对话里提到两人一起上了天台"}',
+                 desc="她抬眼看了你一下，耳朵动了动，尾巴悄悄卷住自己的手腕。"):
+        self.scene_json = scene_json
+        self.desc = desc
+        self.calls = []
+
+    def chat_sync(self, messages, system_prompt="", **kw):
+        self.calls.append(system_prompt[:20])
+        if "地点表" in (system_prompt or ""):
+            return self.scene_json
+        return self.desc
+
+
+def main():
+    app.config["TESTING"] = True
+    conv = db.create_conversation(1)
+    locations.ensure_defaults(db, conv)
+    db.add_message(conv, "user", "我们去学校天台吹吹风吧", channel="chat")
+    db.add_message(conv, "assistant", '{"对白": "……好。"}', channel="chat")
+
+    known_before = set(locations.list_names(db, conv))
+    check("场景不在已有列表里", "学校天台" not in known_before)
+
+    found = sw.observe(db, conv, StubLLM(), 600, "现在是傍晚", api_key=None)
+    check("观察者报告新场景", bool(found) and found["location"] == "学校天台", str(found))
+    check("地点已创建", "学校天台" in locations.list_names(db, conv))
+    check("标记为新建", found and found["created"], str(found))
+    check("双方位置已更新",
+          db.get_current_location(conv) == "学校天台" and db.get_player_location(conv) == "学校天台",
+          f"{db.get_current_location(conv)} / {db.get_player_location(conv)}")
+    events = db.get_events(conv, limit=10)
+    check("写入 scene_change 事件",
+          any(e["event_type"] == "scene_change" and "学校天台" in e["title"] for e in events))
+
+    # 重复提及同一地点不应重复创建
+    again = sw.observe(db, conv, StubLLM(), 610, "现在是傍晚", api_key=None)
+    check("重复提及不报新建", bool(again) and again["created"] is False, str(again))
+
+    # 没有新场景时保持沉默
+    none_llm = StubLLM(scene_json='{"new_location": "", "entered_by": "none", "reason": "无"}')
+    check("没有新场景时返回 None", sw.observe(db, conv, none_llm, 620, "", None) is None)
+
+    # 神态描写
+    text = cw.describe(db, conv, StubLLM(), 630, "现在是傍晚", api_key=None)
+    check("生成神态描写", bool(text) and len(text) >= 6, text)
+    states = [m for m in db.get_messages(conv) if m["channel"] == "state"]
+    check("神态描写落库到 state 通道", len(states) == 1 and states[0]["content"] == text)
+    check("神态描写不混入聊天通道",
+          all(m["channel"] == "chat" for m in db.get_messages(conv, channel="chat")))
+
+    print()
+    if FAILED:
+        print(f"{len(FAILED)} 项失败: {FAILED}")
+        return 1
+    print("全部通过")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

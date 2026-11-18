@@ -444,6 +444,12 @@ class ChatManager {
                         const data = JSON.parse(line.slice(6));
                         if (data.type === 'location') {
                             this.locationTag.textContent = data.content;
+                        } else if (data.type === 'yuxia_state') {
+                            this._renderYuxiaState(data.content);
+                        } else if (data.type === 'scene_discovered') {
+                            this._addWorldNarration(
+                                (data.created ? '发现新场景：' : '进入场景：') + data.location,
+                                'low');
                         } else if (data.type === 'scene_changed' && data.scene) {
                             this.applyScene(data.scene);
                         } else if (data.type === 'autonomy') {
@@ -580,10 +586,14 @@ class ChatManager {
         try {
             const res = await authFetch(`/api/history/${convId}`);
             const data = await res.json();
-            const chatMsgs = (data.messages || []).filter(m => (m.channel || 'chat') !== 'phone');
-            if (chatMsgs.length > 0) {
-                chatMsgs.forEach((msg) => {
-                    if (msg.role === 'user') {
+            const msgs = (data.messages || []).filter(m => (m.channel || 'chat') !== 'phone');
+            const chatOnly = msgs.filter(m => (m.channel || 'chat') !== 'state');
+            if (chatOnly.length > 0) {
+                msgs.forEach((msg) => {
+                    const ch = msg.channel || 'chat';
+                    if (ch === 'state') {
+                        this._renderYuxiaState(msg.content);   // 只保留最后一条神态描写
+                    } else if (msg.role === 'user') {
                         this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
                     } else {
                         this._parseAndRenderHistory(msg.content);
@@ -663,6 +673,20 @@ class ChatManager {
     }
 
     _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+    _renderYuxiaState(text) {
+        if (!text) return;
+        document.querySelectorAll('.yuxia-state-row').forEach(el => el.remove());
+        const row = document.createElement('div');
+        row.className = 'message-row yuxia-state-row';
+        const box = document.createElement('div');
+        box.className = 'yuxia-state';
+        box.textContent = text;
+        row.appendChild(box);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.fadeIn(box);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
 
     _showWelcome() {
         this.welcomeEl = document.createElement('div');
