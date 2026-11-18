@@ -91,6 +91,15 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     )
     known = "、".join(locations.list_names(db, conv_id)[-20:])
 
+    # 给她一点"眼前的素材"：当前时段与场景描写，避免无话可接时一律 none
+    try:
+        import core.scenes as scenes
+        bucket = scenes.bucket_of(now_minutes)
+        scene_desc = db.get_location_variants(conv_id, yuxia_loc).get(bucket, "")
+    except Exception:
+        bucket, scene_desc = "", ""
+    scene_line = f"此刻的场景（{bucket}）：{scene_desc}\n" if scene_desc else ""
+
     idle_seconds = int(time.time() - db.get_last_user_at(conv_id))
     timing = (f"青梅已经 {idle_seconds} 秒没有说话了。" if idle
               else "青梅刚刚说完话。")
@@ -98,6 +107,8 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     user_msg = (
         f"{context_brief}\n\n"
         f"{timing}\n"
+        f"你在：{yuxia_loc}\n"
+        f"{scene_line}"
         f"最近的消息：\n{recent_text or '（还没有说话）'}\n\n"
         f"已知地点：{known}\n"
         f"你们当前{'' if co_located else '不'}在同一个地方。\n"
