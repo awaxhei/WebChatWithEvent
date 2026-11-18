@@ -234,6 +234,42 @@ def main():
     check("手机消息等够了才行动",
           bool(autonomy.maybe_act(db, conv19, phone_wait, 603, "x", idle=True)))
 
+    # 20) 她答应了"来了"，就允许在等待期里跟过去（不然只会嘴上答应）
+    conv20 = fresh()
+    db.set_story_minutes(conv20, 600)
+    db.set_player_location(conv20, "厨房")
+    locations.switch(db, conv20, "公寓客厅")
+    db.set_last_user_at(conv20, time.time())
+    db.set_last_yuxia_at(conv20, time.time(), "phone")
+    follow = StubLLM('{"action": "move", "text": "", "location": "厨房"}')
+    acted20 = autonomy.maybe_act(db, conv20, follow, 600, "x", idle=False)
+    check("等待期里允许跟过去（move）",
+          bool(acted20) and acted20["action"] == "move" and acted20["location"] == "厨房",
+          str(acted20))
+    check("跟过去时确实会问模型", follow.calls == 1, f"calls={follow.calls}")
+    check("提示词里写明只能 move 或 none",
+          "只允许两个选择" in follow.last_user_msg, follow.last_user_msg[-160:])
+    check("她真的到了厨房", db.get_current_location(conv20) == "厨房")
+
+    # 21) 等待期里她不能趁机说话
+    conv21 = fresh()
+    db.set_player_location(conv21, "厨房")
+    locations.switch(db, conv21, "公寓客厅")
+    db.set_last_user_at(conv21, time.time())
+    db.set_last_yuxia_at(conv21, time.time(), "chat")
+    chatty = StubLLM('{"action": "speak", "text": "……那你等着。", "location": ""}')
+    check("等待期里不能接着说话",
+          autonomy.maybe_act(db, conv21, chatty, 600, "x", idle=False) is None)
+
+    # 22) 同处一地时不需要"跟过去"，等待期直接不问模型
+    conv22 = fresh()
+    db.set_last_user_at(conv22, time.time())
+    db.set_last_yuxia_at(conv22, time.time(), "chat")
+    same = StubLLM('{"action": "move", "text": "", "location": "厨房"}')
+    check("同处一地时等待期不调用模型",
+          autonomy.maybe_act(db, conv22, same, 600, "x", idle=False) is None)
+    check("确实没调用", same.calls == 0, f"calls={same.calls}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

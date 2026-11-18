@@ -205,7 +205,7 @@ def _waiting_for_player(db, conv_id, idle):
     return (time.time() - at) < need
 
 
-def _allowed(db, conv_id, idle):
+def _allowed(db, conv_id, idle, allow_wait=False):
     if not AUTONOMY_ENABLED:
         return False
     # 玩家按了暂停：连模型都不问，省额度也给玩家一个安静的世界
@@ -214,7 +214,8 @@ def _allowed(db, conv_id, idle):
     if _assistant_streak(db, conv_id) >= 1 + AUTONOMY_MAX_CONSECUTIVE:
         return False
     # 她刚发完消息 / 刚说完话：等玩家回，别转头就开始干活
-    if _waiting_for_player(db, conv_id, idle):
+    # （allow_wait=True 是给"跟过去"开的口子）
+    if not allow_wait and _waiting_for_player(db, conv_id, idle):
         return False
     if idle:
         last = db.get_last_user_at(conv_id)
@@ -238,7 +239,7 @@ def _scene_line(db, conv_id, yuxia_loc, now_minutes):
 
 
 def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
-                  co_located, idle, idle_seconds, can_act=True):
+                  co_located, idle, idle_seconds, can_act=True, follow_only=False):
     recent = [m for m in db.get_messages(conv_id)
               if (m.get("channel") or "chat") in ("chat", "phone")][-8:]
     recent_text = "\n".join(
@@ -276,6 +277,10 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
     if not can_act:
         # 提前告诉模型"这段时间别再动手"，比它选完 act 再被服务端丢掉划算
         parts.append("你这段时间已经动过手了，这次只能说话（speak / phone）或者不动（none）。")
+    if follow_only:
+        parts.append("你刚说完话，对方还在等你。现在只允许两个选择："
+                     "如果你答应了要过去、或者本来就该过去，就 move 到对方在的地方；"
+                     "否则 none。不要说话，也不要做别的事。")
     parts.append("请判断你此刻要不要接着做点什么。")
     return "\n\n".join(p for p in parts if p)
 
@@ -283,17 +288,21 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
 def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
               msg_count=0, idle=False):
     """问她要不要自主行动；返回行动详情或 None"""
-    if not _allowed(db, conv_id, idle):
-        return None
-
     yuxia_loc = db.get_current_location(conv_id)
     player_loc = db.get_player_location(conv_id)
     co_located = yuxia_loc == player_loc
+
+    # 她刚说完话、玩家还在场：这时唯一该允许的是"跟过去"（她嘴上答应了过去）
+    follow_only = (not idle) and (not co_located) and _waiting_for_player(db, conv_id, idle)
+    if not _allowed(db, conv_id, idle, allow_wait=follow_only):
+        return None
+
     idle_seconds = int(time.time() - db.get_last_user_at(conv_id))
 
     user_msg = _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
                              co_located, idle, idle_seconds,
-                             can_act=_can_act(db, conv_id, now_minutes))
+                             can_act=_can_act(db, conv_id, now_minutes),
+                             follow_only=follow_only)
 
     try:
         raw = deepseek.chat_sync(
@@ -312,6 +321,10 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
 
     action = decision["action"]
     text = decision["text"]
+
+    # 等待期只认"走过去"，别的话等她该等的时间过去
+    if follow_only and action not in ("move", "none"):
+        return None
 
     # 通道约束：不同处一地时不能"当面说话"
     if action == "speak" and not co_located:
