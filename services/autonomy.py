@@ -33,7 +33,7 @@ from config import (
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
-VALID_ACTIONS = {"none", "speak", "phone", "move", "act"}
+VALID_ACTIONS = {"none", "speak", "phone", "move", "act", "lead"}
 
 _TAIL_KEEP = AUTONOMY_MAX_CONSECUTIVE + 4  # 流水要够长，才能把连续次数算满
 
@@ -376,6 +376,12 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     if action == "move":
         return _do_move(db, conv_id, decision, yuxia_loc, now_minutes)
 
+    # 带青梅一起走：只有两人在一起时才有这个选项
+    if action == "lead":
+        if not co_located:
+            return None
+        return _do_lead(db, conv_id, decision, yuxia_loc, now_minutes)
+
     if action == "act" and text:
         if not _can_act(db, conv_id, now_minutes):
             print("[自主行动] 这段时间已经动过手了，跳过 act")
@@ -461,6 +467,41 @@ def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
         pass
     db.set_last_yuxia_at(conv_id, time.time(), "act")
     return {"action": "move", "location": new_loc, "text": "", "created": created, "visible": True}
+
+
+def _do_lead(db, conv_id, decision, yuxia_loc, now_minutes):
+    """"跟我来"：拉着青梅一起去某个地方（两人都换地点）"""
+    target = decision["location"]
+    if not target:
+        return None
+
+    names = locations.list_names(db, conv_id)
+    candidate = locations.normalize(target)
+    if not candidate:
+        return None
+    if candidate not in names:
+        if not AUTONOMY_ALLOW_NEW_LOCATION:
+            return None
+        if len(names) >= locations.MAX_LOCATIONS_PER_CONV:
+            return None
+
+    new_loc, created = locations.switch_both(db, conv_id, candidate)
+    if not new_loc or new_loc == yuxia_loc:
+        return None
+    db.clear_yuxia_activity(conv_id)
+    db.add_event(conv_id, "scene_change",
+                 f"尤夏带着青梅去了{new_loc}" + ("（新场景）" if created else ""),
+                 "她拉着人一起换了地方。", "active",
+                 story_time=clock.format_time(now_minutes))
+    db.push_autonomy(conv_id, {"action": "lead", "text": f"带青梅去了{new_loc}",
+                               "at": time.time(), "at_minutes": int(now_minutes)},
+                     keep=_TAIL_KEEP)
+    try:
+        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
+    except Exception:
+        pass
+    db.set_last_yuxia_at(conv_id, time.time(), "act")
+    return {"action": "lead", "location": new_loc, "text": "", "created": created, "visible": True}
 
 
 _TITLE_SPLIT = re.compile(r"[，,。；;！!？?、]")

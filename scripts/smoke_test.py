@@ -151,6 +151,26 @@ def main():
         r = c1.post(f"/api/move/{conv_new}", json={"who": "yuxia", "location": "公园"})
         check("尤夏可以被移动", (r.get_json() or {}).get("location") == "公园")
 
+        # 一起走：异地时不行，会合之后可以
+        r = c1.post(f"/api/move/{conv_new}", json={"who": "both", "location": "厨房"})
+        check("异地时不能一起移动 (400)", r.status_code == 400, f"got {r.status_code}")
+        c1.post(f"/api/move/{conv_new}", json={"who": "player", "location": "公园"})
+        r = c1.post(f"/api/move/{conv_new}", json={"who": "both", "location": "厨房"})
+        both = r.get_json() or {}
+        check("两人可以一起移动",
+              both.get("location") == "厨房" and both.get("player_location") == "厨房",
+              str(both.get("location")) + "/" + str(both.get("player_location")))
+
+        # 聊天指令 /带 地点：把两个人一起带走
+        r = c1.post("/api/chat", json={"conversation_id": conv_new, "message": "/带 卧室"})
+        evs = [json.loads(line[6:]) for line in r.data.decode("utf-8").split("\n")
+               if line.startswith("data: ")]
+        check("/带 指令返回 SSE", any(e.get("type") == "done" for e in evs), str(r.status_code))
+        check("/带 把两人一起带走",
+              app_db.get_current_location(conv_new) == "卧室"
+              and app_db.get_player_location(conv_new) == "卧室",
+              f"{app_db.get_current_location(conv_new)} / {app_db.get_player_location(conv_new)}")
+
         r = c1.get(f"/api/phone/{conv_new}")
         phone = r.get_json() or {}
         check("手机接口可用", r.status_code == 200 and "messages" in phone and "unread" in phone)

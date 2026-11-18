@@ -88,6 +88,19 @@ def switch(db, conv_id, candidate):
     return name or get_current(db, conv_id)
 
 
+def switch_both(db, conv_id, candidate):
+    """两人一起过去：尤夏和青梅都挪到同一个地点。
+
+    返回 (最终地点名, 是否新建)；地点名不合法时返回 (None, False)。
+    """
+    name, created = resolve(db, conv_id, candidate)
+    if not name:
+        return None, False
+    db.set_current_location(conv_id, name)
+    db.set_player_location(conv_id, name)
+    return name, created
+
+
 def prompt_block(db, conv_id, current=None):
     """给 AI 的地点上下文片段"""
     names = ensure_defaults(db, conv_id)

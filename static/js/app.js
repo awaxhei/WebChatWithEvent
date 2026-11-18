@@ -120,6 +120,7 @@ class ChatManager {
         this.currentConvId = ''; this.isProcessing = false; this.pushMode = false;
         this.coLocated = true;
         this.paused = false;
+        this.moveTogether = false;
         this.messagesContainer = document.getElementById('chatMessages');
         this.inputEl = document.getElementById('messageInput');
         this.btnSend = document.getElementById('btnSend');
@@ -153,6 +154,11 @@ class ChatManager {
                 if (!item) return;
                 this.moveTo(item.dataset.loc);
                 this._toggleLocationPicker(false);
+            });
+            this.locationPicker.addEventListener('change', (e) => {
+                if (e.target && e.target.id === 'moveTogether') {
+                    this.moveTogether = !!e.target.checked;
+                }
             });
             this.locationPicker.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') { this._toggleLocationPicker(false); return; }
@@ -235,7 +241,13 @@ class ChatManager {
             const items = scene.locations
                 .map(name => `<li data-loc="${this._e(name)}"${name === playerLoc ? ' class="current"' : ''}>${this._e(name)}</li>`)
                 .join('');
-            this.locationPicker.innerHTML = items +
+            // 在一起的时候可以"带她一起走"
+            const together = this.coLocated
+                ? `<li class="together-toggle"><label>` +
+                  `<input type="checkbox" id="moveTogether"${this.moveTogether ? ' checked' : ''}>` +
+                  `<span>带尤夏一起去</span></label></li>`
+                : '';
+            this.locationPicker.innerHTML = together + items +
                 '<li class="new-loc"><input id="newLocationInput" placeholder="去没去过的地方…" ' +
                 'maxlength="20" autocomplete="off"></li>';
         }
@@ -301,11 +313,13 @@ class ChatManager {
         if (!name) return;
         if (!this.currentConvId) await this.ensureConversation();
         if (!this.currentConvId) return;
+        // 勾了"带尤夏一起去"就两人一起走（异地时这个勾选无效）
+        const both = this.moveTogether && this.coLocated;
         this._setSceneLoading(true);
         try {
             const res = await authFetch(`/api/move/${this.currentConvId}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ who: 'player', location: name }),
+                body: JSON.stringify({ who: both ? 'both' : 'player', location: name }),
             });
             if (!res.ok) return;
             this.applyScene(await res.json());
@@ -523,6 +537,10 @@ class ChatManager {
                             // 尤夏自己开口 / 发消息 / 换场景 / 动手做点什么
                             if (data.action === 'move') {
                                 this._addWorldNarration(data.content || '尤夏走开了', 'low');
+                                this.loadScene();
+                            } else if (data.action === 'lead') {
+                                // 她拉着你一起换地方
+                                this._addWorldNarration(data.content || '尤夏拉着你走了', 'low');
                                 this.loadScene();
                             } else if (data.action === 'act') {
                                 if (data.content) this._addWorldNarration(this._asYuxiaAction(data.content), 'low', '尤夏');
@@ -1234,6 +1252,9 @@ class EmotionAssistant {
             }
             if (data.action === 'move') {
                 cm._addWorldNarration('尤夏走开了', 'low');
+                if (data.scene) cm.applyScene(data.scene);
+            } else if (data.action === 'lead') {
+                cm._addWorldNarration(`尤夏拉着你去了${data.location || '别处'}`, 'low');
                 if (data.scene) cm.applyScene(data.scene);
             } else if (data.action === 'act') {
                 if (data.visible && data.text) cm._addWorldNarration(cm._asYuxiaAction(data.text), 'low', '尤夏');

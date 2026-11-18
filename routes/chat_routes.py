@@ -38,6 +38,7 @@ deepseek = None  # 由外部注入
 
 _PUSH_CMD_RE = re.compile(r"^/推进\s*(.*)")
 _MOVE_CMD_RE = re.compile(r"^/去\s*(.+)")
+_BRING_CMD_RE = re.compile(r"^/带\s*(.+)")
 
 
 def _sse(payload):
@@ -161,15 +162,29 @@ def chat():
         hint = push_match.group(1).strip()
         user_message = hint if hint else "（青梅轻轻戳了戳尤夏的肩膀，似乎在期待什么）"
 
-    # 玩家主动移动：/去 地点
+    # 玩家主动移动：/去 地点（一个人走）、/带 地点（拉着尤夏一起走）
     moved = False
+    moved_together = False
     move_match = _MOVE_CMD_RE.match(user_message)
+    bring_match = _BRING_CMD_RE.match(user_message)
     if move_match:
         target, created = locations.resolve(db, conv_id, move_match.group(1))
         if target:
             db.set_player_location(conv_id, target)
             user_message = f"（青梅走到了{target}）"
             moved = True
+    elif bring_match:
+        if db.get_current_location(conv_id) != db.get_player_location(conv_id):
+            user_message = f"（青梅想拉着尤夏去{bring_match.group(1)}，可两人根本不在一起）"
+        else:
+            target, created = locations.switch_both(db, conv_id, bring_match.group(1))
+            if target:
+                db.add_event(conv_id, "scene_change", f"两人一起去了{target}",
+                             "青梅拉着尤夏一起换了地方。", "active",
+                             story_time=clock.format_time(time_keeper.init_clock(db, conv_id)))
+                user_message = f"（青梅拉着尤夏一起去了{target}）"
+                moved = True
+                moved_together = True
 
     yuxia_loc = db.get_current_location(conv_id)
     player_loc = db.get_player_location(conv_id)
@@ -338,10 +353,29 @@ def move(conv_id):
         return denied
 
     data = request.get_json(silent=True) or {}
-    who = data.get("who", "player")
+    who = (data.get("who") or "player").strip()
     target = (data.get("location") or "").strip()
     if not target:
         return jsonify({"error": "缺少目标地点"}), 400
+    if who not in ("player", "yuxia", "both"):
+        who = "player"
+
+    now = time_keeper.init_clock(db, conv_id)
+
+    # 一起过去：只有两人在同一个地方时才谈得上"一起走"
+    if who == "both":
+        if not _co_located(conv_id):
+            return jsonify({"error": "你们不在同一个地方，没法一起过去"}), 400
+        name, created = locations.switch_both(db, conv_id, target)
+        if not name:
+            return jsonify({"error": "地点名不合法"}), 400
+        db.add_event(conv_id, "scene_change", f"两人一起去了{name}",
+                     "两个人一起换了地方。", "active",
+                     story_time=clock.format_time(now))
+        payload = _scene_payload(conv_id, request_api_key())
+        payload["created"] = created
+        payload["together"] = True
+        return jsonify(payload)
 
     name, created = locations.resolve(db, conv_id, target)
     if not name:
@@ -430,7 +464,7 @@ def idle(conv_id):
                "location": (acted or {}).get("location", ""),
                "visible": (acted or {}).get("visible", True),
                "unread": db.get_phone_unread(conv_id)}
-    if acted and acted.get("action") == "move":
+    if acted and acted.get("action") in ("move", "lead"):
         payload["scene"] = _scene_payload(conv_id, api_key)
     if acted and acted.get("action") == "act":
         payload["events"] = db.get_recent_events(conv_id, limit=50)
@@ -532,6 +566,12 @@ def atmosphere(conv_id):
                             "scene": _scene_payload(conv_id, api_key)})
                 yield _sse({"type": "autonomy", "action": "move",
                             "content": f"尤夏去了{acted['location']}"})
+            elif acted["action"] == "lead":
+                # 她拉着你一起换地方
+                yield _sse({"type": "scene_changed",
+                            "scene": _scene_payload(conv_id, api_key)})
+                yield _sse({"type": "autonomy", "action": "lead",
+                            "content": f"尤夏拉着你去了{acted['location']}"})
             elif acted["action"] == "act":
                 # 她动手做了件事：同处一地时玩家看得见，异地时只在故事进展里留痕
                 yield _sse({"type": "autonomy", "action": "act",

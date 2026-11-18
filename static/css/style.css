@@ -742,6 +742,20 @@ html, body {
 }
 .location-picker li.new-loc input:focus { border-color: var(--accent); }
 
+/* "带尤夏一起去"勾选：点它不应该当成选了地点 */
+.location-picker li.together-toggle {
+    padding: 6px 10px; margin-bottom: 2px;
+    border-bottom: 1px dashed var(--border); border-radius: 8px 8px 0 0;
+    cursor: default;
+}
+.location-picker li.together-toggle:hover { background: transparent; }
+.location-picker li.together-toggle label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-secondary); cursor: pointer;
+}
+.location-picker li.together-toggle input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.location-picker li.together-toggle input[type="checkbox"]:checked + span { color: var(--accent); }
+
 .scene-card {
     flex-shrink: 0;
     padding: 8px 24px 10px;

@@ -311,6 +311,33 @@ def main():
           autonomy.maybe_act(db, conv22, same, 600, "x", idle=False) is None)
     check("确实没调用", same.calls == 0, f"calls={same.calls}")
 
+    # 23) lead：她拉着玩家一起换地方（只有在一起时才行）
+    conv23 = fresh()
+    locations.switch(db, conv23, "厨房")
+    db.set_player_location(conv23, "厨房")
+    lead = StubLLM('{"action": "lead", "text": "", "location": "公园"}')
+    acted23 = autonomy.maybe_act(db, conv23, lead, 600, "x", idle=False)
+    check("lead 带走了两个人",
+          bool(acted23) and acted23["action"] == "lead", str(acted23))
+    check("尤夏到了公园", db.get_current_location(conv23) == "公园", db.get_current_location(conv23))
+    check("玩家也一起到了公园", db.get_player_location(conv23) == "公园",
+          db.get_player_location(conv23))
+    kinds23 = [e["event_type"] for e in db.get_recent_events(conv23, limit=5)]
+    check("记了一条 scene_change 事件", "scene_change" in kinds23, str(kinds23))
+
+    # 24) 异地时不能把人带走
+    conv24 = fresh()
+    locations.switch(db, conv24, "公寓客厅")
+    db.set_player_location(conv24, "厨房")
+    acted24 = autonomy.maybe_act(db, conv24,
+                                 StubLLM('{"action": "lead", "text": "", "location": "公园"}'),
+                                 600, "x", idle=False)
+    check("异地时 lead 无效", acted24 is None, str(acted24))
+    check("两人地点都没变",
+          db.get_current_location(conv24) == "公寓客厅"
+          and db.get_player_location(conv24) == "厨房",
+          f"{db.get_current_location(conv24)} / {db.get_player_location(conv24)}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")
