@@ -228,6 +228,8 @@ class ChatManager {
         const message = this.inputEl.value.trim();
         if (!message || this.isProcessing) return;
         this._lastRenderedCount = 0;
+        this._renderedObjects = 0;
+        this._lastChannel = forceChannel || (this.coLocated ? 'chat' : 'phone');
         this.isProcessing = true; this._disableInput();
         this.inputEl.value = ''; this.inputEl.style.height = 'auto';
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
@@ -271,6 +273,7 @@ class ChatManager {
                         } else if (data.type === 'scene_changed' && data.scene) {
                             this.applyScene(data.scene);
                         } else if (data.type === 'done') {
+                            if (data.channel) this._lastChannel = data.channel;
                             atmData = { conv_id: data.conv_id, msg_count: data.msg_count, is_push_cmd: data.is_push_cmd || isPushCmd };
                         }
                     } catch (e) {}
@@ -295,6 +298,8 @@ class ChatManager {
 
     // ── JSON 流式渲染 ──
     _lastRenderedCount = 0;
+    _renderedObjects = 0;
+    _lastChannel = 'chat';
 
     _renderStreamingJSON(fullText) {
         const lines = fullText.split('\n').filter(l => l.trim());
@@ -312,6 +317,7 @@ class ChatManager {
                 break;  // 还没收到完整对象
             }
             this._renderJSONObject(obj);
+            this._renderedObjects++;
             this._lastRenderedCount++;
         }
     }
@@ -320,20 +326,26 @@ class ChatManager {
         // 先把流式阶段卡住的部分补上
         this._renderStreamingJSON(fullText);
 
-        const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
-        let rendered = this._lastRenderedCount;
+        let rendered = this._renderedObjects;
 
         // 模型把 JSON 折成多行时，按括号配对整段提取后补渲染
-        if (rendered === 0 && lines.length) {
+        if (rendered === 0 && fullText.trim()) {
             const objs = this._extractJSONObjects(fullText);
             objs.forEach(obj => this._renderJSONObject(obj));
             rendered = objs.length;
+            this._renderedObjects += objs.length;
         }
 
-        // 最终兜底：模型完全没按 JSON 输出（例如 API 鉴权失败），
-        // 就把原文当成一条消息显示，避免"点了发送却什么都没发生"
+        // 最终兜底：模型没按 JSON 输出（例如思考模式跑偏、纯文本回复、API 报错），
+        // 按当前通道原样展示，绝不能让消息"静默消失"
         if (rendered === 0 && fullText.trim()) {
-            this._addBubble('assistant', fullText.trim());
+            const text = fullText.trim();
+            const toPhone = this._lastChannel === 'phone' || !this.coLocated;
+            if (toPhone && window.phonePanel) {
+                window.phonePanel.push('assistant', text, true);
+            } else {
+                this._addBubble('assistant', text);
+            }
         }
         document.querySelectorAll('.stream-temp').forEach(el => el.classList.remove('stream-temp'));
     }

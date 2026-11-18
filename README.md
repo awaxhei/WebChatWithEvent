@@ -109,10 +109,20 @@ python scripts/check_api_key.py
 
 ### 自主行动
 
-尤夏会在两种时机自己做决定（说话 / 发手机消息 / 走去别的地点）：
+尤夏会在两种时机自己做决定（说话 / 发手机消息 / 走去别的地点 / 什么都不做）：
 
-1. 每轮对话结束后按概率 + 冷却轮次触发
-2. 玩家长时间没动静时，前端每 60 秒轮询 `/api/idle`，服务端按真实时间阈值与概率决定
+| 触发 | 门槛 | 默认值 |
+|------|------|--------|
+| 每轮对话后 | 用户发言轮数 % `AUTONOMY_COOLDOWN_TURNS` == 0，再按概率 | 2 轮 / 35% |
+| 闲置轮询 | 前端每 60 秒请求 `/api/idle`；距上次发言 ≥ `IDLE_THRESHOLD_SECONDS`，再按概率 | 120 秒 / 25% |
+
+行动类型由 LLM 判断（`none/speak/phone/move`），服务端负责校验：
+同处一地才能 `speak`（异地强制改成 `phone`），`move` 会登记地点并记一条 `scene_change` 事件。
+
+想让她更主动，调大 `AUTONOMY_CHANCE` / `IDLE_CHANCE`、调小 `AUTONOMY_COOLDOWN_TURNS` / `IDLE_THRESHOLD_SECONDS` 即可。
+
+> 想直观验证这条链路，可以跑 `python scripts/auto_test_server.py`：
+> 它用临时库起一个端口 5051 的实例，并把概率门槛全部调到 100%。
 
 ---
 
@@ -192,8 +202,9 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/make_icons.py` | 重新生成 PWA 图标 |
 | `python scripts/smoke_test.py` | 接口冒烟测试（隔离库 + 测试桩，零额度） |
 | `python scripts/test_v3.py` | 时钟/地点/场景/手机/记忆/表情包/迁移 离线单元测试 |
-| `python scripts/e2e_chat.py` | 真实浏览器链路的对话验证（消耗额度，跑在隔离临时库） |
+| `python scripts/e2e_chat.py` | 真实对话全链路验证（消耗额度，跑在隔离临时库） |
 | `python scripts/e2e_server.py` | 开发用隔离实例：临时库 + 端口 5050 + 账号 `e2e/e2e123` |
+| `python scripts/auto_test_server.py` | 自主行动演示实例：概率门槛 100% + 端口 5051，用来观察尤夏自己行动 |
 
 ---
 

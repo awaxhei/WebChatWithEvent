@@ -11,6 +11,7 @@ import random
 import re
 import time
 
+import core.clock as clock
 import core.locations as locations
 from config import (
     AUTONOMY_ENABLED, AUTONOMY_CHANCE, AUTONOMY_COOLDOWN_TURNS,
@@ -118,7 +119,8 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
             return None
         locations.switch(db, conv_id, new_loc)
         db.add_event(conv_id, "scene_change", f"尤夏去了{new_loc}",
-                     "她自己走开了。", "active", story_time="")
+                     "她自己走开了。", "active",
+                     story_time=clock.format_time(now_minutes))
         return {"action": "move", "location": new_loc, "text": "", "created": created}
 
     if action in ("speak", "phone") and text:
