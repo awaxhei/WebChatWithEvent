@@ -74,12 +74,27 @@ def main():
     none_llm = StubLLM(scene_json='{"new_location": "", "entered_by": "none", "reason": "无"}')
     check("没有新场景时返回 None", sw.observe(db, conv, none_llm, 620, "", None) is None)
 
-    # 神态描写
-    text = cw.describe(db, conv, StubLLM(), 630, "现在是傍晚", api_key=None)
-    check("生成神态描写", bool(text) and len(text) >= 6, text)
+    # 动作描写（现在写的是两个人）
+    class CaptureLLM(StubLLM):
+        def __init__(self):
+            super().__init__(desc="尤夏把杯子往青梅那边推了推；青梅伸手接过来，指尖在杯壁上停了停。")
+            self.last_user = ""
+            self.last_system = ""
+
+        def chat_sync(self, messages, system_prompt="", **kw):
+            self.last_user = messages[0]["content"] if messages else ""
+            self.last_system = system_prompt or ""
+            return super().chat_sync(messages, system_prompt, **kw)
+
+    cap = CaptureLLM()
+    text = cw.describe(db, conv, cap, 630, "现在是傍晚", api_key=None)
+    check("生成动作描写", bool(text) and len(text) >= 6, text)
+    check("提示词要求写两个人", "两个人都要写到" in cap.last_system, cap.last_system[:80])
+    check("提示词带上双方位置", "青梅在" in cap.last_user, cap.last_user[:160])
+    check("提示词带上此刻时间", "此刻" in cap.last_user, cap.last_user[:160])
     states = [m for m in db.get_messages(conv) if m["channel"] == "state"]
-    check("神态描写落库到 state 通道", len(states) == 1 and states[0]["content"] == text)
-    check("神态描写不混入聊天通道",
+    check("动作描写落库到 state 通道", len(states) == 1 and states[0]["content"] == text)
+    check("动作描写不混入聊天通道",
           all(m["channel"] == "chat" for m in db.get_messages(conv, channel="chat")))
 
     print()
