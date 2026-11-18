@@ -1,5 +1,11 @@
+# 运行必需
 flask==3.0.0
 requests==2.31.0
 PyJWT==2.8.0
-chromadb==0.4.24
-sentence-transformers==3.3.1
+
+# 可选：生成 PWA 图标（scripts/make_icons.py），不装不影响运行
+Pillow==10.4.0
+
+# 可选：本地 embedding（没有 Ollama 时用于记忆检索/表情包语义匹配）
+# 不装则自动降级为中文词面相似度，功能不受影响，只是检索精度略低
+# sentence-transformers==3.3.1
