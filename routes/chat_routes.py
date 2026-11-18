@@ -23,14 +23,14 @@ from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
-    autonomy, character_writer, context_writer, memory_engine, scene_watcher, time_keeper,
+    autonomy, character_writer, context_writer, memory_engine, npc, scene_watcher, time_keeper,
     world_context,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
     should_run_random_event, should_run_event_summary,
 )
-from config import CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL
+from config import CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP
 
 chat_bp = Blueprint("chat", __name__)
 db = None        # 由外部注入
@@ -100,22 +100,32 @@ def _as_context_content(row):
     """把一条库里的消息转成喂给模型的内容。
 
     - 手机通道的她本人的话是纯文本，包回 {"消息": ...}，让历史看起来和输出格式一致；
-    - 当面通道存的就是她输出的 JSON（对白/表情包），原样回灌，顺带强化格式。
+    - 当面通道存的就是她输出的 JSON（对白/表情包），原样回灌，顺带强化格式；
+    - NPC 的话拆成"名字：台词"，不然她会以为是自己说的。
     """
     content = row.get("content") or ""
-    if row["role"] == "assistant" and (row.get("channel") or "chat") == PHONE_CHANNEL:
+    channel = row.get("channel") or "chat"
+    if channel == "npc":
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict):
+                return f"{data.get('name', '路人')}：{data.get('text', '')}"
+        except Exception:
+            pass
+        return content
+    if row["role"] == "assistant" and channel == PHONE_CHANNEL:
         return json.dumps({"消息": content}, ensure_ascii=False)
     return content
 
 
 def _context_window(conv_id, limit=10):
-    """当面 + 手机两条通道合成一条时间线。
+    """当面 + 手机 + NPC 合成一条时间线。
 
     之前只取当前通道的历史：切到手机就忘了刚当面说过的话，切回当面又不记得
     手机里聊了什么，两边各说各的。
     """
     rows = [m for m in db.get_messages(conv_id)
-            if (m.get("channel") or "chat") in (CHAT_CHANNEL, PHONE_CHANNEL)][-limit:]
+            if (m.get("channel") or "chat") in (CHAT_CHANNEL, PHONE_CHANNEL, "npc")][-limit:]
     return [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
 
 
@@ -127,6 +137,12 @@ def _scene_payload(conv_id, api_key):
     view["story_time"] = clock.format_time(now)
     view["unread"] = db.get_phone_unread(conv_id)
     view["paused"] = db.is_paused(conv_id)
+    # 现场有谁（NPC），前端可以显示"在场：老板"
+    try:
+        locs = {view.get("location"), view.get("player_location")}
+        view["npcs"] = [n for n in db.get_npcs(conv_id) if n.get("location") in locs]
+    except Exception:
+        view["npcs"] = []
     return view
 
 
@@ -195,6 +211,11 @@ def chat():
         CHAT_CHANNEL if co_located else PHONE_CHANNEL)
     can_speak = channel == CHAT_CHANNEL
 
+    # 现场有没有玩家正在搭话的 NPC：先找现成的，没有再按称呼动态补一个
+    addressed_npc = npc.find_addressed(db, conv_id, player_loc, user_message)
+    if not addressed_npc:
+        addressed_npc = npc.spawn_placeholder(db, conv_id, player_loc, user_message)
+
     db.add_message(conv_id, "user", user_message, channel=channel, scene=player_loc)
     db.touch_conversation(conv_id)
     # 记下"她说完之后，玩家隔了多久才回"：等待时长按这个自适应
@@ -248,12 +269,13 @@ def chat():
     world = world_context.world_block(db, conv_id, now_minutes, events_limit=6)
     # 她自己的动作用第二人称单独给，不能混进「最近发生的事」里
     self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
-    blocks = "\n\n".join(b for b in (world, self_acts) if b)
+    # 现场还有谁（煎饼摊老板这类）
+    npcs_here = npc.present_block(db, conv_id, player_loc)
+    blocks = "\n\n".join(b for b in (world, self_acts, npcs_here) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
     system_prompt += f"{channel_rule}\n\n{format_rule}"
-    context_messages = _context_window(conv_id, limit=10)
     _mark("提示词组装完成（准备开始流式）")
 
     def generate():
@@ -266,6 +288,15 @@ def chat():
             yield _sse({"type": "scene_changed",
                         "scene": _scene_payload(conv_id, api_key)})
 
+        # 先说 NPC 的话：她得等人家回完，再接话才自然
+        if addressed_npc:
+            npc_text = npc.reply(db, conv_id, addressed_npc, user_message, deepseek,
+                                 api_key=api_key)
+            if npc_text:
+                yield _sse({"type": "npc", "name": addressed_npc.get("name") or "店员",
+                            "content": npc_text})
+
+        context_messages = _context_window(conv_id, limit=10)
         for chunk in deepseek.chat_stream(context_messages, system_prompt,
                                           api_key_override=api_key):
             if first_chunk_at[0] is None:
@@ -412,6 +443,56 @@ def phone_read(conv_id):
         return denied
     db.mark_phone_read(conv_id)
     return jsonify({"success": True, "unread": 0})
+
+
+# ──────────────────────────────────────────────
+# 动态 NPC（煎饼摊老板这类）
+# ──────────────────────────────────────────────
+
+@chat_bp.route("/api/npcs/<conv_id>", methods=["GET"])
+@require_auth
+def list_npcs(conv_id):
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+    return jsonify({"npcs": db.get_npcs(conv_id),
+                    "gone": db.get_npcs(conv_id, status="gone")})
+
+
+@chat_bp.route("/api/npcs/<conv_id>", methods=["POST"])
+@require_auth
+def create_npc(conv_id):
+    """手动放一个 NPC 进来（也可以靠玩家喊"老板"自动生成）"""
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()[:12]
+    if not name:
+        return jsonify({"error": "缺少名字"}), 400
+    if db.count_npcs(conv_id) >= NPC_CAP:
+        return jsonify({"error": f"NPC 数量已达上限（{NPC_CAP}）"}), 400
+
+    role = (data.get("role") or "").strip()[:12]
+    location = (data.get("location") or "").strip()[:20] or db.get_player_location(conv_id)
+    persona = (data.get("persona") or "").strip()[:120] or f"{location}的{role or '路人'}"
+    npc_id = db.add_npc(conv_id, name, role, location, persona)
+    return jsonify({"npc": db.get_npc(npc_id)})
+
+
+@chat_bp.route("/api/npcs/<conv_id>/<int:npc_id>/dismiss", methods=["POST"])
+@require_auth
+def dismiss_npc(conv_id, npc_id):
+    """让某个 NPC 退场（变成 gone，不再出现在现场）"""
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+    npc_row = db.get_npc(npc_id)
+    if not npc_row or npc_row["conversation_id"] != conv_id:
+        return jsonify({"error": "NPC 不存在"}), 404
+    db.set_npc_status(npc_id, "gone")
+    return jsonify({"success": True, "npcs": db.get_npcs(conv_id)})
 
 
 @chat_bp.route("/api/pause/<conv_id>", methods=["POST"])

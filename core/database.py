@@ -112,6 +112,22 @@ class ChatDB:
                 CREATE INDEX IF NOT EXISTS idx_memories_conv ON memories(conversation_id, id);
                 CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(conversation_id, kind);
 
+                -- v8：动态 NPC（煎饼摊老板这类只应付简单问答的角色）
+                CREATE TABLE IF NOT EXISTS npcs (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    role            TEXT DEFAULT '',
+                    location        TEXT DEFAULT '',
+                    persona         TEXT DEFAULT '',
+                    status          TEXT DEFAULT 'active'
+                                    CHECK(status IN ('active','gone')),
+                    created_at      TEXT DEFAULT (datetime('now','localtime')),
+                    last_spoke_at   REAL DEFAULT 0,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_npcs_conv ON npcs(conversation_id, status);
+
                 -- v3：表情包索引（导入即用，缓存自动打标结果）
                 CREATE TABLE IF NOT EXISTS stickers (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -681,3 +697,56 @@ class ChatDB:
             row = conn.execute("SELECT reply_latency FROM conversations WHERE id=?",
                                (conv_id,)).fetchone()
         return float(row["reply_latency"] or 0) if row else 0.0
+
+    # ----- v8：动态 NPC -----
+    def add_npc(self, conv_id, name, role="", location="", persona=""):
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO npcs(conversation_id, name, role, location, persona)"
+                " VALUES(?,?,?,?,?)", (conv_id, name, role, location, persona))
+            return cur.lastrowid
+
+    def get_npcs(self, conv_id, status="active", location=None):
+        with self._get_conn() as conn:
+            if location:
+                rows = conn.execute(
+                    "SELECT * FROM npcs WHERE conversation_id=? AND status=? AND location=?"
+                    " ORDER BY id ASC", (conv_id, status, location)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM npcs WHERE conversation_id=? AND status=?"
+                    " ORDER BY id ASC", (conv_id, status)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_npc(self, npc_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM npcs WHERE id=?", (npc_id,)).fetchone()
+        return dict(row) if row else None
+
+    def find_npc(self, conv_id, name, location=None):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM npcs WHERE conversation_id=? AND status='active' AND name=?",
+                (conv_id, name)).fetchall()
+        for r in rows:
+            if location is None or r["location"] == location:
+                return dict(r)
+        return None
+
+    def set_npc_status(self, npc_id, status):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET status=? WHERE id=?", (status, npc_id))
+
+    def set_npc_location(self, npc_id, location):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET location=? WHERE id=?", (location, npc_id))
+
+    def touch_npc(self, npc_id, ts):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET last_spoke_at=? WHERE id=?", (float(ts), npc_id))
+
+    def count_npcs(self, conv_id, status="active"):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM npcs WHERE conversation_id=? AND status=?",
+                               (conv_id, status)).fetchone()
+        return int(row["c"]) if row else 0

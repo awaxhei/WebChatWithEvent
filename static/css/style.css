@@ -222,6 +222,19 @@ html, body {
 }
 .message-bubble:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 
+/* NPC 气泡：带名字，颜色更淡，和尤夏区分开 */
+.npc-bubble {
+    background: rgba(148, 163, 184, 0.12) !important;
+    border: 1px dashed rgba(148, 163, 184, 0.45) !important;
+    color: var(--text-secondary) !important;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.npc-name {
+    font-size: 11px; font-weight: 600; color: #7c8798;
+    letter-spacing: 0.5px;
+}
+.npc-text { font-size: 14px; }
+
 /* 思考动画 */
 .thinking-indicator { display: flex; gap: 6px; padding: 12px 18px; align-items: center; }
 .thinking-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); animation: bounce 1.4s ease-in-out infinite; }

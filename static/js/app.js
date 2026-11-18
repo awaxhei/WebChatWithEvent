@@ -525,6 +525,8 @@ class ChatManager {
                         const data = JSON.parse(line.slice(6));
                         if (data.type === 'location') {
                             this.locationTag.textContent = data.content;
+                        } else if (data.type === 'npc') {
+                            this._addNpcBubble(data.name, data.content);
                         } else if (data.type === 'yuxia_state') {
                             this._renderYuxiaState(data.content);
                         } else if (data.type === 'scene_discovered') {
@@ -593,6 +595,21 @@ class ChatManager {
         const bubble = document.createElement('div');
         bubble.className = isNote ? 'scene-note' : 'message-bubble';
         bubble.textContent = content;
+        row.appendChild(bubble);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.slideIn(row);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+        return bubble;
+    }
+
+    // NPC 的话单独一种气泡：带名字，颜色更淡，一眼看得出不是尤夏说的
+    _addNpcBubble(name, text) {
+        const row = document.createElement('div');
+        row.className = 'message-row assistant npc-row';
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble npc-bubble';
+        bubble.innerHTML = `<span class="npc-name">${this._e(name || '路人')}</span>` +
+                           `<span class="npc-text">${this._e(text || '')}</span>`;
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
         AnimationEngine.slideIn(row);
@@ -694,6 +711,13 @@ class ChatManager {
                     const ch = msg.channel || 'chat';
                     if (ch === 'state') {
                         this._renderYuxiaState(msg.content);   // 只保留最后一条神态描写
+                    } else if (ch === 'npc') {
+                        let name = '路人', text = msg.content;
+                        try {
+                            const o = JSON.parse(msg.content);
+                            if (o && o.text) { name = o.name || name; text = o.text; }
+                        } catch (e) {}
+                        this._addNpcBubble(name, text);
                     } else if (msg.role === 'user') {
                         this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
                     } else {
