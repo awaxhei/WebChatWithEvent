@@ -75,6 +75,11 @@
                     </svg>
                 </button>
                 <div class="panel-header-actions">
+                    <button class="btn-icon" id="btnToggleSidebar" title="收起侧栏">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="15 6 9 12 15 18"/>
+                        </svg>
+                    </button>
                     <button class="btn-icon" id="btnSettings" title="API Key 设置">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
@@ -92,6 +97,13 @@
             </div>
             <ul class="history-list" id="historyList"></ul>
         </aside>
+
+        <!-- 侧栏收起后用于重新展开 -->
+        <button class="sidebar-restore" id="btnRestoreSidebar" title="展开侧栏">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 6 15 12 9 18"/>
+            </svg>
+        </button>
 
         <!-- 中间：聊天主区域 -->
         <main class="chat-main">
@@ -126,6 +138,16 @@
                     </button>
                 </div>
             </div>
+
+            <!-- 手机（聊天列左下角，跟随列宽而不是视口） -->
+            <button class="phone-fab" id="btnPhone" title="手机">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <rect x="6" y="2" width="12" height="20" rx="2.5"/>
+                    <line x1="10" y1="5" x2="14" y2="5"/>
+                    <circle cx="12" cy="18.5" r="1"/>
+                </svg>
+                <span class="phone-badge" id="phoneBadge" style="display:none;">0</span>
+            </button>
         </main>
 
         <!-- 右侧：事件面板 -->
@@ -155,16 +177,6 @@
         </aside>
 
     </div>
-
-    <!-- 手机（左下角） -->
-    <button class="phone-fab" id="btnPhone" title="手机">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <rect x="6" y="2" width="12" height="20" rx="2.5"/>
-            <line x1="10" y1="5" x2="14" y2="5"/>
-            <circle cx="12" cy="18.5" r="1"/>
-        </svg>
-        <span class="phone-badge" id="phoneBadge" style="display:none;">0</span>
-    </button>
 
     <!-- 手机面板 -->
     <div class="phone-overlay" id="phoneOverlay">
@@ -196,7 +208,15 @@
     <script src="/static/js/app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/static/sw.js');
+            // 清理旧版本遗留在 /static/ 作用域下的 SW（它只控制静态资源，
+            // 而且是缓存优先，会让 CSS/JS 一直停留在旧版本）
+            navigator.serviceWorker.getRegistrations().then((regs) => {
+                regs.forEach((r) => {
+                    if (r.scope && r.scope.endsWith('/static/')) r.unregister();
+                });
+            }).catch(() => {});
+            navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                .catch(() => navigator.serviceWorker.register('/static/sw.js'));
         }
     </script>
 </body>

@@ -11,6 +11,10 @@ from core.deepseek_client import DeepSeekClient
 
 # 创建 Flask 应用
 app = Flask(__name__, static_folder="static", template_folder="templates")
+# 改模板不用重启（本地个人项目，省得每次改 HTML 都要 kill 进程；
+# 不开启时 Jinja2 会缓存已编译模板，导致页面停在旧版本）
+app.jinja_env.auto_reload = True
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # 初始化全局依赖
 db = ChatDB()
@@ -41,6 +45,19 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(event_bp)
 app.register_blueprint(history_bp)
+
+
+@app.route("/sw.js")
+def service_worker():
+    """把 Service Worker 放到根路径，才能以 scope=/ 控制整个站点（含首页）。
+
+    /static/sw.js 的默认作用域只有 /static/，页面本身不会被控制，
+    既是资源缓存失效的原因，也不满足 PWA 可安装条件。
+    """
+    resp = app.send_static_file("sw.js")
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.route("/")

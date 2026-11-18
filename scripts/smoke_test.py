@@ -81,6 +81,11 @@ def main():
     r = anon.get("/static/js/api_key.js")
     check("api_key.js 可访问", r.status_code == 200)
 
+    # Service Worker 必须在根路径并带 Service-Worker-Allowed，才能控制整站
+    r = anon.get("/sw.js")
+    check("根路径 sw.js 可访问", r.status_code == 200, f"got {r.status_code}")
+    check("sw.js 允许根作用域", r.headers.get("Service-Worker-Allowed") == "/")
+
     r = c1.get("/api/history")
     convs = r.get_json()
     check("用户1 历史列表返回 200 且为数组", r.status_code == 200 and isinstance(convs, list))

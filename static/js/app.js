@@ -803,8 +803,35 @@ class HistoryManager {
 }
 
 class UIController {
-    constructor() { this.historyPanel = document.getElementById('historyPanel'); this.overlay = document.getElementById('overlay'); this.currentPanel = null; this._bindEvents(); }
-    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', (e) => { if (e.target.closest('#locationTag') || e.target.closest('#locationPicker')) return; if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } const btnLogout = document.getElementById('btnLogout'); if (btnLogout) btnLogout.addEventListener('click', async () => { await authFetch('/api/auth/logout', { method: 'POST' }); location.reload(); }); }
+    constructor() {
+        this.historyPanel = document.getElementById('historyPanel');
+        this.overlay = document.getElementById('overlay');
+        this.btnToggleSidebar = document.getElementById('btnToggleSidebar');
+        this.btnRestoreSidebar = document.getElementById('btnRestoreSidebar');
+        this.currentPanel = null;
+        this._bindEvents();
+        this._restoreSidebarState();
+    }
+
+    // 桌面端左侧栏收起 / 展开（状态记忆在 localStorage）
+    _restoreSidebarState() {
+        let saved = '0';
+        try { saved = localStorage.getItem('yuxia_sidebar_collapsed') || '0'; } catch (e) {}
+        this.setSidebarCollapsed(saved === '1', false);
+    }
+    setSidebarCollapsed(collapsed, persist = true) {
+        if (this.historyPanel) this.historyPanel.classList.toggle('collapsed', collapsed);
+        if (this.btnRestoreSidebar) this.btnRestoreSidebar.classList.toggle('show', collapsed);
+        if (persist) {
+            try { localStorage.setItem('yuxia_sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) {}
+        }
+    }
+    toggleSidebar() {
+        const collapsed = this.historyPanel && this.historyPanel.classList.contains('collapsed');
+        this.setSidebarCollapsed(!collapsed);
+    }
+
+    _bindEvents() { document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel))); this.overlay.addEventListener('click', () => this.closeAllPanels()); window.addEventListener('resize', () => { if (window.innerWidth > 768) this.closeAllPanels(); }); if (this.btnToggleSidebar) this.btnToggleSidebar.addEventListener('click', () => this.toggleSidebar()); if (this.btnRestoreSidebar) this.btnRestoreSidebar.addEventListener('click', () => this.setSidebarCollapsed(false)); const charTitle = document.getElementById('charTitle'); if (charTitle) { charTitle.style.pointerEvents = 'auto'; charTitle.style.cursor = 'pointer'; charTitle.title = '点击切换故事面板'; charTitle.addEventListener('click', (e) => { if (e.target.closest('#locationTag') || e.target.closest('#locationPicker')) return; if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); }); } const btnLogout = document.getElementById('btnLogout'); if (btnLogout) btnLogout.addEventListener('click', async () => { await authFetch('/api/auth/logout', { method: 'POST' }); location.reload(); }); }
     togglePanel(panelName) { if (panelName === 'events') { if (window.emotionAssistant && window.emotionAssistant.eventPanel) window.emotionAssistant.eventPanel.toggle(); return; } if (panelName !== 'history') return; if (this.currentPanel === 'history') { this.closeAllPanels(); return; } this.closeAllPanels(); this.historyPanel.classList.add('open'); this.overlay.classList.add('show'); this.currentPanel = 'history'; }
     closeAllPanels() { this.historyPanel.classList.remove('open'); this.overlay.classList.remove('show'); this.currentPanel = null; }
 }
