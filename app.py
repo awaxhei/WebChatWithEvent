@@ -5,7 +5,10 @@ AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 import os, socket, subprocess, sys, threading
 from flask import Flask, render_template
 
-from config import PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION, DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY, DEEPSEEK_API_KEY
+from config import (
+    PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION,
+    DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY, DEEPSEEK_API_KEY, IDLE_POLL_SECONDS,
+)
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 
@@ -74,6 +77,7 @@ def get_client_config():
         "default_story_summary": DEFAULT_STORY_SUMMARY,
         # 仅暴露"是否存在服务端 Key"这一布尔值，绝不返回 Key 本身
         "has_server_key": bool(DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip()),
+        "idle_poll_seconds": IDLE_POLL_SECONDS,
     }
 
 

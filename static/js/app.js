@@ -999,8 +999,9 @@ class EmotionAssistant {
     }
     _startIdlePolling() {
         if (this._idleTimer) clearInterval(this._idleTimer);
-        // 每 20 秒问一次：她是否要自己接着做点什么（是否行动由服务端/模型判断）
-        this._idleTimer = setInterval(() => this._pollIdle(), 20000);
+        // 每 N 秒问一次：她是否要自己接着做点什么（是否行动由服务端/模型判断）
+        const seconds = this.idlePollSeconds || 20;
+        this._idleTimer = setInterval(() => this._pollIdle(), seconds * 1000);
     }
     async _pollIdle() {
         const cm = this.chatManager;
@@ -1030,6 +1031,10 @@ class EmotionAssistant {
             const cfg = await res.json();
             this.eventPanel.init(cfg);
             this.settingsPanel.setServerKeyState(cfg.has_server_key);
+            if (cfg.idle_poll_seconds) {
+                this.idlePollSeconds = cfg.idle_poll_seconds;
+                this._startIdlePolling();   // 用服务端下发的间隔重启轮询
+            }
         } catch (e) {
             this.eventPanel.init({ default_story_time: '第一天 07:00', default_story_summary: '与尤夏的故事，从这里开始...' });
         }
