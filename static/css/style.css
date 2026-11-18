@@ -172,17 +172,23 @@ html, body {
     animation: fadeInUp 0.5s ease-out;
 }
 .world-narration-inner {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    /* 必须撑满：否则内部 max-width:70% 是相对"由内容撑开"的父级算的，
+       循环依赖会让短句被压成三四个字一行（"尤夏去/了厨房"） */
+    width: 100%;
 }
 .world-narration-label {
     font-size: 10px; color: var(--text-muted); letter-spacing: 2px;
 }
 .world-narration-text {
-    max-width: 70%; padding: 8px 16px;
+    /* 宽度跟着文字走，长短句都只有一个稳定的行宽度上限 */
+    width: fit-content; max-width: min(420px, 100%);
+    padding: 8px 16px;
     background: rgba(245,158,11,0.04); border: 1px dashed rgba(245,158,11,0.2);
     border-radius: 14px;
     font-size: 12px; color: #6b7280; font-style: italic;
-    line-height: 1.6; text-align: center;
+    line-height: 1.7; text-align: center;
+    overflow-wrap: break-word; word-break: normal;
 }
 .world-narration.medium .world-narration-text {
     background: rgba(245,158,11,0.07); border-color: rgba(245,158,11,0.35);
