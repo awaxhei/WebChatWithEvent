@@ -42,6 +42,53 @@ ROLE_HINTS = {
 # 同一地点最多几个 NPC（连同全局上限一起用）
 PER_LOCATION_CAP = 3
 
+# 判定"玩家在喊人"：句首一个称呼 + 标点/空白，或者 @名字
+_VOCATIVE_RE = re.compile(r"^[\s（(「【\"'“]*@?([\u4e00-\u9fa5A-Za-z0-9]{2,8})[，,：:！!？?、\s]")
+# 这些词虽然出现在句首，但不是称呼
+_VOCATIVE_STOP = {
+    "你", "您", "尤夏", "我", "喂", "那个", "这个", "我说", "然后", "所以",
+    "不过", "而且", "就是", "今天", "明天", "昨天", "现在", "刚才", "老板们",
+}
+# 常见身份后缀：用来把"算命先生"这类称呼拆出身份
+ROLE_SUFFIXES = (
+    "老板娘", "老板", "店主", "摊主", "店长", "经理", "掌柜", "店员", "店员",
+    "服务员", "收银员", "师傅", "保安", "门卫", "司机", "快递员", "外卖员",
+    "大爷", "阿姨", "大叔", "大妈", "小哥", "小姐", "先生", "女士", "医生",
+    "护士", "警察", "老师", "同学", "摊贩", "小贩", "路人",
+)
+
+
+def extract_vocative(message):
+    """从玩家这句话里抽出他在喊谁。
+
+    不限于固定词表：句首「称呼 + 标点」的写法（"算命先生，帮我看看"）
+    或者 @名字 都能识别，这样表里没有的名字也能当场出现。
+    """
+    text = (message or "").strip()
+    if not text:
+        return None
+    m = _VOCATIVE_RE.match(text)
+    if m:
+        cand = m.group(1)
+        if cand not in _VOCATIVE_STOP:
+            return cand
+    return None
+
+
+def _role_of(name):
+    """把称呼拆成身份：煎饼摊老板 → 老板；算命先生 → 算命先生（"先生"太泛）"""
+    for suffix in ROLE_SUFFIXES:
+        if name == suffix:
+            return suffix
+        if name.endswith(suffix):
+            return name if suffix in _GENERIC_ROLE else suffix
+    return name
+
+
+# 这些后缀太泛，单独拿出来当身份反而丢信息
+_GENERIC_ROLE = {"先生", "女士", "小姐", "同学", "师傅", "大爷", "阿姨",
+                 "大叔", "大妈", "小哥", "路人"}
+
 
 def _clean(text, limit=80):
     if not text:
@@ -73,7 +120,15 @@ def find_addressed(db, conv_id, location, message):
     for npc in present:
         if _hit(message, npc.get("role")):
             return npc
-    # 2) 没点名，但上一轮就是 NPC 说的 → 当作在跟他继续聊
+    # 2) 喊了一个现场没有的新称呼（"城管，……"）
+    #    这时绝不能走"接着上一轮"的分支，否则新角色永远出不来
+    vocative = extract_vocative(message)
+    if vocative:
+        for npc in present:
+            if npc.get("name") == vocative or npc.get("role") == vocative:
+                return npc
+        return None
+    # 3) 没点名，但上一轮就是 NPC 说的 → 当作在跟他继续聊
     if "尤夏" in (message or ""):
         return None
     last_npc = _recent_npc(db, conv_id)
@@ -110,33 +165,49 @@ def _recent_npc(db, conv_id, window=3):
     return None
 
 
-def _role_in_message(message):
-    for word, role in ROLE_HINTS.items():
-        if word in (message or ""):
-            return word, role
-    return None, None
+def _prune(db, conv_id, location):
+    """名册是有上限的，不是固定清单：挤满时先请最久没说话的那位退场
+
+    这样无论玩家喊出多少新角色，表也不会无限膨胀。
+    """
+    try:
+        present = db.get_npcs(conv_id, location=location)
+        if len(present) >= PER_LOCATION_CAP:
+            victim = min(present, key=lambda n: (n.get("last_spoke_at") or 0, n["id"]))
+            db.set_npc_status(victim["id"], "gone")
+        active = db.get_npcs(conv_id)
+        if len(active) >= NPC_CAP:
+            victim = min(active, key=lambda n: (n.get("last_spoke_at") or 0, n["id"]))
+            db.set_npc_status(victim["id"], "gone")
+    except Exception:
+        pass
 
 
 def spawn_placeholder(db, conv_id, location, message):
-    """现场没有这个人，但玩家喊了职位 → 动态补一个"""
+    """现场没有这个人，但玩家喊了他的称呼 → 当场生成一个
+
+    称呼不限于固定词表：句首「算命先生，……」这种写法也能认出来。
+    """
     if not NPC_ENABLED:
         return None
-    word, role = _role_in_message(message)
-    if not role:
+    name = extract_vocative(message)
+    if not name:
         return None
-    if db.count_npcs(conv_id) >= NPC_CAP:
-        return None
+    role = _role_of(name)
     try:
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         present = []
-    if len(present) >= PER_LOCATION_CAP:
-        return None
     for npc in present:
-        if npc.get("role") == role or npc.get("name") == word:
+        if npc.get("name") == name or npc.get("role") == role:
             return npc
-    persona = f"{location}的{role}，只管自己这一摊，说话随意、简短、不寒暄。"
-    npc_id = db.add_npc(conv_id, word, role, location, persona)
+
+    # 先腾位置（数量超限时最久没说话的退场），再生成
+    _prune(db, conv_id, location)
+    if db.count_npcs(conv_id) > NPC_CAP:
+        return None
+    persona = f"{location}的{role}，说话随意、简短，只管自己眼前的事。"
+    npc_id = db.add_npc(conv_id, name, role, location, persona)
     return db.get_npc(npc_id)
 
 

@@ -153,7 +153,36 @@ def main():
     for i in range(npc.NPC_CAP):
         app_db.add_npc(conv2, f"路人{i}", "路人", "街上", "")
     overflow = npc.spawn_placeholder(app_db, conv2, "街上", "老板，来个煎饼")
-    check("NPC 数量达上限后不再生成", overflow is None, str(overflow))
+    check("名册挤满时会先请最久没说话的退场，再生成新人",
+          bool(overflow) and 0 < app_db.count_npcs(conv2) <= npc.NPC_CAP,
+          f"count={app_db.count_npcs(conv2)}")
+    gone = app_db.get_npcs(conv2, status="gone")
+    check("退场的 N P C 记进了 gone", len(gone) >= 1, str(len(gone)))
+
+    # ── 7) 任意称呼都能当场出现（不限于固定词表）
+    conv3 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv3)
+    locations.switch_both(app_db, conv3, "街上")
+    fortune = npc.spawn_placeholder(app_db, conv3, "街上", "算命先生，给我看看手相")
+    check("任意称呼可以生成 NPC",
+          bool(fortune) and fortune["name"] == "算命先生", str(fortune))
+    check("身份拆得对", fortune and fortune["role"] == "算命先生", str(fortune))
+    hunter = npc.spawn_placeholder(app_db, conv3, "街上", "@收废品的老王 这堆多少钱")
+    check("@名字 也能生成", bool(hunter) and hunter["name"] == "收废品的老王", str(hunter))
+    check("普通陈述不会生成 NPC",
+          npc.spawn_placeholder(app_db, conv3, "街上", "今天天气不错") is None)
+    check("叫尤夏不会生成 NPC",
+          npc.spawn_placeholder(app_db, conv3, "街上", "尤夏，你吃辣吗") is None)
+
+    # ── 8) 同一地点超过上限时，最久没说话的先退场
+    conv4 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv4)
+    for i in range(npc.PER_LOCATION_CAP):
+        app_db.add_npc(conv4, f"路人{i}", "路人", "街上", "")
+    extra = npc.spawn_placeholder(app_db, conv4, "街上", "老板，来个煎饼")
+    check("同地点有人数上限，超出时挤掉最久没说话的",
+          bool(extra) and len(app_db.get_npcs(conv4, location="街上")) <= npc.PER_LOCATION_CAP,
+          str(len(app_db.get_npcs(conv4, location="街上"))))
 
     print()
     if FAILED:
