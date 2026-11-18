@@ -706,6 +706,14 @@ html, body {
 .location-picker li.current { color: var(--accent); font-weight: 600; }
 .location-picker li.loading { color: var(--text-muted); cursor: default; font-style: italic; }
 .location-picker li.loading:hover { background: transparent; color: var(--text-muted); }
+.location-picker li.new-loc { padding: 6px; }
+.location-picker li.new-loc:hover { background: transparent; }
+.location-picker li.new-loc input {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 8px; font-size: 12px; font-family: inherit;
+    outline: none; background: var(--bg-primary); color: var(--text-primary);
+}
+.location-picker li.new-loc input:focus { border-color: var(--accent); }
 
 .scene-card {
     flex-shrink: 0;

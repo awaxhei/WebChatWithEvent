@@ -107,6 +107,17 @@ python scripts/check_api_key.py
 - 点击地点名可以打开地点列表，选择后玩家移动过去
 - 两人不在同一地点时：顶部显示"尤夏在 X（你在 Y）"，输入框变成发手机消息
 
+**场景可以新建，不是固定清单**：地点表初始 11 个，之后有三条创建路径——
+
+| 谁 | 方式 |
+|---|---|
+| 玩家 | 地点下拉底部的「去没去过的地方…」输入框，回车即创建并前往 |
+| 玩家 | 聊天框输入 `/去 某个新地名` |
+| 尤夏 | 自主行动判定 `move` 时，若故事需要可以走到清单外的新地点 |
+
+新场景首次进入会自动按当前时段生成环境描写并缓存；创建受 `LOCATION_CAP`（默认 40）上限约束，
+尤夏自主新建还受开关 `AUTONOMY_ALLOW_NEW_LOCATION` 控制。
+
 ### 自主行动
 
 尤夏会在两种时机自己做决定（说话 / 发手机消息 / 走去别的地点 / 什么都不做）：
@@ -117,7 +128,8 @@ python scripts/check_api_key.py
 | 闲置轮询 | 前端每 60 秒请求 `/api/idle`；距上次发言 ≥ `IDLE_THRESHOLD_SECONDS`，再按概率 | 120 秒 / 25% |
 
 行动类型由 LLM 判断（`none/speak/phone/move`），服务端负责校验：
-同处一地才能 `speak`（异地强制改成 `phone`），`move` 会登记地点并记一条 `scene_change` 事件。
+同处一地才能 `speak`（异地强制改成 `phone`），`move` 会登记地点并记一条 `scene_change` 事件；
+走到清单外的新地点时事件标题会标注「（新场景）」。
 
 想让她更主动，调大 `AUTONOMY_CHANCE` / `IDLE_CHANCE`、调小 `AUTONOMY_COOLDOWN_TURNS` / `IDLE_THRESHOLD_SECONDS` 即可。
 
@@ -205,6 +217,7 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/e2e_chat.py` | 真实对话全链路验证（消耗额度，跑在隔离临时库） |
 | `python scripts/e2e_server.py` | 开发用隔离实例：临时库 + 端口 5050 + 账号 `e2e/e2e123` |
 | `python scripts/auto_test_server.py` | 自主行动演示实例：概率门槛 100% + 端口 5051，用来观察尤夏自己行动 |
+| `python scripts/test_scene_creation.py` | 场景创建探针：玩家/尤夏新建场景、自动描写、上限与开关 |
 
 ---
 

@@ -16,6 +16,7 @@ import core.locations as locations
 from config import (
     AUTONOMY_ENABLED, AUTONOMY_CHANCE, AUTONOMY_COOLDOWN_TURNS,
     AUTONOMY_PROMPT, IDLE_CHANCE, IDLE_THRESHOLD_SECONDS,
+    AUTONOMY_ALLOW_NEW_LOCATION,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -81,7 +82,7 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
     user_msg = (
         f"{context_brief}\n\n"
         f"最近的消息：\n{recent_text or '（还没有说话）'}\n\n"
-        f"你可以去的地点：{known}\n"
+        f"已知地点：{known}\n"
         f"你们当前{'' if co_located else '不'}在同一个地方。\n"
         "请判断你此刻要不要主动做点什么。"
     )
@@ -114,11 +115,24 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
         target = decision["location"]
         if not target:
             return None
+
+        names = locations.list_names(db, conv_id)
+        candidate = locations.normalize(target)
+        if not candidate:
+            return None
+        # 清单外的新地点：受开关与数量上限约束，避免失控扩张
+        if candidate not in names:
+            if not AUTONOMY_ALLOW_NEW_LOCATION:
+                return None
+            if len(names) >= locations.MAX_LOCATIONS_PER_CONV:
+                return None
+
         new_loc, created = locations.resolve(db, conv_id, target)
         if not new_loc or new_loc == yuxia_loc:
             return None
         locations.switch(db, conv_id, new_loc)
-        db.add_event(conv_id, "scene_change", f"尤夏去了{new_loc}",
+        db.add_event(conv_id, "scene_change",
+                     f"尤夏去了{new_loc}" + ("（新场景）" if created else ""),
                      "她自己走开了。", "active",
                      story_time=clock.format_time(now_minutes))
         return {"action": "move", "location": new_loc, "text": "", "created": created}

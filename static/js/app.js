@@ -118,6 +118,17 @@ class ChatManager {
                 this.moveTo(item.dataset.loc);
                 this._toggleLocationPicker(false);
             });
+            this.locationPicker.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { this._toggleLocationPicker(false); return; }
+                if (e.target && e.target.id === 'newLocationInput' && e.key === 'Enter') {
+                    e.preventDefault();
+                    const name = (e.target.value || '').trim();
+                    if (!name) return;
+                    e.target.value = '';
+                    this.moveTo(name);
+                    this._toggleLocationPicker(false);
+                }
+            });
         }
         // 点空白处收起地点列表
         document.addEventListener('click', () => this._toggleLocationPicker(false));
@@ -156,9 +167,12 @@ class ChatManager {
             if (this.sceneCard) this.sceneCard.style.display = 'block';
         }
         if (scene.locations && this.locationPicker) {
-            this.locationPicker.innerHTML = scene.locations
+            const items = scene.locations
                 .map(name => `<li data-loc="${this._e(name)}"${name === playerLoc ? ' class="current"' : ''}>${this._e(name)}</li>`)
                 .join('');
+            this.locationPicker.innerHTML = items +
+                '<li class="new-loc"><input id="newLocationInput" placeholder="去没去过的地方…" ' +
+                'maxlength="20" autocomplete="off"></li>';
         }
         if (scene.story_time && window.emotionAssistant && window.emotionAssistant.eventPanel) {
             window.emotionAssistant.eventPanel.updateStoryTime(scene.story_time);
