@@ -269,6 +269,86 @@ def main():
     finally:
         chat_mod.deepseek = real
 
+    # ── 11) 玩家在界面上换场景：一个字都没说，她也得知道人走了
+    convS = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, convS)
+    app_db.add_message(convS, "user", "先在这儿坐会儿", channel="chat")
+    check("新会话两人在同一地点",
+          app_db.get_current_location(convS) == app_db.get_player_location(convS),
+          f"{app_db.get_current_location(convS)}/{app_db.get_player_location(convS)}")
+
+    # 换成桩：换场景会顺手预热环境描写/情境叙述，别真去打 API
+    llmS = CaptureLLM()
+    chat_mod.deepseek = llmS
+    try:
+        r = c.post(f"/api/move/{convS}", json={"who": "player", "location": "厨房"})
+        moved_resp = r.get_json() or {}
+        check("移动接口可用", r.status_code == 200 and moved_resp.get("player_location") == "厨房")
+        check("回传原来的地点（前端好写转场旁白）",
+              moved_resp.get("from_player_location") == "公寓客厅",
+              str(moved_resp.get("from_player_location")))
+
+        evs = app_db.get_recent_events(convS, limit=10)
+        check("换场景会记一条事件",
+              any(e["event_type"] == "scene_change" and "青梅去了厨房" in e["title"] for e in evs),
+              str([e["title"] for e in evs]))
+        check("事件里写出她是从哪儿走开的",
+              any("公寓客厅" in (e.get("description") or "")
+                  and "厨房" in (e.get("description") or "") for e in evs),
+              str([e.get("description") for e in evs]))
+
+        block = world_context.place_block(app_db, convS, app_db.get_current_location(convS),
+                                          app_db.get_player_location(convS))
+        check("位置块写清了她自己在哪", "【你此刻在哪】公寓客厅" in block, block)
+        check("位置块写清了青梅在哪", "青梅此刻在哪" in block and "厨房" in block, block)
+        check("位置块提示只能手机联系", "手机" in block, block)
+
+        check("换场景后缓存的情境叙述作废", app_db.get_context_brief(convS)[0] == "",
+              str(app_db.get_context_brief(convS)))
+
+        r = c.post("/api/chat", json={"conversation_id": convS, "message": "你去哪了"})
+        r.data.decode("utf-8")      # 必须消费流，生成器才会真正跑起来
+        check("聊天提示词里有她自己的位置", "【你此刻在哪】公寓客厅" in llmS.system_prompt,
+              llmS.system_prompt[:400])
+        check("聊天提示词里有青梅的新位置",
+              "【青梅此刻在哪】厨房" in llmS.system_prompt, llmS.system_prompt[:400])
+        check("聊天提示词里带着这次转场事件",
+              "青梅去了厨房" in llmS.system_prompt, llmS.system_prompt[:400])
+
+        # 一起走：先回到一起，再两个人一起换地方，留一条"两人一起"的事件
+        r = c.post(f"/api/move/{convS}", json={"who": "player", "location": "公寓客厅"})
+        check("走回去之后又在一起了", (r.get_json() or {}).get("co_located") is True,
+              str((r.get_json() or {}).get("co_located")))
+        r = c.post(f"/api/move/{convS}", json={"who": "both", "location": "卧室"})
+        both_resp = r.get_json() or {}
+        check("两人可以一起换地方",
+              r.status_code == 200 and both_resp.get("location") == "卧室"
+              and both_resp.get("player_location") == "卧室",
+              str(both_resp.get("location")))
+        evs = app_db.get_recent_events(convS, limit=10)
+        check("一起走只记一条两人事件",
+              any("两人一起去了卧室" in (e.get("title") or "") for e in evs),
+              str([e.get("title") for e in evs]))
+
+        # 原地"移动"不该刷出一堆重复事件
+        before_events = len(app_db.get_recent_events(convS, limit=50))
+        c.post(f"/api/move/{convS}", json={"who": "player", "location": "卧室"})
+        after_events = len(app_db.get_recent_events(convS, limit=50))
+        check("没换地方就不记事件", before_events == after_events,
+              f"{before_events} -> {after_events}")
+
+        # 她自己的移动不能当成"世界发生的事"回灌给她
+        c.post(f"/api/move/{convS}", json={"who": "yuxia", "location": "阳台"})
+        evs = app_db.get_recent_events(convS, limit=10)
+        own = [e for e in evs if "尤夏去了阳台" in (e.get("title") or "")]
+        check("她的移动事件标了 self",
+              bool(own) and own[-1].get("tier") == world_context.SELF_TIER,
+              str([(e.get("title"), e.get("tier")) for e in evs]))
+        visible = world_context.recent_events_block(app_db, convS, limit=8)
+        check("她的移动不出现在「最近发生的事」里", "尤夏去了阳台" not in visible, visible[:200])
+    finally:
+        chat_mod.deepseek = real
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

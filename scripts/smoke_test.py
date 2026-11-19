@@ -147,6 +147,11 @@ def main():
         moved = r.get_json() or {}
         check("玩家可以主动移动", r.status_code == 200 and moved.get("player_location") == "厨房",
               str(r.status_code))
+        evs_move = app_db.get_recent_events(conv_new, limit=8)
+        check("换场景留痕（尤夏下一轮才知道人走了）",
+              any(e["event_type"] == "scene_change" and "青梅去了厨房" in (e["title"] or "")
+                  for e in evs_move),
+              str([e["title"] for e in evs_move]))
 
         r = c1.post(f"/api/move/{conv_new}", json={"who": "yuxia", "location": "公园"})
         check("尤夏可以被移动", (r.get_json() or {}).get("location") == "公园")

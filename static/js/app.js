@@ -475,7 +475,14 @@ class ChatManager {
                 body: JSON.stringify({ who: both ? 'both' : 'player', location: name }),
             });
             if (!res.ok) return;
-            this.applyScene(await res.json());
+            const data = await res.json();
+            this.applyScene(data);
+            // 真的换了地方才留一句旁白：她自己也会看到这条转场
+            const to = data.player_location;
+            if (to && data.from_player_location && data.from_player_location !== to) {
+                this._addWorldNarration(
+                    both ? `你和尤夏一起走到了${to}` : `你走到了${to}`, 'low');
+            }
         } catch (e) {
         } finally {
             this._setSceneLoading(false);

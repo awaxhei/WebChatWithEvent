@@ -11,6 +11,7 @@ import re
 
 import core.clock as clock
 import core.locations as locations
+import services.world_context as world_context
 from config import SCENE_WATCHER_ENABLED, SCENE_WATCHER_PROMPT
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -96,6 +97,8 @@ def observe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         return None
 
     entered = decision["entered_by"]
+    from_yuxia = db.get_current_location(conv_id)
+    from_player = db.get_player_location(conv_id)
     moved_player = moved_yuxia = False
     if entered in ("player", "both"):
         db.set_player_location(conv_id, name)
@@ -109,6 +112,19 @@ def observe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
                  f"发现新场景：{name}" + ("" if created else "（已有）"),
                  decision.get("reason") or "对话里出现了新的场所。", "active",
                  story_time=clock.format_time(now_minutes))
+
+    # 真的有人走过去了：再记一条"谁去了哪"，她下一轮才知道人已经不在原地
+    if moved_player or moved_yuxia:
+        who = "both" if (moved_player and moved_yuxia) else \
+            ("player" if moved_player else "yuxia")
+        origin = from_yuxia if moved_yuxia else from_player
+        if moved_player and moved_yuxia and from_player != from_yuxia:
+            origin = ""     # 两人从不同地方过去，别写成"一起从某处走"
+        locations.log_move(db, conv_id, who, origin, name,
+                           clock.format_time(now_minutes), created=created,
+                           tier=(world_context.SELF_TIER if who == "yuxia" else ""))
+        if moved_yuxia:
+            db.clear_yuxia_activity(conv_id)
 
     return {
         "location": name,

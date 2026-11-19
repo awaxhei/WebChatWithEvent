@@ -262,13 +262,7 @@ def _allowed(db, conv_id, idle, allow_wait=False):
 # ──────────────────────────────────────────────
 
 def _scene_line(db, conv_id, yuxia_loc, now_minutes):
-    try:
-        import core.scenes as scenes
-        bucket = scenes.bucket_of(now_minutes)
-        desc = db.get_location_variants(conv_id, yuxia_loc).get(bucket, "")
-    except Exception:
-        bucket, desc = "", ""
-    return f"此刻的场景（{bucket}）：{desc}\n" if desc else ""
+    return world_context.scene_line(db, conv_id, yuxia_loc, now_minutes)
 
 
 def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
@@ -286,11 +280,11 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
         context_brief or "",
         ("青梅已经 %d 秒没有说话了。" % idle_seconds) if idle else "青梅刚刚说完话。",
         world_context.time_line(now_minutes),
-        f"你在：{yuxia_loc}",
+        world_context.place_block(db, conv_id, yuxia_loc, db.get_player_location(conv_id)),
     ]
     scene_line = _scene_line(db, conv_id, yuxia_loc, now_minutes)
     if scene_line:
-        parts.append(scene_line.rstrip("\n"))
+        parts.append(scene_line)
 
     events = world_context.recent_events_block(db, conv_id, limit=6, now_minutes=now_minutes)
     if events:
@@ -452,7 +446,8 @@ def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
     db.add_event(conv_id, "scene_change",
                  f"尤夏去了{new_loc}" + ("（新场景）" if created else ""),
                  "她自己走开了。", "active",
-                 story_time=clock.format_time(now_minutes))
+                 story_time=clock.format_time(now_minutes),
+                 tier=world_context.SELF_TIER)
     db.push_autonomy(conv_id, {"action": "move", "text": f"去了{new_loc}", "at": time.time(),
                                "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
@@ -488,7 +483,8 @@ def _do_lead(db, conv_id, decision, yuxia_loc, now_minutes):
     db.add_event(conv_id, "scene_change",
                  f"尤夏带着青梅去了{new_loc}" + ("（新场景）" if created else ""),
                  "她拉着人一起换了地方。", "active",
-                 story_time=clock.format_time(now_minutes))
+                 story_time=clock.format_time(now_minutes),
+                 tier=world_context.SELF_TIER)
     db.push_autonomy(conv_id, {"action": "lead", "text": f"带青梅去了{new_loc}",
                                "at": time.time(), "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)

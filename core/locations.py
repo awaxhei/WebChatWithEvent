@@ -101,6 +101,41 @@ def switch_both(db, conv_id, candidate):
     return name, created
 
 
+_MOVE_TITLES = {
+    "player": "青梅去了{to}",
+    "yuxia": "尤夏去了{to}",
+    "both": "两人一起去了{to}",
+}
+_MOVE_DESCS = {
+    "player": "青梅从{fr}走开了，现在在{to}。",
+    "yuxia": "她从{fr}过去，现在在{to}。",
+    "both": "两个人一起从{fr}走到了{to}。",
+}
+
+
+def log_move(db, conv_id, who, from_location, to_location, story_time="", created=False,
+             tier=""):
+    """把"换地方"记成一条事件。
+
+    玩家在界面上点一下地点就走了，一个字都不会说。没有这条事件，
+    她下一轮还以为人在客厅——或者不知道自己已经被挪到了别处。
+
+    返回是否真的记了一条（没换地方就不记）。
+    """
+    if not to_location or to_location == from_location:
+        return False
+    who = who if who in _MOVE_TITLES else "both"
+    title = _MOVE_TITLES[who].format(to=to_location) + ("（新场景）" if created else "")
+    if from_location:
+        desc = _MOVE_DESCS[who].format(fr=from_location, to=to_location)
+    else:
+        subject = {"player": "青梅", "yuxia": "她", "both": "两个人"}[who]
+        desc = f"{subject}现在在{to_location}。"
+    db.add_event(conv_id, "scene_change", title, desc, "active",
+                 story_time=story_time or "", tier=tier)
+    return True
+
+
 def prompt_block(db, conv_id, current=None):
     """给 AI 的地点上下文片段"""
     names = ensure_defaults(db, conv_id)

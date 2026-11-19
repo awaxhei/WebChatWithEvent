@@ -107,6 +107,34 @@ def _co_located(conv_id):
     return db.get_player_location(conv_id) == db.get_current_location(conv_id)
 
 
+def _reset_brief(conv_id):
+    """地点变了，缓存的情境叙述就过期了（它还写着"你在客厅"）"""
+    try:
+        db.set_context_brief(conv_id, "", 0)
+    except Exception:
+        pass
+
+
+def _log_move(conv_id, who, from_location, to_location, created=False):
+    """换地方要留痕：她下一轮才知道人走了、还是跟过来了"""
+    try:
+        story_time = clock.format_time(time_keeper.init_clock(db, conv_id))
+    except Exception:
+        story_time = ""
+    tier = world_context.SELF_TIER if who == "yuxia" else ""
+    moved = locations.log_move(db, conv_id, who, from_location, to_location,
+                               story_time, created=created, tier=tier)
+    if moved and who in ("yuxia", "both"):
+        # 她换了地方，之前"你此刻在做"的事就作废了（别再说自己在原来那屋煮面）
+        try:
+            db.clear_yuxia_activity(conv_id)
+        except Exception:
+            pass
+    if moved:
+        _reset_brief(conv_id)
+    return moved
+
+
 def _as_context_content(row):
     """把一条库里的消息转成喂给模型的内容。
 
@@ -198,18 +226,19 @@ def chat():
     if move_match:
         target, created = locations.resolve(db, conv_id, move_match.group(1))
         if target:
+            from_player = db.get_player_location(conv_id)
             db.set_player_location(conv_id, target)
+            _log_move(conv_id, "player", from_player, target, created)
             user_message = f"（青梅走到了{target}）"
             moved = True
     elif bring_match:
         if db.get_current_location(conv_id) != db.get_player_location(conv_id):
             user_message = f"（青梅想拉着尤夏去{bring_match.group(1)}，可两人根本不在一起）"
         else:
+            from_yuxia = db.get_current_location(conv_id)
             target, created = locations.switch_both(db, conv_id, bring_match.group(1))
             if target:
-                db.add_event(conv_id, "scene_change", f"两人一起去了{target}",
-                             "青梅拉着尤夏一起换了地方。", "active",
-                             story_time=clock.format_time(time_keeper.init_clock(db, conv_id)))
+                _log_move(conv_id, "both", from_yuxia, target, created)
                 user_message = f"（青梅拉着尤夏一起去了{target}）"
                 moved = True
                 moved_together = True
@@ -286,11 +315,14 @@ def chat():
                    "不要用纯文本回应，哪怕只有一个字或一个颜文字，也要包进 JSON。")
     # 世界块放在最前面：她得先知道刚刚出了什么事，才谈得上回应
     world = world_context.world_block(db, conv_id, now_minutes, events_limit=6)
+    # 人在哪儿是每轮的实时事实：玩家在界面上换场景不会说话
+    place = world_context.place_block(db, conv_id, yuxia_loc, player_loc)
+    scene_here = world_context.scene_line(db, conv_id, yuxia_loc, now_minutes)
     # 她自己的动作用第二人称单独给，不能混进「最近发生的事」里
     self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
     # 现场还有谁（煎饼摊老板这类）
     npcs_here = npc.present_block(db, conv_id, player_loc)
-    blocks = "\n\n".join(b for b in (world, self_acts, npcs_here) if b)
+    blocks = "\n\n".join(b for b in (world, place, scene_here, self_acts, npcs_here) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
@@ -413,7 +445,8 @@ def move(conv_id):
     if who not in ("player", "yuxia", "both"):
         who = "player"
 
-    now = time_keeper.init_clock(db, conv_id)
+    from_yuxia = db.get_current_location(conv_id)
+    from_player = db.get_player_location(conv_id)
 
     # 一起过去：只有两人在同一个地方时才谈得上"一起走"
     if who == "both":
@@ -422,12 +455,13 @@ def move(conv_id):
         name, created = locations.switch_both(db, conv_id, target)
         if not name:
             return jsonify({"error": "地点名不合法"}), 400
-        db.add_event(conv_id, "scene_change", f"两人一起去了{name}",
-                     "两个人一起换了地方。", "active",
-                     story_time=clock.format_time(now))
+        _log_move(conv_id, "both", from_yuxia, name, created)
         payload = _scene_payload(conv_id, request_api_key())
         payload["created"] = created
         payload["together"] = True
+        payload["who"] = who
+        payload["from_location"] = from_yuxia
+        payload["from_player_location"] = from_player
         return jsonify(payload)
 
     name, created = locations.resolve(db, conv_id, target)
@@ -439,8 +473,14 @@ def move(conv_id):
     else:
         db.set_player_location(conv_id, name)
 
+    _log_move(conv_id, who, from_yuxia if who == "yuxia" else from_player, name, created)
+
     payload = _scene_payload(conv_id, request_api_key())
     payload["created"] = created
+    payload["together"] = False
+    payload["who"] = who
+    payload["from_location"] = from_yuxia
+    payload["from_player_location"] = from_player
     return jsonify(payload)
 
 

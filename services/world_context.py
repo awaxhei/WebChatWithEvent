@@ -157,7 +157,40 @@ def time_line(now_minutes):
     return f"【此刻】{clock.format_time(now_minutes)}"
 
 
+def place_block(db, conv_id, yuxia_location, player_location):
+    """【你此刻在哪】—— 地点是每轮都得重新告诉她的实时事实。
+
+    玩家在界面上换场景时不会说话，「最近发生的事」里那条事件也会随轮次滚出去，
+    所以位置本身必须每轮现取，不能指望缓存的情境叙述（它可能还写着"你在客厅"）。
+    """
+    if not yuxia_location:
+        return ""
+    lines = [f"【你此刻在哪】{yuxia_location}"]
+    if player_location:
+        if player_location == yuxia_location:
+            lines.append(f"【青梅此刻在哪】{yuxia_location}——和你在同一个地方，可以当面说话。")
+        else:
+            lines.append(f"【青梅此刻在哪】{player_location}——你们不在一起，只能用手机。")
+    return "\n".join(lines)
+
+
+def scene_line(db, conv_id, location, now_minutes):
+    """此地的样子（该地点该时段的描写，已缓存在库里，不额外花钱）"""
+    if not location or now_minutes is None:
+        return ""
+    try:
+        import core.scenes as scenes
+        bucket = scenes.bucket_of(now_minutes)
+        desc = (db.get_location_variants(conv_id, location) or {}).get(bucket, "")
+    except Exception:
+        return ""
+    if not desc:
+        return ""
+    return f"【此地的样子（{bucket}，你清楚就行，不要复述）】{desc[:120]}"
+
+
 __all__ = [
     "recent_events_block", "activity_line", "recent_activity_block",
-    "self_actions_block", "world_block", "time_line", "CHARACTER_NAME", "SELF_TIER",
+    "self_actions_block", "world_block", "time_line", "place_block", "scene_line",
+    "CHARACTER_NAME", "SELF_TIER",
 ]
