@@ -41,6 +41,7 @@ class StubLLM:
 
     def __init__(self):
         self.system_prompt = ""
+        self.stream_prompt = ""
         self.messages = []
         self.user_msg = ""
 
@@ -50,7 +51,8 @@ class StubLLM:
         return "加蛋两块。"
 
     def chat_stream(self, messages, system_prompt="", api_key_override=None, temperature=0.7):
-        self.system_prompt = system_prompt
+        # 单独存一份：context_writer 会在后台线程里复用这个桩，别让它把提示词覆盖掉
+        self.stream_prompt = system_prompt
         self.messages = list(messages)
         yield '{"对白": "……嗯。"}'
 
@@ -120,8 +122,8 @@ def main():
               npc_ev.get("name") == "老板" and npc_ev.get("content"), str(npc_ev))
         ctx = json.dumps(llm.messages, ensure_ascii=False)
         check("尤夏的上下文里有 NPC 说的话", "老板" in ctx and "加蛋两块" in ctx, ctx[:200])
-        check("尤夏的提示词里提示现场有谁", "现场还有" in llm.system_prompt,
-              llm.system_prompt[-300:])
+        check("尤夏的提示词里提示现场有谁", "现场还有" in llm.stream_prompt,
+              llm.stream_prompt[-300:])
     finally:
         chat_mod.deepseek = real
 
