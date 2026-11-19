@@ -61,6 +61,14 @@ def _mark(label):
     print(f"[timing] {label}: {int((now - _T0['t']) * 1000)} ms")
 
 
+_CURLY_QUOTES = str.maketrans({"“": '"', "”": '"'})
+
+
+def _normalize_quotes(text):
+    """模型偶尔会用中文引号当 JSON 的引号（{“对白”：“……”}），先掰回来再解析"""
+    return (text or "").translate(_CURLY_QUOTES)
+
+
 def _extract_json_objects(text):
     """按括号配对提取模型输出里的 JSON 对象（容忍折行、多余文字）"""
     out, depth, start, in_str, esc = [], 0, -1, False, False
@@ -329,6 +337,9 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         return
 
     objects = _extract_json_objects(clean)
+    if not objects:
+        # 中文引号当 JSON 引号用：掰回英文引号再试一次
+        objects = _extract_json_objects(_normalize_quotes(clean))
     if not objects:
         # 模型没按 JSON 输出（或报错）：按当前通道原样存一条，前端照常显示
         fallback_channel = PHONE_CHANNEL if not can_speak else channel

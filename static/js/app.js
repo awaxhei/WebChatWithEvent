@@ -560,7 +560,12 @@ class ChatManager {
             try {
                 obj = JSON.parse(trimmed);
             } catch (e) {
-                break;  // 还没收到完整对象
+                // 可能是中文引号，或者还没收到完整对象
+                try {
+                    obj = JSON.parse(this._normalizeQuotes(trimmed));
+                } catch (e2) {
+                    break;
+                }
             }
             this._renderJSONObject(obj);
             this._renderedObjects++;
@@ -597,27 +602,36 @@ class ChatManager {
         if (window.phonePanel) window.phonePanel.hideTyping();
     }
 
+    // 模型偶尔用中文引号当 JSON 引号（{“对白”：“……”}），掰回英文引号再解析
+    _normalizeQuotes(s) {
+        return (s || '').replace(/[“”]/g, '"');
+    }
+
     _extractJSONObjects(text) {
         const out = [];
-        let depth = 0, start = -1, inStr = false, esc = false;
-        for (let i = 0; i < text.length; i++) {
-            const ch = text[i];
-            if (inStr) {
-                if (esc) esc = false;
-                else if (ch === '\\') esc = true;
-                else if (ch === '"') inStr = false;
-                continue;
-            }
-            if (ch === '"') { inStr = true; continue; }
-            if (ch === '{') { if (depth === 0) start = i; depth++; }
-            else if (ch === '}') {
-                depth--;
-                if (depth === 0 && start >= 0) {
-                    try { out.push(JSON.parse(text.slice(start, i + 1))); } catch (e) { /* 忽略损坏片段 */ }
-                    start = -1;
+        const scan = (s) => {
+            let depth = 0, start = -1, inStr = false, esc = false;
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+                if (inStr) {
+                    if (esc) esc = false;
+                    else if (ch === '\\') esc = true;
+                    else if (ch === '"') inStr = false;
+                    continue;
+                }
+                if (ch === '"') { inStr = true; continue; }
+                if (ch === '{') { if (depth === 0) start = i; depth++; }
+                else if (ch === '}') {
+                    depth--;
+                    if (depth === 0 && start >= 0) {
+                        try { out.push(JSON.parse(s.slice(start, i + 1))); } catch (e) { /* 忽略损坏片段 */ }
+                        start = -1;
+                    }
                 }
             }
-        }
+        };
+        scan(text);
+        if (out.length === 0) scan(this._normalizeQuotes(text));   // 中文引号的退化写法
         return out;
     }
 
