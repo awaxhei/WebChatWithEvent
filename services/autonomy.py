@@ -26,10 +26,9 @@ from config import (
     AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
     AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
     AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
-    AUTONOMY_SPEAK_WAIT_SECONDS, AUTONOMY_PHONE_WAIT_SECONDS,
-    AUTONOMY_WAIT_MIN_SECONDS, AUTONOMY_WAIT_MAX_SECONDS,
-    AUTONOMY_WAIT_LATENCY_MULTIPLIER, AUTONOMY_WAIT_QUESTION_FACTOR,
-    AUTONOMY_WAIT_BACKOFF_STEP, AUTONOMY_WAIT_BACKOFF_CAP,
+    AUTONOMY_WAIT_FIRST_SECONDS, AUTONOMY_WAIT_GROWTH,
+    AUTONOMY_WAIT_MAX_SECONDS, AUTONOMY_WAIT_PHONE_FACTOR,
+    AUTONOMY_WAIT_QUESTION_FACTOR,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -201,36 +200,33 @@ def _asked_question(db, conv_id):
 def _wait_seconds_needed(db, conv_id):
     """她说完话之后，该等玩家多久才能再自己动。
 
-    动态计算，而不是固定秒数：
-    - 底层：玩家平时的回复间隔（指数滑动平均）× 倍率，落在 [MIN, MAX]
-    - 她刚问了一句 → 再乘一个系数（问到点上了，值得多等）
-    - 她已经连着输出过几次而你还没回 → 逐步拉长，别一直催
-    - 动过手又补过话 → 更长的一档，把话筒彻底交回去
-    - 刚动完手还没说话 → 最短（允许马上补一句）
+    递增式等待：你刚说完话的那一小段时间里，她最容易被允许动（等得短）；
+    她每自主做一件事，下一段的等待就翻一档，越来越长，直到你开口。
+
+        等待 = FIRST × GROWTH^n     （n = 你上次说话之后她已经自主输出的次数）
+
+    另外两个小修正：
+    - 手机消息的第一段稍微长一点（你得先看到红点、打开手机）
+    - 她刚问了你一句 → 整段乘一个系数（问到点上了，值得多等）
+    - 刚动完手还没说话 → 允许她马上补一句（这是交互感的关键）
     """
     at, channel = db.get_last_yuxia(conv_id)
     if not at:
         return (0, 0.0)
 
-    base = AUTONOMY_PHONE_WAIT_SECONDS if channel == "phone" else AUTONOMY_SPEAK_WAIT_SECONDS
-    latency = db.get_reply_latency(conv_id)
-    if latency > 0:
-        base = latency * AUTONOMY_WAIT_LATENCY_MULTIPLIER
+    # 刚动完手、还没开口：允许她马上补一句
     if channel == "act":
         return (AUTONOMY_MIN_INTERVAL_SECONDS, at)
 
+    done = len(_autonomy_after_last_user(db, conv_id))
+    base = AUTONOMY_WAIT_FIRST_SECONDS * (AUTONOMY_WAIT_GROWTH ** done)
+
+    if channel == "phone" and done == 0:
+        base *= AUTONOMY_WAIT_PHONE_FACTOR
     if _asked_question(db, conv_id):
         base *= AUTONOMY_WAIT_QUESTION_FACTOR
 
-    recent = _autonomy_after_last_user(db, conv_id)
-    unfinished_act = any(t.get("action") == "act" for t in recent)
-    if unfinished_act and recent[-1].get("action") != "act":
-        # 做完事又说了话：这一档更长，把话筒彻底交回去
-        base = min(base * 3, AUTONOMY_AFTER_ACT_GRACE_SECONDS)
-    elif len(recent) >= 2:
-        base *= min(AUTONOMY_WAIT_BACKOFF_STEP ** (len(recent) - 1), AUTONOMY_WAIT_BACKOFF_CAP)
-
-    base = max(AUTONOMY_WAIT_MIN_SECONDS, min(base, AUTONOMY_WAIT_MAX_SECONDS))
+    base = max(AUTONOMY_WAIT_FIRST_SECONDS, min(base, AUTONOMY_WAIT_MAX_SECONDS))
     return (int(round(base)), at)
 
 

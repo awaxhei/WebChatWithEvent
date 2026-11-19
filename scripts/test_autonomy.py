@@ -218,62 +218,53 @@ def main():
           autonomy.maybe_act(db, conv17, eager, 601, "x", idle=True) is None)
     check("等待期间不调用模型", eager.calls == 0, f"calls={eager.calls}")
 
-    # 18) 等够了（超过 AUTONOMY_SPEAK_WAIT_SECONDS）才开始动
-    db.set_last_yuxia_at(conv17, time.time() - autonomy.AUTONOMY_SPEAK_WAIT_SECONDS - 2, "chat")
+    # 18) 等够了（超过第一段等待）才开始动
+    db.set_last_yuxia_at(conv17, time.time() - autonomy.AUTONOMY_WAIT_FIRST_SECONDS - 2, "chat")
     check("等不及了才行动", bool(autonomy.maybe_act(db, conv17, eager, 603, "x", idle=True)))
 
-    # 19) 手机消息同样要等（等待时长取 AUTONOMY_PHONE_WAIT_SECONDS）
+    # 19) 递增式等待：每自主做一件事，下一段就翻一档
     conv19 = fresh()
-    db.set_story_minutes(conv19, 600)
     db.set_last_user_at(conv19, time.time() - 60)
-    db.set_last_yuxia_at(conv19, time.time() - 5, "phone")
-    phone_wait = StubLLM('{"action": "act", "text": "把灯关了", "location": ""}')
-    check("手机消息也要等",
-          autonomy.maybe_act(db, conv19, phone_wait, 601, "x", idle=True) is None)
-    db.set_last_yuxia_at(conv19, time.time() - autonomy.AUTONOMY_PHONE_WAIT_SECONDS - 2, "phone")
-    check("手机消息等够了才行动",
-          bool(autonomy.maybe_act(db, conv19, phone_wait, 603, "x", idle=True)))
-    check("默认等待时长两通道一致",
-          autonomy.AUTONOMY_PHONE_WAIT_SECONDS == autonomy.AUTONOMY_SPEAK_WAIT_SECONDS,
-          f"{autonomy.AUTONOMY_PHONE_WAIT_SECONDS} vs {autonomy.AUTONOMY_SPEAK_WAIT_SECONDS}")
+    waits19 = []
+    for i in range(5):
+        db.set_last_yuxia_at(conv19, time.time(), "chat")
+        waits19.append(autonomy._wait_seconds_needed(db, conv19)[0])
+        db.push_autonomy(conv19, {"action": "speak", "text": f"第{i}句",
+                                  "at": time.time(), "at_minutes": 600})
+    check("第一次等待最短", waits19[0] == autonomy.AUTONOMY_WAIT_FIRST_SECONDS, str(waits19))
+    check("等待逐次变长", waits19 == sorted(waits19) and waits19[-1] > waits19[0], str(waits19))
+    check("等待有封顶",
+          waits19[-1] <= autonomy.AUTONOMY_WAIT_MAX_SECONDS, str(waits19))
 
-    # 19b) 动态等待：按玩家平时的回复速度自适应
+    # 19b) 发手机消息的第一段更久（要先看到红点、打开手机）
     conv19b = fresh()
     db.set_last_user_at(conv19b, time.time() - 60)
     db.set_last_yuxia_at(conv19b, time.time(), "chat")
-    db.update_reply_latency(conv19b, 8)
-    wait_fast, _ = autonomy._wait_seconds_needed(db, conv19b)
-    db.update_reply_latency(conv19b, 40)
-    wait_slow, _ = autonomy._wait_seconds_needed(db, conv19b)
-    check("回得快的玩家等得短", wait_fast < wait_slow, f"{wait_fast} vs {wait_slow}")
-    check("等待落在可配置区间内",
-          autonomy.AUTONOMY_WAIT_MIN_SECONDS <= wait_fast <= autonomy.AUTONOMY_WAIT_MAX_SECONDS,
-          str(wait_fast))
+    wait_chat, _ = autonomy._wait_seconds_needed(db, conv19b)
+    db.set_last_yuxia_at(conv19b, time.time(), "phone")
+    wait_phone, _ = autonomy._wait_seconds_needed(db, conv19b)
+    check("手机消息的第一段更长", wait_phone > wait_chat, f"{wait_phone} vs {wait_chat}")
 
     # 19c) 她刚问了一句 → 多等一会
     conv19c = fresh()
     db.set_last_user_at(conv19c, time.time() - 60)
     db.add_message(conv19c, "assistant", '{"对白": "……你要不要先吃？"}', channel="chat")
     db.set_last_yuxia_at(conv19c, time.time(), "chat")
-    db.update_reply_latency(conv19c, 20)
     wait_q, _ = autonomy._wait_seconds_needed(db, conv19c)
-    db.add_message(conv19c, "assistant", '{"对白": "……嗯。"}', channel="chat")
-    wait_stmt, _ = autonomy._wait_seconds_needed(db, conv19c)
+    conv19q = fresh()
+    db.set_last_user_at(conv19q, time.time() - 60)
+    db.add_message(conv19q, "assistant", '{"对白": "……嗯。"}', channel="chat")
+    db.set_last_yuxia_at(conv19q, time.time(), "chat")
+    wait_stmt, _ = autonomy._wait_seconds_needed(db, conv19q)
     check("问了问题会等更久", wait_q > wait_stmt, f"{wait_q} vs {wait_stmt}")
 
-    # 19d) 连着输出几次还没回音 → 等待逐步拉长
+    # 19d) 刚动完手还没说话 → 允许马上补一句
     conv19d = fresh()
     db.set_last_user_at(conv19d, time.time() - 60)
-    db.set_last_yuxia_at(conv19d, time.time(), "chat")
-    db.update_reply_latency(conv19d, 20)
-    base_wait, _ = autonomy._wait_seconds_needed(db, conv19d)
-    for i in range(3):
-        db.push_autonomy(conv19d, {"action": "speak", "text": f"第{i}句",
-                                   "at": time.time() - 10 + i, "at_minutes": 600})
-    backed_off, _ = autonomy._wait_seconds_needed(db, conv19d)
-    check("没回音时等待会拉长", backed_off > base_wait, f"{backed_off} vs {base_wait}")
-    check("拉长有上限",
-          backed_off <= autonomy.AUTONOMY_WAIT_MAX_SECONDS, str(backed_off))
+    db.set_last_yuxia_at(conv19d, time.time(), "act")
+    wait_act, _ = autonomy._wait_seconds_needed(db, conv19d)
+    check("动作之后允许马上补一句",
+          wait_act == autonomy.AUTONOMY_MIN_INTERVAL_SECONDS, str(wait_act))
 
     # 20) 她答应了"来了"，就允许在等待期里跟过去（不然只会嘴上答应）
     conv20 = fresh()
