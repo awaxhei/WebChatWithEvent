@@ -132,6 +132,7 @@ class ChatManager {
         this.sceneCard = document.getElementById('sceneCard');
         this.welcomeEl = document.querySelector('.welcome-message');
         this._bindEvents();
+        this._initTimeDial();
     }
     _bindEvents() {
         this.btnSend.addEventListener('click', () => this.sendMessage());
@@ -202,6 +203,139 @@ class ChatManager {
         }
     }
 
+    // ── 时间调节：24 小时表盘，顶端 06:00、右 12:00、下 18:00、左 00:00 ──
+    _initTimeDial() {
+        this.btnTime = document.getElementById('btnTime');
+        this.timeOverlay = document.getElementById('timeOverlay');
+        this.timeCurrent = document.getElementById('timeCurrent');
+        this.timeTarget = document.getElementById('timeTarget');
+        this.dial = document.getElementById('timeDial');
+        this.hand = document.getElementById('dialHand');
+        this.knob = document.getElementById('dialKnob');
+        this.dialMinutes = 12 * 60;
+        this.storyMinutes = 0;
+        if (!this.timeOverlay) return;
+        this._buildDialTicks();
+        if (this.btnTime) this.btnTime.addEventListener('click', (e) => { e.stopPropagation(); this.openTimeDial(); });
+        const cancel = document.getElementById('timeCancel');
+        if (cancel) cancel.addEventListener('click', () => this._closeTimeDial());
+        const confirm = document.getElementById('timeConfirm');
+        if (confirm) confirm.addEventListener('click', () => this.confirmTimeDial());
+        const presets = document.getElementById('timePresets');
+        if (presets) {
+            presets.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-h]');
+                if (!btn) return;
+                this._setDialMinutes(parseInt(btn.dataset.h, 10) * 60);
+            });
+        }
+        let dragging = false;
+        const onMove = (ev) => {
+            if (!dragging) return;
+            const rect = this.dial.getBoundingClientRect();
+            const dx = ev.clientX - (rect.left + rect.width / 2);
+            const dy = ev.clientY - (rect.top + rect.height / 2);
+            if (!dx && !dy) return;
+            const deg = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+            let m = ((deg / 360) * 1440 + 360) % 1440;
+            m = Math.round(m / 5) * 5 % 1440;
+            this._setDialMinutes(m);
+            ev.preventDefault();
+        };
+        const onUp = () => {
+            dragging = false;
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        };
+        this.dial.addEventListener('pointerdown', (ev) => {
+            dragging = true;
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+            onMove(ev);
+            ev.preventDefault();
+        });
+    }
+    _buildDialTicks() {
+        const g = document.getElementById('dialTicks');
+        if (!g) return;
+        let html = '';
+        for (let i = 0; i < 24; i++) {
+            const deg = (i / 24) * 360;
+            const rad = deg * Math.PI / 180;
+            const major = i % 6 === 0;
+            const r1 = 88, r2 = major ? 74 : 80;
+            const x1 = 110 + r1 * Math.sin(rad), y1 = 110 - r1 * Math.cos(rad);
+            const x2 = 110 + r2 * Math.sin(rad), y2 = 110 - r2 * Math.cos(rad);
+            html += `<line class="dial-tick${major ? ' major' : ''}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
+            if (major) {
+                const lx = 110 + 62 * Math.sin(rad), ly = 110 - 62 * Math.cos(rad) + 3;
+                html += `<text class="dial-tick-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle">${String(i).padStart(2, '0')}</text>`;
+            }
+        }
+        g.innerHTML = html;
+    }
+    _dialAngle(minutes) {
+        return (((minutes - 360) / 1440) * 360 + 360) % 360;
+    }
+    _setDialMinutes(m) {
+        this.dialMinutes = ((m % 1440) + 1440) % 1440;
+        const deg = this._dialAngle(this.dialMinutes);
+        const rad = deg * Math.PI / 180;
+        const x = 110 + 88 * Math.sin(rad);
+        const y = 110 - 88 * Math.cos(rad);
+        if (this.hand) { this.hand.setAttribute('x2', x.toFixed(1)); this.hand.setAttribute('y2', y.toFixed(1)); }
+        if (this.knob) { this.knob.setAttribute('cx', x.toFixed(1)); this.knob.setAttribute('cy', y.toFixed(1)); }
+        const clock = this._fmtClock(this.dialMinutes);
+        const dayOffset = this._dialDayOffset();
+        const day = Math.floor(this.storyMinutes / 1440) + 1 + dayOffset;
+        if (this.timeTarget) this.timeTarget.textContent = `目标：第${day}天 ${clock}`;
+    }
+    _fmtClock(m) {
+        const hh = Math.floor(m / 60) % 24, mm = m % 60;
+        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+    _dialDayOffset() {
+        const nowOfDay = this.storyMinutes % 1440;
+        return this.dialMinutes <= nowOfDay ? 1 : 0;
+    }
+    async openTimeDial() {
+        if (!this.timeOverlay) return;
+        if (!this.currentConvId) {
+            await this.ensureConversation();
+            await this.loadScene();
+        }
+        if (!this.currentConvId) return;
+        this.timeOverlay.classList.remove('hidden');
+        if (this.timeCurrent) {
+            const day = Math.floor(this.storyMinutes / 1440) + 1;
+            this.timeCurrent.textContent = `现在 第${day}天 ${this._fmtClock(this.storyMinutes % 1440)}`;
+        }
+        const nowOfDay = Math.floor((this.storyMinutes % 1440) / 5) * 5;
+        this._setDialMinutes((nowOfDay + 60) % 1440);
+    }
+    _closeTimeDial() {
+        if (this.timeOverlay) this.timeOverlay.classList.add('hidden');
+    }
+    async confirmTimeDial() {
+        if (!this.currentConvId) return;
+        const hour = Math.floor(this.dialMinutes / 60);
+        const minute = this.dialMinutes % 60;
+        try {
+            const res = await authFetch(`/api/time/${this.currentConvId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hour, minute }),
+            });
+            if (!res.ok) return;
+            const scene = await res.json();
+            this.applyScene(scene);
+            if (scene.from && scene.to) {
+                this._addWorldNarration(`时间流转：${scene.from} → ${scene.to}`, 'low');
+            }
+            this._closeTimeDial();
+        } catch (e) {}
+    }
+
     _updatePlaceholder() {
         this.inputEl.placeholder = this.coLocated ? '跟尤夏说点什么...' : '不在同一个地方，发消息给她...';
     }
@@ -220,6 +354,7 @@ class ChatManager {
     applyScene(scene) {
         if (!scene) return;
         this.coLocated = !!scene.co_located;
+        if (typeof scene.story_minutes === 'number') this.storyMinutes = scene.story_minutes;
         if (typeof scene.paused === 'boolean' && scene.paused !== this.paused) {
             this._setPaused(scene.paused);
         }

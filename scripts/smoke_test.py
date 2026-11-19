@@ -184,6 +184,25 @@ def main():
 
         r = c2.get(f"/api/scene/{conv_new}")
         check("越权读场景被拒绝 (404)", r.status_code == 404, f"got {r.status_code}")
+
+        # 时间调节（前端拨表盘）
+        before = app_db.get_story_minutes(conv_new)
+        r = c1.post(f"/api/time/{conv_new}", json={"hour": 21, "minute": 30})
+        moved = r.get_json() or {}
+        check("时间可以拨到晚上",
+              r.status_code == 200 and moved.get("story_minutes", 0) > before,
+              f"{r.status_code} {moved.get('story_minutes')}")
+        check("返回前后时间点", bool(moved.get("from")) and bool(moved.get("to")),
+              f"{moved.get('from')} -> {moved.get('to')}")
+        check("拨完落库",
+              app_db.get_story_minutes(conv_new) == moved.get("story_minutes"),
+              str(app_db.get_story_minutes(conv_new)))
+        events_now = app_db.get_recent_events(conv_new, limit=5)
+        check("写入 time_advance 事件",
+              any(e["event_type"] == "time_advance" for e in events_now),
+              str([e["event_type"] for e in events_now]))
+        r = c1.post(f"/api/time/{conv_new}", json={"minutes": 10})
+        check("不能往回拨 (400)", r.status_code == 400, str(r.status_code))
     finally:
         chat_mod.deepseek = real_deepseek
 

@@ -222,6 +222,46 @@ html, body {
 }
 .message-bubble:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 
+/* ============================================================
+   时间调节（拨表盘）
+   ============================================================ */
+.time-overlay {
+    position: fixed; inset: 0; z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.35);
+}
+.time-overlay.hidden { display: none; }
+.time-box {
+    width: 320px; padding: 18px 20px 16px;
+    background: var(--bg-secondary); border-radius: 20px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    animation: fadeInUp 0.25s ease-out;
+}
+.time-title { font-size: 14px; font-weight: 700; color: var(--text-primary); letter-spacing: 1px; }
+.time-current { font-size: 12px; color: var(--text-muted); }
+.time-dial { width: 220px; height: 220px; touch-action: none; cursor: grab; }
+.time-dial:active { cursor: grabbing; }
+.dial-day { fill: rgba(251, 191, 36, 0.16); }
+.dial-night { fill: rgba(51, 65, 85, 0.14); }
+.dial-ring { fill: none; stroke: var(--border); stroke-width: 1.5; }
+.dial-tick { stroke: var(--border); stroke-width: 1; }
+.dial-tick.major { stroke: var(--text-muted); stroke-width: 1.6; }
+.dial-tick-label { font-size: 9px; fill: var(--text-muted); }
+.dial-hand { stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; }
+.dial-knob { fill: var(--accent); filter: drop-shadow(0 2px 4px rgba(99,102,241,0.45)); }
+.dial-center { fill: var(--accent); }
+.time-target { font-size: 13px; color: var(--accent); font-weight: 600; }
+.time-presets { display: flex; gap: 6px; }
+.time-presets button {
+    padding: 5px 10px; font-size: 12px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    transition: border-color var(--transition), color var(--transition);
+}
+.time-presets button:hover { border-color: var(--accent); color: var(--accent); }
+.time-actions { display: flex; gap: 8px; margin-top: 2px; }
+
 /* NPC 气泡：带名字，颜色更淡，和尤夏区分开 */
 .npc-bubble {
     background: rgba(148, 163, 184, 0.12) !important;

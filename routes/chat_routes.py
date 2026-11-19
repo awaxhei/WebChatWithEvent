@@ -135,6 +135,7 @@ def _scene_payload(conv_id, api_key):
                              deepseek, api_key=api_key)
     view["locations"] = locations.list_names(db, conv_id)
     view["story_time"] = clock.format_time(now)
+    view["story_minutes"] = now
     view["unread"] = db.get_phone_unread(conv_id)
     view["paused"] = db.is_paused(conv_id)
     # 现场有谁（NPC），前端可以显示"在场：老板"
@@ -500,6 +501,73 @@ def dismiss_npc(conv_id, npc_id):
         return jsonify({"error": "NPC 不存在"}), 404
     db.set_npc_status(npc_id, "gone")
     return jsonify({"success": True, "npcs": db.get_npcs(conv_id)})
+
+
+@chat_bp.route("/api/time/<conv_id>", methods=["POST"])
+@require_auth
+def adjust_time(conv_id):
+    """手动拨时间（前端像原神那样拖表盘）。
+
+    只允许往前走：给的是"几点几分"，就取今天或明天最近的那一次；
+    也可以直接给 minutes（绝对分钟数）。拨完记一条 time_advance 事件，
+    尤夏下一轮就能从「最近发生的事」里看到天色变了。
+    """
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    now = time_keeper.init_clock(db, conv_id)
+    day_start = (now // 1440) * 1440
+
+    target = None
+    if data.get("minutes") is not None:
+        try:
+            target = int(data["minutes"])
+        except (TypeError, ValueError):
+            target = None
+    elif data.get("hour") is not None:
+        try:
+            hour = max(0, min(23, int(data.get("hour"))))
+            minute = max(0, min(59, int(data.get("minute") or 0)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "时间格式不对"}), 400
+        target = day_start + hour * 60 + minute
+        if target <= now:          # 只往前走：今天这个点已经过了就顺延到明天
+            target += 1440
+    if target is None:
+        return jsonify({"error": "缺少时间"}), 400
+
+    # 上限：一次最多拨三天，避免不小心滑到很远的未来
+    if target <= now:
+        return jsonify({"error": "时间只能往后拨"}), 400
+    if target - now > 3 * 1440:
+        return jsonify({"error": "一次最多往后拨三天"}), 400
+
+    before = clock.format_time(now)
+    db.set_story_minutes(conv_id, target)
+    after = clock.format_time(target)
+    db.add_event(conv_id, "time_advance", f"时间被拨到了{after}",
+                 f"青梅把时间从{before}拨到了{after}。", "active",
+                 story_time=after)
+
+    # 新的时段要有对应的环境描写
+    try:
+        yuxia_loc = db.get_current_location(conv_id)
+        player_loc = db.get_player_location(conv_id)
+        scenes.ensure_description(db, conv_id, yuxia_loc, target, deepseek,
+                                  request_api_key(), background=True)
+        if player_loc != yuxia_loc:
+            scenes.ensure_description(db, conv_id, player_loc, target, deepseek,
+                                      request_api_key(), background=True)
+    except Exception as e:
+        print(f"[时间] 场景预热失败: {e}")
+
+    payload = _scene_payload(conv_id, request_api_key())
+    payload["delta_minutes"] = target - now
+    payload["from"] = before
+    payload["to"] = after
+    return jsonify(payload)
 
 
 @chat_bp.route("/api/pause/<conv_id>", methods=["POST"])

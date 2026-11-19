@@ -118,6 +118,12 @@
         <main class="chat-main">
             <!-- 右上角工具条：常驻在标题栏，不会压住聊天内容 -->
             <div class="chat-tools">
+                <button class="chat-tool" id="btnTime" title="调整时间">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="8.5"/>
+                        <polyline points="12 7 12 12 15.5 14"/>
+                    </svg>
+                </button>
                 <button class="chat-tool" id="btnPause" title="暂停自动推进" aria-pressed="false">
                     <svg class="icon-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <rect x="6.5" y="5" width="4" height="14" rx="1.4"/>
@@ -195,6 +201,34 @@
             </div>
         </aside>
 
+    </div>
+
+    <!-- 时间调节（像原神那样拨表盘） -->
+    <div class="time-overlay hidden" id="timeOverlay">
+        <div class="time-box">
+            <div class="time-title">调整时间</div>
+            <div class="time-current" id="timeCurrent">现在 第一天 07:16</div>
+            <svg class="time-dial" id="timeDial" viewBox="0 0 220 220">
+                <path class="dial-day" d="M110,22 A88,88 0 0 1 110,198 Z"/>
+                <path class="dial-night" d="M110,198 A88,88 0 0 1 110,22 Z"/>
+                <circle class="dial-ring" cx="110" cy="110" r="88"/>
+                <g id="dialTicks"></g>
+                <line class="dial-hand" id="dialHand" x1="110" y1="110" x2="110" y2="30"/>
+                <circle class="dial-knob" id="dialKnob" cx="110" cy="30" r="10"/>
+                <circle class="dial-center" cx="110" cy="110" r="4"/>
+            </svg>
+            <div class="time-target" id="timeTarget">目标：第一天 12:00</div>
+            <div class="time-presets" id="timePresets">
+                <button type="button" data-h="6">清晨</button>
+                <button type="button" data-h="12">正午</button>
+                <button type="button" data-h="18">黄昏</button>
+                <button type="button" data-h="23">深夜</button>
+            </div>
+            <div class="time-actions">
+                <button class="btn-settings" id="timeCancel">取消</button>
+                <button class="btn-settings primary" id="timeConfirm">拨到这时候</button>
+            </div>
+        </div>
     </div>
 
     <!-- 手机面板：可拖动、可缩放的浮动窗口，背景不遮不糊 -->
