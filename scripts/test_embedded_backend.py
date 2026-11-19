@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import struct
 import sys
 import tempfile
@@ -79,6 +80,32 @@ def call(base, path, token="", data=None, ctype=None, method=None):
 
 
 def main():
+    # ── 0) APK 里装的是 config_template（拷成 config.py）
+    # 单独用一个干净进程验证它能把后端带起来：漏了 ROOT 这类定义会在这里炸
+    sim_root = os.path.join(ROOT, ".testtmp", "apk_sim_" + uuid.uuid4().hex[:6])
+    os.makedirs(os.path.join(sim_root, "data"), exist_ok=True)
+    os.makedirs(os.path.join(sim_root, "static", "stickers"), exist_ok=True)
+    shutil.copy(os.path.join(ROOT, "yuxia_prompt.txt"),
+                os.path.join(sim_root, "yuxia_prompt.txt"))
+    sim_code = (
+        "import os, sys\n"
+        f"root = {sim_root!r}\n"
+        "os.environ['YUXIA_ROOT'] = root\n"
+        "os.environ['YUXIA_DB_PATH'] = os.path.join(root, 'data', 'chat.db')\n"
+        "os.environ['YUXIA_MOBILE'] = '1'\n"
+        f"sys.path.insert(0, {ROOT!r})\n"
+        "import config_template as config\n"
+        "sys.modules['config'] = config\n"
+        "import app\n"
+        "print('OK', config.ROOT == root)\n"
+    )
+    sim = subprocess.run([sys.executable, "-c", sim_code],
+                         capture_output=True, text=True, timeout=180)
+    sim_out = (sim.stdout or "") + (sim.stderr or "")
+    check("APK 用的 config 模板能独立启动后端",
+          sim.returncode == 0 and "OK True" in sim_out, sim_out[-400:])
+    shutil.rmtree(sim_root, ignore_errors=True)
+
     app_root = tempfile.mkdtemp(prefix="yuxia_mobile_")
     port = free_port()
     base = f"http://127.0.0.1:{port}"

@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @Composable
 fun AppRoot(vm: ChatViewModel) {
@@ -69,14 +71,25 @@ fun BootScreen(state: UiState, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
             if (state.error.isNullOrBlank()) {
+                var seconds by remember { mutableStateOf(0) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        delay(1000)
+                        seconds += 1
+                    }
+                }
                 CircularProgressIndicator(Modifier.size(28.dp))
                 Spacer(Modifier.height(14.dp))
-                Text("正在启动本机服务…", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "正在启动本机服务…" + if (seconds > 0) "（${seconds}s）" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "第一次启动要解压 Python 运行时，稍等一下",
+                    "第一次启动要解压 Python 运行时，会慢一些；之后打开就快了",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                 )
             } else {
                 Text(

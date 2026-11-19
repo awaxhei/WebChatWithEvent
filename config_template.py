@@ -8,6 +8,10 @@ import hashlib
 import secrets
 
 # 角色名称（显示在网页顶部）
+# 资源根目录。
+# 电脑上跑 Flask 时就是项目目录；打进 APK 由 Kotlin 内嵌运行时，
+# 由 mobile_boot 通过环境变量指到应用私有存储（SQLite / 表情包 / 提示词都在那儿）。
+ROOT = os.environ.get("YUXIA_ROOT") or os.path.dirname(os.path.abspath(__file__))
 CHARACTER_NAME = "尤夏"
 
 # 故事默认初始时间（前端事件面板的首屏显示；真正的时钟由 core/clock.py 维护）

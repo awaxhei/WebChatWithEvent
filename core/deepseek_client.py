@@ -8,13 +8,21 @@ DeepSeekClient: DeepSeek API 流式/同步调用封装
 """
 import json
 
-import requests
-
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT,
 )
 
 DEEPSEEK_BASE = "https://api.deepseek.com/v1/chat/completions"
+
+
+def _requests():
+    """延迟导入 requests。
+
+    它是最重的第三方依赖（本地约 0.6 秒，手机上更久），而 App 启动时只用得到
+    "起服务 + 签 token"，第一次真正调模型时再导入，冷启动能快一截。
+    """
+    import requests
+    return requests
 
 
 class DeepSeekClient:
@@ -61,6 +69,7 @@ class DeepSeekClient:
             yield "请在 config.py 中设置 DEEPSEEK_API_KEY"
             return
         hdrs = self._headers(api_key_override)
+        requests = _requests()
         try:
             resp = requests.post(self.base_url, json=payload, headers=hdrs, stream=True, timeout=120)
             resp.raise_for_status()
@@ -98,6 +107,7 @@ class DeepSeekClient:
         if not key:
             return "[请在 config.py 中设置 DEEPSEEK_API_KEY]"
         hdrs = self._headers(api_key_override)
+        requests = _requests()
         try:
             resp = requests.post(self.base_url, json=payload, headers=hdrs, timeout=120)
             resp.raise_for_status()

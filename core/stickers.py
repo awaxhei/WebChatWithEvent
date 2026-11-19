@@ -17,8 +17,6 @@ import random
 import re
 import urllib.parse
 
-import requests
-
 import core.textvec as tv
 from config import (
     STICKER_DIR, STICKER_EXTENSIONS, STICKER_UPLOAD_SUBDIR,
@@ -155,6 +153,7 @@ def _parse_tag_json(raw):
 
 def vision_tag(abs_path, api_key=None):
     """调用多模态模型给单张图片打标，失败返回 None"""
+    import requests      # 延迟导入：App 冷启动时用不到，等真要打标再加载
     ext = os.path.splitext(abs_path)[1].lower()
     mime = MIME.get(ext, "image/png")
     try:

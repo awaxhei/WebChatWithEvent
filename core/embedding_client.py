@@ -5,7 +5,12 @@ EmbeddingClient: 文本转向量
 兜底：无嵌入时返回 None，RAG 自动降级跳过
 """
 import json
-import requests
+
+
+def _requests():
+    """延迟导入：默认 EMBEDDING_ENABLED=False 时根本用不到，别拖慢启动"""
+    import requests
+    return requests
 
 
 class EmbeddingClient:
@@ -21,7 +26,7 @@ class EmbeddingClient:
     def _check_ollama(self):
         """检测 Ollama 是否可用"""
         try:
-            resp = requests.get("http://localhost:11434/api/tags", timeout=3)
+            resp = _requests().get("http://localhost:11434/api/tags", timeout=3)
             return resp.status_code == 200
         except Exception:
             return False
@@ -65,7 +70,7 @@ class EmbeddingClient:
 
     def _embed_ollama(self, text):
         try:
-            resp = requests.post(
+            resp = _requests().post(
                 self._ollama_url,
                 json={"model": self._ollama_model, "prompt": text},
                 timeout=10,
