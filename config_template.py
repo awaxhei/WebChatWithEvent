@@ -256,6 +256,11 @@ VISION_PROMPT = (
 # 单次启动最多打标多少张（避免一次性消耗太多额度）
 VISION_MAX_PER_RUN = 200
 
+# 手机相册多选上传（一键导入）
+STICKER_UPLOAD_SUBDIR = "upload"       # 落在 static/stickers/upload/ 下
+STICKER_UPLOAD_MAX_FILES = 60          # 一次最多收几张
+STICKER_UPLOAD_MAX_MB = 8              # 单张上限（MB）
+
 # ============================================================
 # AI C 触发策略：每 N 轮对话自动运行一次
 # ============================================================

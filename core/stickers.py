@@ -10,6 +10,7 @@
    都不匹配时随机兜底（和 QQ 机器人的做法一致）
 """
 import base64
+import hashlib
 import json
 import os
 import random
@@ -20,7 +21,8 @@ import requests
 
 import core.textvec as tv
 from config import (
-    STICKER_DIR, STICKER_EXTENSIONS,
+    STICKER_DIR, STICKER_EXTENSIONS, STICKER_UPLOAD_SUBDIR,
+    STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
     VISION_ENABLED, VISION_BASE_URL, VISION_MODEL, VISION_PROMPT, VISION_DETAIL,
     VISION_MAX_PER_RUN, DEEPSEEK_THINKING, DEEPSEEK_REASONING_EFFORT,
 )
@@ -308,3 +310,95 @@ def list_emotions(db):
     """给前端/prompt 用的情绪清单"""
     names = db.get_sticker_emotions()
     return [n for n in names if n]
+
+
+# ── 手机相册多选导入 ──────────────────────────────────
+
+def _detect_image_ext(data):
+    """按文件头判断真实格式（不信客户端给的扩展名）"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def save_uploads(db, batch, api_key=None, max_files=None, max_mb=None):
+    """把一批上传的图片落盘、入库、顺手打标。
+
+    batch: [(filename, bytes)]
+    文件名用内容 md5，同图重复上传自然去重；
+    """
+    folder = os.path.join(STICKER_DIR, STICKER_UPLOAD_SUBDIR)
+    os.makedirs(folder, exist_ok=True)
+    limit_bytes = int((max_mb or STICKER_UPLOAD_MAX_MB) * 1024 * 1024)
+    max_files = max_files or STICKER_UPLOAD_MAX_FILES
+
+    uploaded, duplicates, rejected = [], 0, []
+    for name, data in batch[:max_files]:
+        ext = _detect_image_ext(data or b"")
+        if not ext:
+            rejected.append({"name": name, "reason": "不是图片"})
+            continue
+        if len(data) > limit_bytes:
+            rejected.append({"name": name, "reason": "文件太大"})
+            continue
+        rel = f"{STICKER_UPLOAD_SUBDIR}/{hashlib.md5(data).hexdigest()}{ext}"
+        abs_path = os.path.join(STICKER_DIR, rel.replace("/", os.sep))
+        if os.path.exists(abs_path):
+            duplicates += 1
+            continue
+        try:
+            with open(abs_path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            rejected.append({"name": name, "reason": f"写入失败: {e}"})
+            continue
+        uploaded.append(rel)
+
+    if batch[max_files:]:
+        rejected.extend({"name": n, "reason": "超出单次上限"} for n, _ in batch[max_files:])
+
+    refresh(db)
+    tagged = auto_tag_all(db, api_key=api_key, limit=max(len(uploaded), 1)) if uploaded else 0
+    return {
+        "uploaded": uploaded,
+        "uploaded_count": len(uploaded),
+        "duplicates": duplicates,
+        "rejected": rejected,
+        "tagged": tagged,
+        "pending": len(db.get_untagged_stickers(limit=1000)),
+        "total": db.count_stickers(),
+    }
+
+
+def list_for_picker(db, limit=300, offset=0, emotion=None):
+    """选择面板用的列表：新的在前，带可直接放进 <img> 的 url"""
+    rows = db.get_all_stickers()
+    if emotion:
+        rows = [r for r in rows if (r.get("emotion") or "").strip() == emotion]
+    rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)
+    items = [{
+        "path": r["path"],
+        "url": url_for(r["path"]),
+        "emotion": r.get("emotion") or "",
+        "tags": r.get("tags") or "",
+        "caption": r.get("caption") or "",
+    } for r in rows[offset:offset + limit]]
+    return {"total": len(rows), "items": items, "emotions": list_emotions(db)}
+
+
+def describe(db, rel_path):
+    """一句话说明这张表情包是什么（喂给她的上下文用）"""
+    row = db.get_sticker(rel_path) if rel_path else None
+    if not row:
+        return ""
+    for key in ("caption", "emotion", "tags"):
+        value = (row.get(key) or "").strip()
+        if value:
+            return value
+    return "一张表情包"

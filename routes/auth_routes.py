@@ -26,7 +26,8 @@ def auth_login():
     if pw_hash != user["password"]:
         return jsonify({"success": False, "error": "密码错误"}), 401
     token = generate_token(user["id"], remember=remember)
-    resp = jsonify({"success": True, "username": user["username"]})
+    resp = jsonify({"success": True, "username": user["username"],
+                    "user_id": user["id"], "token": token})
     max_age = JWT_EXPIRE_DAYS * 86400 if remember else 86400
     resp.set_cookie("auth_token", token, httponly=True, max_age=max_age, samesite="Lax")
     return resp

@@ -3,7 +3,7 @@ AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
 import os, socket, subprocess, sys, threading
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 from config import (
     PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION,
@@ -66,6 +66,26 @@ def service_worker():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/app.apk")
+def android_apk():
+    """手机直接下载原生 App。
+
+    APK 由 scripts/build_apk.ps1 构建并拷到 static/download/yuxia.apk；
+    这里显式给 Android 的 MIME，浏览器才会直接进安装流程而不是当文件下载。
+    """
+    path = os.path.join(app.static_folder, "download", "yuxia.apk")
+    if not os.path.exists(path):
+        return jsonify({"error": "还没有构建 APK：先在电脑上运行 scripts\\build_apk.ps1"}), 404
+    resp = send_file(
+        path,
+        mimetype="application/vnd.android.package-archive",
+        as_attachment=True,
+        download_name="yuxia.apk",
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/api/ping")

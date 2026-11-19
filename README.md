@@ -27,6 +27,58 @@
 | **账号系统** | SHA-256 + HttpOnly Cookie，多用户隔离 + 会话归属校验 |
 | **自助 API Key** | 页面右上角齿轮可填自己的 Key，只存本机 localStorage |
 | **PWA 支持** | manifest + Service Worker + 自动生成图标 |
+| **原生安卓 App** | Kotlin + Compose 独立客户端（不是 WebView 壳）：流式聊天、手机通道、相册多选一键导入表情包、后台系统通知 |
+
+---
+
+## 安卓 App（原生 APK）
+
+手机端是一个独立写的原生客户端（Kotlin + Jetpack Compose），直连这台电脑上的 Flask，
+不需要浏览器、不需要 HTTPS、不需要 Firebase。所有数据仍然在电脑那边的 `data/chat.db`。
+
+### 装到手机上
+
+1. 手机和电脑连同一个 Wi-Fi
+2. 手机浏览器打开 `http://<电脑IP>:5000/app.apk`（网页右上角齿轮里也有这个下载链接）
+3. 允许"安装未知来源应用"，装好后打开
+4. 首次启动填：服务器地址（就是上一步那个 `http://<IP>:5000`）、用户名、密码
+
+> 不知道电脑 IP？电脑上运行 `ipconfig`，找 IPv4 地址；服务已经监听 `0.0.0.0`，局域网可直接访问。
+
+### App 里能做什么
+
+| 功能 | 说明 |
+|------|------|
+| **流式聊天** | 和网页一样 SSE 边生成边显示，`对白 / 消息 / 表情包 / 旁白 / 神态` 分开渲染 |
+| **手机通道** | 两人不在一处时自动切手机；右上角手机图标可随时打开，底部有未读红点 |
+| **表情包** | 「相册导入」一次多选（Android 系统相册，最多 60 张）→ 上传即入库、自动打标；点图即发送，**当面和手机两个通道都能发** |
+| **她也会用** | 她输出的情绪词会落成具体图片，和网页共用一个表情包库 |
+| **场景** | 顶部显示地点 / 时间 / 环境描写；「换地方」可自己走或带她一起走 |
+| **暂停** | 暂停自动推进（和网页共用同一个状态） |
+| **后台通知** | 退到后台后，她发消息会弹系统通知，点通知直接进那次对话 |
+
+### 后台通知是怎么做的
+
+App 退到后台时启动一个**前台服务**（低优先级常驻通知"在后台等着她的消息…"），每 15 秒做两件事：
+
+1. `POST /api/idle/<conv>` —— 给她一次自主行动的机会（服务端按等待期判断，多数时候根本不调模型）
+2. `GET /api/notify/pending?conversation_id=…&since_id=…` —— 取她新说的话，弹通知
+
+回到前台就停掉服务，改由界面自己每 20 秒问一次。通知权限（Android 13+）在首次启动时请求。
+想彻底关掉：App 里没有单独开关时会跟随登录状态——退出登录会停掉服务；
+也可以直接在系统设置里关掉「尤夏」的通知。
+
+### 自己构建
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_apk.ps1            # debug
+powershell -ExecutionPolicy Bypass -File scripts\build_apk.ps1 -Release   # release（用 debug 签名，可侧载）
+```
+
+需要 JDK 17 + Android SDK（platform-34 / build-tools 34）+ Gradle 8.7；
+构建完会自动拷到 `static/download/yuxia.apk`，手机的下载地址就是 `/app.apk`。
+工程在 `android/`，用 Android Studio 打开也能直接跑。
+
 
 ---
 
@@ -37,6 +89,17 @@ WebChatWithEvent/
 ├── app.py                    # Flask 入口（蓝图注册、静态资源、启动）
 ├── config.py / config_template.py
 ├── yuxia_prompt.txt          # 尤夏人设（只包含对白/消息/表情包的输出规则）
+│
+├── android/                  # 原生安卓客户端（Kotlin + Compose，独立工程）
+│   ├── settings.gradle.kts / build.gradle.kts
+│   └── app/src/main/java/com/yuxia/chat/
+│       ├── MainActivity.kt   # 入口：通知权限、通知点进来直接进会话
+│       ├── ChatViewModel.kt  # 状态机：登录 / 会话 / 流式聊天 / 表情包
+│       ├── Api.kt            # 后端接口（Bearer + OkHttp SSE）
+│       ├── Model.kt          # 一条消息 → 气泡/旁白/表情包的解析
+│       ├── ChatScreen.kt     # 聊天界面 + 手机面板 + 表情包面板
+│       ├── NotifyService.kt  # 后台常驻轮询 → 系统通知
+│       └── Notifications.kt  # 通知渠道与点击跳转
 │
 ├── core/
 │   ├── auth.py               # JWT / 会话归属校验 / 用户 Key
@@ -451,7 +514,27 @@ NPC 只做一件事：回一两句话（`NPC_PROMPT`，走 flash，30 字上限�
 | POST | `/api/time/<conv>` | 手动拨时间（`{"hour":22,"minute":30}` 或 `{"minutes":1350}`，只往前走） |
 | POST | `/api/atmosphere/<conv>` | 时间观察者 / 随机事件 / 事件总结 / 反思 / 自主行动（SSE） |
 | GET/POST | `/api/history*`、`/api/events*` | 会话与事件 |
-| GET | `/api/stickers/match`、`/api/stickers/stats` | 表情包 |
+| GET | `/api/stickers/match`、`/api/stickers/stats` | 表情包匹配与统计 |
+| GET | `/api/stickers/list` | 表情包列表（App 的选择面板） |
+| POST | `/api/stickers/upload` | 相册多选一键导入（multipart `files`，一次多张，按内容去重 + 自动打标） |
+| GET | `/api/notify/pending?conversation_id=&since_id=` | 后台通知轮询：她 `since_id` 之后说的话 + 未读/暂停/位置 |
+| GET | `/app.apk` | 下载原生安卓 App（`static/download/yuxia.apk`，由构建脚本生成） |
+
+> 原生 App 全程用 `Authorization: Bearer <token>`（`POST /api/auth/login` 会在响应里返回 `token`），
+> 不依赖 Cookie；`/api/chat`、`/api/atmosphere` 的 SSE 用同一个 token 头即可。
+
+### 玩家发表情包
+
+`POST /api/chat` 把 `message` 换成 `sticker`（表情包相对路径）即可发一张图：
+
+```json
+{"conversation_id": "…", "sticker": "upload/ab12….png", "channel": "phone"}
+```
+
+- 落库是 `role=user` + `content={"表情包": 路径, "url": …, "desc": …}`，前端/App 渲染成图片消息
+- 她读到的是 `（青梅发来一个表情包：<图上的说明或情绪词>）`，所以她会真的对这张图作出反应
+- 表情包不参与关键词换时间，也不触发 NPC 识别
+
 
 ---
 
@@ -520,6 +603,15 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 
 匹配顺序：精确情绪词 → 标签命中 → 语义/词面相似 → 随机兜底。
 
+**手机上更省事**：App 里点「相册导入」，一次多选几十张，直接走
+`POST /api/stickers/upload`：按文件头校验真实格式、按内容 md5 去重、
+落到 `static/stickers/upload/`，传完立刻入库并自动打标。
+一次最多 `STICKER_UPLOAD_MAX_FILES`（默认 60）张、单张 `STICKER_UPLOAD_MAX_MB`（默认 8MB）。
+
+**你也能发**：`POST /api/chat` 传 `sticker`（相对路径）就发一张图，
+当面/手机两个通道都可以；她会把它当成"青梅发来的表情包"理解并回应。
+
+
 ---
 
 ## 脚本
@@ -537,7 +629,9 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/test_watchers.py` | 场景观察者 + 神态描写探针（桩模型，零额度） |
 | `python scripts/test_autonomy.py` | 自主行动探针（桩模型）：通道约束、连续上限、最小间隔、act、去重 |
 | `python scripts/test_context_sync.py` | 上下文同步探针（桩模型）：双通道合并、最近事件、世界块、异地 act |
+| `python scripts/test_mobile_api.py` | 手机端接口探针：Bearer 登录、相册多选导入/去重/拒收、列表、双通道发表情包、通知轮询 |
 | `python scripts/e2e_autonomy.py` | 真实验证：她能不能读到随机事件、连续动手 5 次是否重复（消耗额度） |
+| `powershell scripts/build_apk.ps1` | 构建原生安卓 APK（`-Release` 出可侧载的 release 包，自动拷到 `/app.apk`） |
 | `python scripts/timing_probe.py` | 首轮延迟分段测量（打印各阶段耗时，用 `YUXIA_TIMING=1` 打开计时日志） |
 
 ---

@@ -5,3 +5,15 @@ __pycache__/
 data/
 .testtmp/
 .dsh-webview/
+
+# 安卓构建产物（scripts/build_apk.ps1 生成）
+static/download/*.apk
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+*.apk
+*.aab
+*.jks
+*.keystore

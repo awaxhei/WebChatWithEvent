@@ -30,7 +30,10 @@ from services.event_engine import (
     _run_event_summary, _run_random_event,
     should_run_random_event, should_run_event_summary,
 )
-from config import CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP
+from config import (
+    CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP,
+    STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
+)
 
 chat_bp = Blueprint("chat", __name__)
 db = None        # 由外部注入
@@ -135,15 +138,49 @@ def _log_move(conv_id, who, from_location, to_location, created=False):
     return moved
 
 
+def _stored_user_content(sticker_path, sticker_desc, text):
+    """玩家发表情包时，库里存成一条图片消息（前端/App 渲染成图）；普通消息原样存"""
+    if not sticker_path:
+        return text
+    return json.dumps({
+        "表情包": sticker_path,
+        "url": stickers.url_for(sticker_path),
+        "desc": sticker_desc,
+    }, ensure_ascii=False)
+
+
+def _parse_sticker_message(content):
+    """图片消息（{"表情包": 路径, "url": ...}）→ dict；不是就返回 None
+
+    注意她自己的 JSON 里也有「表情包」字段（存的是情绪词），所以必须靠 url 区分。
+    """
+    raw = (content or "").strip()
+    if not raw.startswith("{") or '"表情包"' not in raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(obj, dict) and obj.get("表情包") and obj.get("url"):
+        return obj
+    return None
+
+
 def _as_context_content(row):
     """把一条库里的消息转成喂给模型的内容。
 
+    - 玩家发的表情包转成一句"（青梅发来一个表情包：…）"；
     - 手机通道的她本人的话是纯文本，包回 {"消息": ...}，让历史看起来和输出格式一致；
     - 当面通道存的就是她输出的 JSON（对白/表情包），原样回灌，顺带强化格式；
     - NPC 的话拆成"名字：台词"，不然她会以为是自己说的。
     """
     content = row.get("content") or ""
     channel = row.get("channel") or "chat"
+    if row.get("role") == "user":
+        sticker = _parse_sticker_message(content)
+        if sticker:
+            label = sticker.get("desc") or sticker.get("表情包") or "表情包"
+            return f"（青梅发来一个表情包：{label}）"
     if channel == "npc":
         try:
             data = json.loads(content)
@@ -196,10 +233,20 @@ def chat():
     data = request.get_json() or {}
     conv_id = data.get("conversation_id", "")
     user_message = (data.get("message") or "").strip()
+    # 玩家可以发一张表情包代替打字：sticker 传表情包相对路径
+    sticker_path = (data.get("sticker") or "").strip().replace("\\", "/")
+    sticker_row = db.get_sticker(sticker_path) if sticker_path else None
+    sticker_desc = ""
+    if sticker_path and not sticker_row:
+        return jsonify({"error": "表情包不存在"}), 400
     user_id = request.user_id
     api_key = request_api_key()
-    if not user_message:
+    if not sticker_path and not user_message:
         return jsonify({"error": "消息不能为空"}), 400
+    if sticker_row:
+        # 她读到的是一句人话，库里存的则是一条"图片消息"（前端/App 渲染成图）
+        sticker_desc = stickers.describe(db, sticker_path)
+        user_message = f"（青梅发来一个表情包：{sticker_desc}）"
 
     _T0["t"] = 0.0
     _mark("请求进入")
@@ -253,18 +300,22 @@ def chat():
     can_speak = channel == CHAT_CHANNEL
 
     # 现场有没有玩家正在搭话的 NPC：先找现成的，再按称呼补，最后交给小模型判别
-    addressed_npc = npc.find_addressed(db, conv_id, player_loc, user_message)
-    if not addressed_npc:
-        addressed_npc = npc.spawn_placeholder(db, conv_id, player_loc, user_message)
-    if not addressed_npc:
-        decision = npc.detect_addressed(db, conv_id, player_loc, user_message,
-                                        deepseek, api_key=api_key)
-        if decision and decision.get("addressed"):
-            who = decision.get("who") or ""
-            addressed_npc = (db.find_npc(conv_id, who, player_loc) if who else None) \
-                or npc.spawn_named(db, conv_id, player_loc, who)
+    # （发表情包时不找人，免得凭空冒出一个"你在叫谁"的 NPC）
+    addressed_npc = None
+    if not sticker_row:
+        addressed_npc = npc.find_addressed(db, conv_id, player_loc, user_message)
+        if not addressed_npc:
+            addressed_npc = npc.spawn_placeholder(db, conv_id, player_loc, user_message)
+        if not addressed_npc:
+            decision = npc.detect_addressed(db, conv_id, player_loc, user_message,
+                                            deepseek, api_key=api_key)
+            if decision and decision.get("addressed"):
+                who = decision.get("who") or ""
+                addressed_npc = (db.find_npc(conv_id, who, player_loc) if who else None) \
+                    or npc.spawn_named(db, conv_id, player_loc, who)
 
-    db.add_message(conv_id, "user", user_message, channel=channel, scene=player_loc)
+    db.add_message(conv_id, "user", _stored_user_content(sticker_path, sticker_desc, user_message),
+                   channel=channel, scene=player_loc)
     db.touch_conversation(conv_id)
     # 记下"她说完之后，玩家隔了多久才回"：等待时长按这个自适应
     prev_yuxia_at, _prev_channel = db.get_last_yuxia(conv_id)
@@ -279,7 +330,9 @@ def chat():
     if len(user_msgs) == 1:
         db.update_conversation_title(conv_id, user_message[:20] + ("..." if len(user_message) > 20 else ""))
 
-    now_minutes, keyword_jump = time_keeper.apply_message_tick(db, conv_id, user_message)
+    # 表情包不参与关键词换时间（图上的说明文字不该把时钟拨走）
+    now_minutes, keyword_jump = time_keeper.apply_message_tick(
+        db, conv_id, "" if sticker_row else user_message)
     story_time = clock.format_time(now_minutes)
     msg_count = db.get_message_count(conv_id)
     _mark("时钟推进")
@@ -839,3 +892,122 @@ def sticker_stats():
         "tagged": db.count_stickers(tagged_only=True),
         "emotions": db.get_sticker_emotions(),
     })
+
+
+@chat_bp.route("/api/stickers/list", methods=["GET"])
+@require_auth
+def list_stickers():
+    """表情包列表（手机/网页的选择面板都用它）"""
+    try:
+        limit = int(request.args.get("limit", 300))
+    except (TypeError, ValueError):
+        limit = 300
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    data = stickers.list_for_picker(
+        db, limit=max(1, min(limit, 500)), offset=max(0, offset),
+        emotion=(request.args.get("emotion") or "").strip() or None)
+    return jsonify(data)
+
+
+@chat_bp.route("/api/stickers/upload", methods=["POST"])
+@require_auth
+def upload_stickers():
+    """一次上传多张图片（手机相册多选），落盘即入库并自动打标"""
+    files = request.files.getlist("files") or request.files.getlist("file")
+    if not files:
+        return jsonify({"error": "没有收到图片"}), 400
+
+    batch = []
+    for storage in files:
+        try:
+            batch.append((storage.filename or "image", storage.read()))
+        except Exception as e:
+            print(f"[表情包] 读取上传失败: {e}")
+    if not batch:
+        return jsonify({"error": "图片读取失败"}), 400
+
+    result = stickers.save_uploads(
+        db, batch, api_key=request_api_key(),
+        max_files=STICKER_UPLOAD_MAX_FILES, max_mb=STICKER_UPLOAD_MAX_MB)
+    result["success"] = True
+    return jsonify(result)
+
+
+# ──────────────────────────────────────────────
+# 后台通知（原生 App 用）
+# ──────────────────────────────────────────────
+
+@chat_bp.route("/api/notify/pending", methods=["GET"])
+@require_auth
+def notify_pending():
+    """返回 since_id 之后她发的消息，供 App 后台轮询发系统通知。
+
+    ?conversation_id=xxx&since_id=123
+    """
+    conv_id = (request.args.get("conversation_id") or "").strip()
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+    try:
+        since_id = int(request.args.get("since_id", 0))
+    except (TypeError, ValueError):
+        since_id = 0
+
+    items = []
+    last_id = since_id
+    for row in db.get_messages(conv_id):
+        mid = int(row.get("id") or 0)
+        if mid <= since_id:
+            continue
+        last_id = max(last_id, mid)
+        if row.get("role") != "assistant":
+            continue
+        channel = row.get("channel") or CHAT_CHANNEL
+        if channel not in (CHAT_CHANNEL, PHONE_CHANNEL):
+            continue
+        text, sticker_url = _readable_reply(row.get("content") or "", channel)
+        if not text and not sticker_url:
+            continue
+        items.append({
+            "id": mid,
+            "channel": channel,
+            "text": text,
+            "sticker": sticker_url,
+            "at": row.get("created_at") or "",
+        })
+
+    return jsonify({
+        "conversation_id": conv_id,
+        "since_id": since_id,
+        "last_id": last_id,
+        "messages": items[-10:],
+        "unread": db.get_phone_unread(conv_id),
+        "paused": db.is_paused(conv_id),
+        "location": db.get_current_location(conv_id),
+        "co_located": _co_located(conv_id),
+    })
+
+
+def _readable_reply(content, channel):
+    """把她的一条输出拆成"能放进通知里的一句话" + 表情包图片地址"""
+    raw = (content or "").strip()
+    if channel == PHONE_CHANNEL:
+        return raw, ""
+    sticker_url = ""
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return raw, ""
+    if not isinstance(obj, dict):
+        return raw, ""
+    speech = str(obj.get("对白") or "").strip()
+    emotion = str(obj.get("表情包") or "").strip()
+    if emotion:
+        hit = stickers.match(db, emotion, top_k=1)
+        if hit:
+            sticker_url = hit[0]["url"]
+    return speech, sticker_url
+
