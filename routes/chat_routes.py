@@ -462,6 +462,7 @@ def move(conv_id):
         payload["who"] = who
         payload["from_location"] = from_yuxia
         payload["from_player_location"] = from_player
+        payload["events"] = db.get_recent_events(conv_id, limit=50)
         return jsonify(payload)
 
     name, created = locations.resolve(db, conv_id, target)
@@ -481,6 +482,8 @@ def move(conv_id):
     payload["who"] = who
     payload["from_location"] = from_yuxia
     payload["from_player_location"] = from_player
+    # 转场事件也回传一份：故事进展面板要立刻能看到，不必等下一轮
+    payload["events"] = db.get_recent_events(conv_id, limit=50)
     return jsonify(payload)
 
 

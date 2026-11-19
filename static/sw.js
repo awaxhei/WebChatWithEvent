@@ -8,8 +8,12 @@
  * 否则后端进程一退出，浏览器还能从缓存里"打开"页面并弹出登录框，
  * 用户以为服务在跑，点登录却只得到一句含糊的"网络错误"。
  * 现在导航失败时直接返回一张"服务器未启动"页，并自动重试。
+ *
+ * 改过前端脚本后记得把 CACHE_NAME 往上拨一档：后端进程中途退出时，
+ * 静态资源会回退到缓存，页面就会拿着上几个版本的 app.js 继续跑
+ * （表现是莫名其妙 ReferenceError —— 旧代码里根本没有那个变量）。
  */
-const CACHE_NAME = 'yuxia-chat-v4';
+const CACHE_NAME = 'yuxia-chat-v5';
 const PRECACHE = [
   '/static/css/style.css',
   '/static/js/api_key.js',

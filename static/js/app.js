@@ -483,6 +483,10 @@ class ChatManager {
                 this._addWorldNarration(
                     both ? `你和尤夏一起走到了${to}` : `你走到了${to}`, 'low');
             }
+            // 故事进展面板同步刷新：转场事件立刻可见，不用等下一轮
+            if (data.events && window.emotionAssistant && window.emotionAssistant.eventPanel) {
+                window.emotionAssistant.eventPanel.renderEvents(data.events, false, '');
+            }
         } catch (e) {
         } finally {
             this._setSceneLoading(false);
