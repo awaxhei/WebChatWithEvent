@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.chaquo.python")
 }
 
 android {
@@ -12,8 +12,14 @@ android {
         applicationId = "com.yuxia.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
+
+        // 只打手机和模拟器需要的 ABI（每个 ABI 都要塞一份 CPython，越少越好）
+        // Python 3.12 只支持 64 位，所以不带 armeabi-v7a（Android 8+ 手机基本都是 arm64）
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        }
     }
 
     buildTypes {
@@ -38,6 +44,11 @@ android {
         compose = true
     }
 
+    // Kotlin 1.9 用独立的 Compose 编译器
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -60,4 +71,21 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+chaquopy {
+    defaultConfig {
+        // 内嵌解释器版本（构建机上的 Python 主次版本必须一致）
+        version = "3.12"
+        // 构建机上的解释器，只用来跑 pip 打包依赖（不会进 APK）
+        // build_apk.ps1 会把它设成实际路径
+        buildPython(System.getenv("YUXIA_PYTHON") ?: "python")
+        pip {
+            // 注意：不能把 --index-url 换成国内镜像——Chaquopy 自己托管的
+            // 原生包 wheel（markupsafe 等）只在默认索引里，换掉就解析不出来。
+            install("flask")
+            install("PyJWT")
+            install("requests")
+        }
+    }
 }

@@ -170,8 +170,8 @@ fun ChatScreen(vm: ChatViewModel) {
                                 onClick = { menuOpen = false; showStickers = true; vm.refreshStickers() },
                             )
                             DropdownMenuItem(
-                                text = { Text("退出登录") },
-                                onClick = { menuOpen = false; vm.logout() },
+                                text = { Text("API Key") },
+                                onClick = { menuOpen = false; vm.openApiKeyScreen() },
                             )
                         }
                     }

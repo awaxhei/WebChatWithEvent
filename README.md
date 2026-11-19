@@ -27,23 +27,28 @@
 | **账号系统** | SHA-256 + HttpOnly Cookie，多用户隔离 + 会话归属校验 |
 | **自助 API Key** | 页面右上角齿轮可填自己的 Key，只存本机 localStorage |
 | **PWA 支持** | manifest + Service Worker + 自动生成图标 |
-| **原生安卓 App** | Kotlin + Compose 独立客户端（不是 WebView 壳）：流式聊天、手机通道、相册多选一键导入表情包、后台系统通知 |
+| **原生安卓 App** | Kotlin + Compose 独立客户端（不是 WebView 壳）：**后端整个内嵌进 APK**，不用电脑也不用服务器；流式聊天、手机通道、相册多选一键导入表情包、后台系统通知 |
 
 ---
 
-## 安卓 App（原生 APK）
+## 安卓 App（原生 APK，单机 / 不需要电脑）
 
-手机端是一个独立写的原生客户端（Kotlin + Jetpack Compose），直连这台电脑上的 Flask，
-不需要浏览器、不需要 HTTPS、不需要 Firebase。所有数据仍然在电脑那边的 `data/chat.db`。
+手机端是一个**完全独立**的原生客户端（Kotlin + Jetpack Compose）：
+整个后端（Flask + 提示词 + 世界逻辑 + SQLite）用 CPython 通过
+[Chaquopy](https://chaquo.com/chaquopy/) 打进了 APK，跑在手机自己身上。
+
+- **不需要电脑**、**不需要任何服务器**、不需要连同一个 Wi-Fi
+- 唯一的网络请求是直接调用 DeepSeek 的 API（和网页版一样）
+- 数据存在手机的应用私有目录（`files/yuxia/`），卸载 App 才会清掉
+- APK 约 40 MB（每个 ABI 塞了一份 CPython）
 
 ### 装到手机上
 
-1. 手机和电脑连同一个 Wi-Fi
-2. 手机浏览器打开 `http://<电脑IP>:5000/app.apk`（网页右上角齿轮里也有这个下载链接）
-3. 允许"安装未知来源应用"，装好后打开
-4. 首次启动填：服务器地址（就是上一步那个 `http://<IP>:5000`）、用户名、密码
+1. 把 `static/download/yuxia.apk` 传到手机安装（或用数据线 / 网盘）
+2. 允许"安装未知来源应用"，打开 App
+3. 首次启动填自己的 **DeepSeek API Key**（存在手机里，不写进 APK；之后可在聊天页右上角 ⋯ 里改）
 
-> 不知道电脑 IP？电脑上运行 `ipconfig`，找 IPv4 地址；服务已经监听 `0.0.0.0`，局域网可直接访问。
+> 电脑上的网页版仍然可以照常用，两种方式共用同一套代码、各自存自己的数据。
 
 ### App 里能做什么
 
@@ -52,10 +57,11 @@
 | **流式聊天** | 和网页一样 SSE 边生成边显示，`对白 / 消息 / 表情包 / 旁白 / 神态` 分开渲染 |
 | **手机通道** | 两人不在一处时自动切手机；右上角手机图标可随时打开，底部有未读红点 |
 | **表情包** | 「相册导入」一次多选（Android 系统相册，最多 60 张）→ 上传即入库、自动打标；点图即发送，**当面和手机两个通道都能发** |
-| **她也会用** | 她输出的情绪词会落成具体图片，和网页共用一个表情包库 |
+| **她也会用** | 她输出的情绪词会落成具体图片 |
 | **场景** | 顶部显示地点 / 时间 / 环境描写；「换地方」可自己走或带她一起走 |
-| **暂停** | 暂停自动推进（和网页共用同一个状态） |
+| **暂停** | 暂停自动推进 |
 | **后台通知** | 退到后台后，她发消息会弹系统通知，点通知直接进那次对话 |
+| **世界继续转** | 不打开 App 时，后台服务仍在问后端"要不要自己动"，所以她会自己发消息 |
 
 ### 后台通知是怎么做的
 
@@ -65,8 +71,19 @@ App 退到后台时启动一个**前台服务**（低优先级常驻通知"在�
 2. `GET /api/notify/pending?conversation_id=…&since_id=…` —— 取她新说的话，弹通知
 
 回到前台就停掉服务，改由界面自己每 20 秒问一次。通知权限（Android 13+）在首次启动时请求。
-想彻底关掉：App 里没有单独开关时会跟随登录状态——退出登录会停掉服务；
-也可以直接在系统设置里关掉「尤夏」的通知。
+想彻底安静：系统设置里关掉「尤夏」的通知即可。
+
+### 内嵌后端是怎么接起来的
+
+| 位置 | 作用 |
+|------|------|
+| `mobile_boot.py` | App 启动时被 Kotlin 调用：把 `YUXIA_ROOT` 指到应用私有目录、建好目录、建本机账号并签一个 token、在 `127.0.0.1` 上起 Flask |
+| `config.py` 的 `ROOT` | 改成 `os.environ.get("YUXIA_ROOT") or 项目目录`，同一份代码在电脑和手机都能用 |
+| `core/database.py` 的 `DB_PATH` | 支持 `YUXIA_DB_PATH` 覆盖 |
+| `android/.../Backend.kt` | `Python.start()` + 调 `mobile_boot.start(...)`，把返回的 token 存起来 |
+| `Api.kt` | 所有请求都带 `Authorization: Bearer <本机 token>` 和 `X-DeepSeek-API-Key: <你的 Key>` |
+
+App 里没有"登录"这一步：单机模式下后端会建一个本机账号 `me` 并直接签发 token。
 
 ### 自己构建
 
@@ -75,9 +92,20 @@ powershell -ExecutionPolicy Bypass -File scripts\build_apk.ps1            # debu
 powershell -ExecutionPolicy Bypass -File scripts\build_apk.ps1 -Release   # release（用 debug 签名，可侧载）
 ```
 
-需要 JDK 17 + Android SDK（platform-34 / build-tools 34）+ Gradle 8.7；
-构建完会自动拷到 `static/download/yuxia.apk`，手机的下载地址就是 `/app.apk`。
-工程在 `android/`，用 Android Studio 打开也能直接跑。
+构建前需要（**只在构建机上需要**）：
+
+- JDK 17、Android SDK（platform-34 / build-tools 34）、Gradle 8.7
+- **Python 3.12**（Chaquopy 用它跑 pip；内嵌的解释器版本在 `android/app/build.gradle.kts` 里配成 3.12）
+  - 路径通过 `-PythonExe` 或环境变量 `YUXIA_PYTHON` 指定
+
+构建脚本会自动把 `app.py`、`mobile_boot.py`、`core/`、`routes/`、`services/`、
+`config_template.py`（作为 `config.py`，**不会**带上你的真实 Key）和人设提示词
+塞进 `android/app/src/main/python/`，然后交给 Chaquopy 打包。
+产物拷到 `static/download/yuxia.apk`。
+
+> 注意：Python 3.12 只支持 64 位，所以 `abiFilters` 是 `arm64-v8a` + `x86_64`（Android 8 以上基本都是 arm64）。
+> 依赖只从默认 PyPI 装：Chaquopy 自己托管的原生 wheel（markupsafe 等）不在国内镜像里。
+
 
 
 ---
@@ -90,12 +118,15 @@ WebChatWithEvent/
 ├── config.py / config_template.py
 ├── yuxia_prompt.txt          # 尤夏人设（只包含对白/消息/表情包的输出规则）
 │
+├── mobile_boot.py            # 内嵌后端入口（App 启动时调它起 Flask + 本机 token）
+│
 ├── android/                  # 原生安卓客户端（Kotlin + Compose，独立工程）
 │   ├── settings.gradle.kts / build.gradle.kts
 │   └── app/src/main/java/com/yuxia/chat/
-│       ├── MainActivity.kt   # 入口：通知权限、通知点进来直接进会话
-│       ├── ChatViewModel.kt  # 状态机：登录 / 会话 / 流式聊天 / 表情包
-│       ├── Api.kt            # 后端接口（Bearer + OkHttp SSE）
+│       ├── MainActivity.kt   # 入口：启动内嵌 Python、通知权限、通知点进来进会话
+│       ├── Backend.kt        # 启动内嵌 CPython（Chaquopy）+ mobile_boot
+│       ├── ChatViewModel.kt  # 状态机：API Key / 会话 / 流式聊天 / 表情包
+│       ├── Api.kt            # 本机接口（Bearer + 用户 Key + OkHttp SSE）
 │       ├── Model.kt          # 一条消息 → 气泡/旁白/表情包的解析
 │       ├── ChatScreen.kt     # 聊天界面 + 手机面板 + 表情包面板
 │       ├── NotifyService.kt  # 后台常驻轮询 → 系统通知
@@ -630,6 +661,7 @@ score = 0.5 × 0.995^经过小时 + 0.3 × 重要度/10 + 0.2 × 相关性
 | `python scripts/test_autonomy.py` | 自主行动探针（桩模型）：通道约束、连续上限、最小间隔、act、去重 |
 | `python scripts/test_context_sync.py` | 上下文同步探针（桩模型）：双通道合并、最近事件、世界块、异地 act |
 | `python scripts/test_mobile_api.py` | 手机端接口探针：Bearer 登录、相册多选导入/去重/拒收、列表、双通道发表情包、通知轮询 |
+| `python scripts/test_embedded_backend.py` | 内嵌后端探针：模拟手机私有目录、只绑 127.0.0.1、本机 token、表情包落盘、对话链路 |
 | `python scripts/e2e_autonomy.py` | 真实验证：她能不能读到随机事件、连续动手 5 次是否重复（消耗额度） |
 | `powershell scripts/build_apk.ps1` | 构建原生安卓 APK（`-Release` 出可侧载的 release 包，自动拷到 `/app.apk`） |
 | `python scripts/timing_probe.py` | 首轮延迟分段测量（打印各阶段耗时，用 `YUXIA_TIMING=1` 打开计时日志） |

@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,22 +44,51 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun AppRoot(vm: ChatViewModel) {
     val s = vm.state
     when (s.screen) {
-        Screen.Boot -> LoadingScreen("正在连接…")
-        Screen.Setup -> SetupScreen(s, onLogin = vm::login)
+        Screen.Boot -> BootScreen(s, onRetry = vm::retryBoot)
+        Screen.ApiKey -> ApiKeyScreen(s, onSave = vm::saveApiKey, onSkip = { vm.enterHomeFromKeyScreen() })
         Screen.Conversations -> ConversationsScreen(
             state = s,
             onOpen = vm::openConversation,
             onNew = vm::newConversation,
             onRefresh = { vm.loadConversations() },
-            onLogout = vm::logout,
+            onApiKey = vm::openApiKeyScreen,
         )
         Screen.Chat -> ChatScreen(vm)
+    }
+}
+
+@Composable
+fun BootScreen(state: UiState, onRetry: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+            if (state.error.isNullOrBlank()) {
+                CircularProgressIndicator(Modifier.size(28.dp))
+                Spacer(Modifier.height(14.dp))
+                Text("正在启动本机服务…", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "第一次启动要解压 Python 运行时，稍等一下",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    state.error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onRetry) { Text("重新启动") }
+            }
+        }
     }
 }
 
@@ -73,11 +103,10 @@ fun LoadingScreen(text: String) {
     }
 }
 
+/** 第一次使用：填自己的 DeepSeek API Key（存在手机里，不进 APK） */
 @Composable
-fun SetupScreen(state: UiState, onLogin: (String, String, String) -> Unit) {
-    var base by remember { mutableStateOf(state.baseUrl.ifBlank { "http://192.168.1.100:5000" }) }
-    var user by remember { mutableStateOf(state.username) }
-    var pass by remember { mutableStateOf("") }
+fun ApiKeyScreen(state: UiState, onSave: (String) -> Unit, onSkip: () -> Unit) {
+    var key by remember { mutableStateOf(state.apiKey) }
 
     Column(
         modifier = Modifier
@@ -93,30 +122,17 @@ fun SetupScreen(state: UiState, onLogin: (String, String, String) -> Unit) {
         Text("尤夏", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "填你电脑上跑着的那个服务器地址，手机要和电脑连同一个 Wi-Fi。",
+            "所有东西都跑在这台手机上：不用电脑、不用服务器。填一个 DeepSeek 的 API Key 就能开始。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(22.dp))
 
         OutlinedTextField(
-            value = base, onValueChange = { base = it },
-            label = { Text("服务器地址") },
-            placeholder = { Text("http://192.168.1.23:5000") },
+            value = key, onValueChange = { key = it },
+            label = { Text("DeepSeek API Key") },
+            placeholder = { Text("sk-…") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = user, onValueChange = { user = it },
-            label = { Text("用户名") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = pass, onValueChange = { pass = it },
-            label = { Text("密码") }, singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
@@ -133,19 +149,23 @@ fun SetupScreen(state: UiState, onLogin: (String, String, String) -> Unit) {
 
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = { onLogin(base, user, pass) },
+            onClick = { onSave(key) },
             enabled = !state.busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             if (state.busy) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
-                Text("登录")
+                Text("保存并开始")
             }
+        }
+        if (state.apiKey.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) { Text("用原来的 Key，先回去") }
         }
         Spacer(Modifier.height(14.dp))
         Text(
-            "地址就是电脑浏览器里打开的那个，例如 http://192.168.1.23:5000",
+            "Key 只存在这台手机的应用数据里（server 端不保存）；换 Key 在聊天页右上角 ⋯ 里。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -159,7 +179,7 @@ fun ConversationsScreen(
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
     onRefresh: () -> Unit,
-    onLogout: () -> Unit,
+    onApiKey: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -169,8 +189,8 @@ fun ConversationsScreen(
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
                     }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Filled.Logout, contentDescription = "退出登录")
+                    IconButton(onClick = onApiKey) {
+                        Icon(Icons.Filled.Settings, contentDescription = "API Key")
                     }
                 },
             )

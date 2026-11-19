@@ -31,7 +31,11 @@ class NotifyService : Service() {
         super.onCreate()
         val conv = Prefs.convId(this)
         startForeground(Notifications.FG_ID_PUBLIC, Notifications.foreground(this, conv))
-        loop = scope.launch { run() }
+        loop = scope.launch {
+            // 后台被系统重启时，内嵌后端可能还没起（Flask 在进程里）
+            runCatching { Backend.start(applicationContext) }
+            run()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY

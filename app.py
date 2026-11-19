@@ -129,6 +129,10 @@ def get_stickers():
     }
 
 
+# 内嵌进 APK 时（Python 跑在手机里）标记一下：启动阶段不做会花钱的事
+_MOBILE = bool(os.environ.get("YUXIA_MOBILE"))
+
+
 def _prepare_stickers():
     """启动后异步：刷新索引 → 给新图片打标 → 补向量（不阻塞服务启动）"""
     try:
@@ -136,10 +140,12 @@ def _prepare_stickers():
         stats = sticker_lib.refresh(db)
         if stats["indexed"] or stats["removed"]:
             print(f"  [表情包] 索引更新: {stats}")
-        tagged = sticker_lib.auto_tag_all(db)
-        if tagged:
-            print(f"  [表情包] 本机新打标 {tagged} 张")
-        sticker_lib.rebuild_embeddings(db)
+        # 手机上的图都是 App 传上来的，传的时候带着 Key 就打标了，启动时不必再扫
+        if not _MOBILE:
+            tagged = sticker_lib.auto_tag_all(db)
+            if tagged:
+                print(f"  [表情包] 本机新打标 {tagged} 张")
+            sticker_lib.rebuild_embeddings(db)
     except Exception as e:
         print(f"  [表情包] 索引失败: {e}")
 

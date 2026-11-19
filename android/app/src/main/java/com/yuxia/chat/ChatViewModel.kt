@@ -12,12 +12,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-enum class Screen { Boot, Setup, Conversations, Chat }
+enum class Screen { Boot, ApiKey, Conversations, Chat }
 
 data class UiState(
     val screen: Screen = Screen.Boot,
     val baseUrl: String = "",
-    val username: String = "",
+    val apiKey: String = "",
     val busy: Boolean = false,
     val error: String? = null,
     val convs: List<ConvBrief> = emptyList(),
@@ -42,7 +42,7 @@ data class UiState(
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     var state by mutableStateOf(
-        UiState(baseUrl = Prefs.baseUrl(app), username = Prefs.username(app))
+        UiState(baseUrl = Prefs.baseUrl(app), apiKey = Prefs.apiKey(app))
     )
         private set
 
@@ -51,42 +51,61 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var lastMsgCount = 0
     private val app get() = getApplication<Application>()
 
-    // ── 启动 / 账号 ─────────────────────────────────
+    // ── 启动 ────────────────────────────────────────
 
-    fun boot() {
-        if (Prefs.token(app).isEmpty()) {
-            state = state.copy(screen = Screen.Setup, baseUrl = Prefs.baseUrl(app))
+    /** 内嵌 Python 后端起来了（或失败了），决定第一屏 */
+    fun onBackendReady(ok: Boolean, reason: String = "") {
+        if (!ok) {
+            state = state.copy(
+                screen = Screen.Boot,
+                error = "本机服务启动失败：" + reason.ifBlank { "未知原因" },
+            )
             return
         }
+        state = state.copy(baseUrl = Prefs.baseUrl(app), error = null)
+        if (Prefs.apiKey(app).isEmpty()) {
+            state = state.copy(screen = Screen.ApiKey)
+            return
+        }
+        enterHome()
+    }
+
+    /** 重新尝试启动（启动失败时的按钮） */
+    fun retryBoot() {
+        state = state.copy(screen = Screen.Boot, error = null)
+    }
+
+    private fun enterHome() {
         // 有上次的会话就直接进去（从通知点进来也是这条路）
         val last = Prefs.convId(app)
         if (last.isNotEmpty()) openConversation(last) else loadConversations(goToList = true)
     }
 
-    fun login(baseUrl: String, username: String, password: String) {
+    fun saveApiKey(key: String) {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) {
+            state = state.copy(error = "Key 不能为空")
+            return
+        }
+        Prefs.setApiKey(app, trimmed)
+        state = state.copy(apiKey = trimmed, error = null, busy = true)
         viewModelScope.launch {
-            state = state.copy(busy = true, error = null)
-            try {
-                withContext(Dispatchers.IO) { Api.login(app, baseUrl, username, password) }
-                state = state.copy(
-                    busy = false,
-                    baseUrl = Prefs.baseUrl(app),
-                    username = Prefs.username(app),
-                )
-                val lastConv = Prefs.convId(app)
-                if (lastConv.isNotEmpty()) openConversation(lastConv) else loadConversations(true)
-            } catch (e: Exception) {
-                state = state.copy(busy = false, error = e.message ?: "登录失败")
-            }
+            // 先打一次接口确认服务在跑，再进主界面
+            val ok = runCatching { withContext(Dispatchers.IO) { Api.ping(app) } }.isSuccess
+            state = state.copy(busy = false)
+            if (ok) enterHome()
+            else state = state.copy(error = "本机服务没响应，稍后重试")
         }
     }
 
-    fun logout() {
-        viewModelScope.launch {
-            NotifyService.stop(app)
-            withContext(Dispatchers.IO) { Api.logout(app) }
-            state = UiState(screen = Screen.Setup, baseUrl = Prefs.baseUrl(app), stickers = emptyList())
-        }
+    fun openApiKeyScreen() {
+        state = state.copy(screen = Screen.ApiKey, error = null)
+    }
+
+    /** Key 页面的"用原来的 Key，先回去" */
+    fun enterHomeFromKeyScreen() {
+        state = state.copy(screen = Screen.Conversations, error = null)
+        enterHome()
     }
 
     // ── 会话 ────────────────────────────────────────

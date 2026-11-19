@@ -17,3 +17,7 @@ android/.idea/
 *.aab
 *.jks
 *.keystore
+
+# APK 构建时由 scripts/build_apk.ps1 生成
+android/app/src/main/python/
+android/app/src/main/assets/yuxia_prompt.txt

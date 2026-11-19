@@ -5,7 +5,10 @@ import os, sqlite3, uuid, hashlib, json
 from threading import Lock
 
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "chat.db")
+# 数据库位置：电脑上默认项目目录下的 data/chat.db；
+# 内嵌进 APK 时由 mobile_boot 用环境变量指到应用私有存储。
+DB_PATH = os.environ.get("YUXIA_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "chat.db")
 
 
 class ChatDB:

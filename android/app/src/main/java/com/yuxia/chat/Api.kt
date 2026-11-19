@@ -38,6 +38,9 @@ object Api {
         val b = Request.Builder().url(url(ctx, path))
         val token = Prefs.token(ctx)
         if (token.isNotEmpty()) b.header("Authorization", "Bearer $token")
+        // DeepSeek Key 由 App 自己带着走（后端跑在本机，Key 不写进 APK）
+        val key = Prefs.apiKey(ctx)
+        if (key.isNotEmpty()) b.header("X-DeepSeek-API-Key", key)
         return b
     }
 
@@ -49,36 +52,14 @@ object Api {
         return JSONObject(raw)
     }
 
-    // ── 账号 ─────────────────────────────────────────
+    // ── 本机账号（单机模式不需要登录）──────────────────
 
-    /** 登录：把服务器地址先存下来，再换 token */
-    fun login(ctx: Context, baseUrl: String, username: String, password: String): JSONObject {
-        Prefs.setBaseUrl(ctx, baseUrl)
-        val body = JSONObject()
-            .put("username", username)
-            .put("password", password)
-            .put("remember", true)
-        val req = builder(ctx, "/api/auth/login")
-            .post(body.toString().toRequestBody(JSON_MEDIA))
-            .build()
+    /** 只用来验证本机服务是否活着、token 是否有效 */
+    fun ping(ctx: Context): JSONObject {
+        val req = builder(ctx, "/api/ping").get().build()
         client.newCall(req).execute().use { resp ->
-            val raw = resp.body?.string().orEmpty()
-            val obj = parse(resp, raw)
-            val token = obj.optString("token")
-            if (token.isNotEmpty()) {
-                Prefs.setToken(ctx, token)
-                Prefs.setUsername(ctx, username)
-            }
-            return obj
+            return parse(resp, resp.body?.string().orEmpty())
         }
-    }
-
-    fun logout(ctx: Context) {
-        runCatching {
-            val req = builder(ctx, "/api/auth/logout").post(JSONObject().toString().toRequestBody(JSON_MEDIA)).build()
-            client.newCall(req).execute().close()
-        }
-        Prefs.logout(ctx)
     }
 
     // ── 会话 ─────────────────────────────────────────

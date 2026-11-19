@@ -49,7 +49,7 @@ JWT_EXPIRE_DAYS = 30
 # ============================================================
 # AI A: 对话助手提示词（从 yuxia_prompt.txt 自动加载）
 # ============================================================
-_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yuxia_prompt.txt")
+_PROMPT_PATH = os.path.join(ROOT, "yuxia_prompt.txt")
 with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
     _CHAT_PROMPT_RAW = _f.read()
 
@@ -58,7 +58,7 @@ with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
 # 启动时扫描文件夹，将结果拼接到 prompt 末尾
 # ============================================================
 def _load_sticker_emotions():
-    _d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "stickers")
+    _d = os.path.join(ROOT, "static", "stickers")
     if os.path.isdir(_d):
         return sorted([n for n in os.listdir(_d) if os.path.isdir(os.path.join(_d, n))])
     return []
@@ -234,7 +234,7 @@ MEMORY_REFLECTION_PROMPT = (
 # - 打标方式：视觉模型（若配置可用）/ 文件名与目录名关键词 / 手动 txt 旁注
 # - 匹配方式：embedding 语义相似度 > 标签关键词 > 随机兜底
 # ============================================================
-STICKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "stickers")
+STICKER_DIR = os.path.join(ROOT, "static", "stickers")
 STICKER_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 # 视觉打标：deepseek-flash 支持 OpenAI 兼容的 image_url 图片输入
 # 每张图打标一次后写入数据库缓存，之后不再重复消耗 token

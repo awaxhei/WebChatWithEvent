@@ -1,5 +1,6 @@
 package com.yuxia.chat
 
+import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -11,7 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
-import android.Manifest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -35,7 +37,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             YuxiaTheme {
                 val vm: ChatViewModel = viewModel()
-                LaunchedEffect(Unit) { vm.boot() }
+
+                // 内嵌的 Python 后端（没有电脑、没有远程服务器）
+                LaunchedEffect(Unit) {
+                    val error = withContext(Dispatchers.IO) {
+                        runCatching { Backend.start(applicationContext) }.exceptionOrNull()
+                            ?.let { it.message ?: it.javaClass.simpleName }
+                            ?: ""
+                    }
+                    vm.onBackendReady(error.isEmpty(), error)
+                }
                 LaunchedEffect(openConvId) {
                     if (openConvId.isNotEmpty()) {
                         vm.openConversation(openConvId)
@@ -65,9 +76,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         // 退到后台：开常驻轮询，她发消息会弹通知
-        if (Prefs.notifyEnabled(this) && Prefs.token(this).isNotEmpty() &&
-            Prefs.convId(this).isNotEmpty()
-        ) {
+        if (Prefs.notifyEnabled(this) && Prefs.convId(this).isNotEmpty()) {
             NotifyService.start(this)
         }
     }
