@@ -203,6 +203,12 @@ def main():
               str([e["event_type"] for e in events_now]))
         r = c1.post(f"/api/time/{conv_new}", json={"minutes": 10})
         check("不能往回拨 (400)", r.status_code == 400, str(r.status_code))
+
+        # 模型偶尔用中文引号 + 中文冒号当 JSON 语法，必须能掰回来
+        raw = '{“消息”： “唔——诶？你在说什么啊(ᗜ o ᗜ)”}'
+        objs = chat_mod._extract_json_objects(chat_mod._normalize_quotes(raw))
+        check("中文引号与中文冒号也能解析",
+              bool(objs) and "唔——诶" in (objs[0].get("消息") or ""), str(objs))
     finally:
         chat_mod.deepseek = real_deepseek
 

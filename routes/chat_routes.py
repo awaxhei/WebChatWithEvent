@@ -62,11 +62,14 @@ def _mark(label):
 
 
 _CURLY_QUOTES = str.maketrans({"“": '"', "”": '"'})
+# 引号修好之后，还要处理"中文冒号"：{"消息"： "..."}
+_COLON_AFTER_QUOTE = re.compile(r'(?<=["])\s*[：:]\s*')
 
 
 def _normalize_quotes(text):
-    """模型偶尔会用中文引号当 JSON 的引号（{“对白”：“……”}），先掰回来再解析"""
-    return (text or "").translate(_CURLY_QUOTES)
+    """模型偶尔会用中文引号和中文冒号当 JSON 语法（{“对白”：“……”}），先掰回来再解析"""
+    out = (text or "").translate(_CURLY_QUOTES)
+    return _COLON_AFTER_QUOTE.sub(": ", out)
 
 
 def _extract_json_objects(text):

@@ -85,6 +85,24 @@ const authFetch = (url, options = {}) => {
     });
 };
 
+// 把"本该是结构化的整段 JSON"还原成里面的文本。
+// 用于兜底：模型偶尔把 {"消息": "..."} 原样存进消息（例如用了中文引号/冒号导致解析失败），
+// 历史里就会显示成一坨 JSON。这里在渲染时再拆一次。
+function unwrapStructured(text) {
+    const t = (text || '').trim();
+    if (!t.startsWith('{')) return text;
+    const norm = t.replace(/[“”]/g, '"').replace(/(?<=")\s*[：:]\s*/g, ': ');
+    try {
+        const o = JSON.parse(norm);
+        if (o && typeof o === 'object') {
+            if (o['消息']) return String(o['消息']);
+            if (o['对白']) return String(o['对白']);
+            if (o['text']) return String(o['text']);
+        }
+    } catch (e) { /* 不是 JSON，原样返回 */ }
+    return text;
+}
+
 const SVG_ICONS = {
     milestone: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6366f1" stroke-width="1.5"><polygon points="8 1.5 10 6 15 6 11.2 9 12.5 13.5 8 11 3.5 13.5 4.8 9 1 6 6 6"/></svg>',
     scene_change: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6b7280" stroke-width="1.5"><path d="M3 8h10M8 3l5 5-5 5"/></svg>',
@@ -590,7 +608,7 @@ class ChatManager {
         // 最终兜底：模型没按 JSON 输出（例如思考模式跑偏、纯文本回复、API 报错），
         // 按当前通道原样展示，绝不能让消息"静默消失"
         if (rendered === 0 && fullText.trim()) {
-            const text = fullText.trim();
+            const text = unwrapStructured(fullText.trim());
             const toPhone = this._lastChannel === 'phone' || !this.coLocated;
             if (toPhone && window.phonePanel) {
                 window.phonePanel.push('assistant', text, true);
@@ -602,9 +620,9 @@ class ChatManager {
         if (window.phonePanel) window.phonePanel.hideTyping();
     }
 
-    // 模型偶尔用中文引号当 JSON 引号（{“对白”：“……”}），掰回英文引号再解析
+    // 模型偶尔用中文引号/中文冒号当 JSON 语法（{“对白”：“……”}），掰回英文再解析
     _normalizeQuotes(s) {
-        return (s || '').replace(/[“”]/g, '"');
+        return (s || '').replace(/[“”]/g, '"').replace(/(?<=")\s*[：:]\s*/g, ': ');
     }
 
     _extractJSONObjects(text) {
@@ -911,7 +929,7 @@ class ChatManager {
             const trimmed = line.trim();
             if (!trimmed.startsWith('{')) continue;
             try {
-                const obj = JSON.parse(trimmed);
+                const obj = JSON.parse(this._normalizeQuotes(trimmed));
                 if (obj["对白"]) this._addBubble('assistant', obj["对白"]);
                 if (obj["消息"] && window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
                 if (obj["表情包"]) {
@@ -921,7 +939,8 @@ class ChatManager {
                 parsedAny = true;
             } catch (e) {}
         }
-        if (!parsedAny) this._addBubble('assistant', content);
+        // 兜底：存下来的就是一整段 JSON（历史遗留），把里面的文本拆出来显示
+        if (!parsedAny) this._addBubble('assistant', unwrapStructured(content));
     }
 
     async _initEventsForConversation(convId) {
@@ -1161,7 +1180,7 @@ class PhonePanel {
         if (!this.list) return;
         this.list.innerHTML = this.messages.length === 0
             ? '<div class="phone-empty">还没有消息</div>'
-            : this.messages.map(m => `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${this._e(m.content)}</div>`).join('');
+            : this.messages.map(m => `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${this._e(unwrapStructured(m.content))}</div>`).join('');
         this.list.scrollTop = this.list.scrollHeight;
     }
     async send() {
