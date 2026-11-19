@@ -328,7 +328,10 @@ def chat():
     all_messages = db.get_messages(conv_id)
     user_msgs = [m for m in all_messages if m["role"] == "user"]
     if len(user_msgs) == 1:
-        db.update_conversation_title(conv_id, user_message[:20] + ("..." if len(user_message) > 20 else ""))
+        # 发表情包开的头：别把"（青梅发来一个表情包：…）"整句当标题
+        title = "表情包" if sticker_row else user_message[:20] + (
+            "..." if len(user_message) > 20 else "")
+        db.update_conversation_title(conv_id, title)
 
     # 表情包不参与关键词换时间（图上的说明文字不该把时钟拨走）
     now_minutes, keyword_jump = time_keeper.apply_message_tick(

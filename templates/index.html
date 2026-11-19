@@ -170,6 +170,13 @@
                             <path d="M10 3v3m0 8v3M3 10h3m8 0h3"/><circle cx="10" cy="10" r="3"/><path d="M10 7v6M7 10h6"/>
                         </svg>
                     </button>
+                    <button class="btn-sticker-mode" id="btnSticker" title="表情包">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                            <circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8"/>
+                            <circle cx="9" cy="10" r="1.1" fill="currentColor" stroke="none"/>
+                            <circle cx="15" cy="10" r="1.1" fill="currentColor" stroke="none"/>
+                        </svg>
+                    </button>
                     <textarea id="messageInput" placeholder="输入消息..." rows="1" autofocus></textarea>
                     <button class="btn-send" id="btnSend" title="发送">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -179,6 +186,25 @@
                 </div>
             </div>
         </main>
+
+        <!-- 表情包面板（点输入框左边的笑脸打开） -->
+        <div class="sticker-panel" id="stickerPanel">
+            <div class="sticker-panel-head">
+                <span class="sticker-panel-title">表情包</span>
+                <div class="sticker-panel-actions">
+                    <button class="btn-settings" id="btnStickerImport">相册导入</button>
+                    <button class="btn-settings" id="btnStickerRefresh">刷新</button>
+                    <button class="btn-settings" id="btnStickerClose">关闭</button>
+                </div>
+            </div>
+            <div class="sticker-channels">
+                <label><input type="radio" name="stickerChannel" value="chat" checked> 当面</label>
+                <label><input type="radio" name="stickerChannel" value="phone"> 手机</label>
+                <span class="sticker-hint" id="stickerHint">一次可选多张导入</span>
+            </div>
+            <div class="sticker-grid" id="stickerGrid"></div>
+            <input type="file" id="stickerFile" accept="image/*" multiple hidden>
+        </div>
 
         <!-- 右侧：事件面板 -->
         <aside class="event-panel" id="eventPanel">

@@ -103,6 +103,18 @@ function unwrapStructured(text) {
     return text;
 }
 
+// 表情包图片消息：{"表情包": 路径, "url": 地址, "desc": 说明}
+// 注意她自己的 JSON 里也有「表情包」字段（存的是情绪词），所以必须靠 url 区分。
+function stickerMessageOf(text) {
+    const t = (text || '').trim();
+    if (!t.startsWith('{') || t.indexOf('"表情包"') < 0) return null;
+    try {
+        const o = JSON.parse(t);
+        if (o && o['表情包'] && o.url) return o;
+    } catch (e) { /* 不是图片消息 */ }
+    return null;
+}
+
 const SVG_ICONS = {
     milestone: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6366f1" stroke-width="1.5"><polygon points="8 1.5 10 6 15 6 11.2 9 12.5 13.5 8 11 3.5 13.5 4.8 9 1 6 6 6"/></svg>',
     scene_change: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#6b7280" stroke-width="1.5"><path d="M3 8h10M8 3l5 5-5 5"/></svg>',
@@ -157,6 +169,10 @@ class ChatManager {
         this.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } });
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
         if (this.btnPushMode) this.btnPushMode.addEventListener('click', () => this.togglePushMode());
+        const btnSticker = document.getElementById('btnSticker');
+        if (btnSticker) btnSticker.addEventListener('click', () => {
+            if (window.stickerPanel) window.stickerPanel.toggle();
+        });
         if (this.btnPause) this.btnPause.addEventListener('click', (e) => {
             e.stopPropagation();
             this.togglePause();
@@ -493,21 +509,34 @@ class ChatManager {
         }
     }
 
-    async sendMessage(forceChannel) {
-        const message = this.inputEl.value.trim();
-        if (!message || this.isProcessing) return;
+    async sendMessage(forceChannel, sticker) {
+        const message = sticker ? '' : this.inputEl.value.trim();
+        if (this.isProcessing) return;
+        if (!sticker && !message) return;
         this._lastRenderedCount = 0;
         this._renderedObjects = 0;
         this._lastChannel = forceChannel || (this.coLocated ? 'chat' : 'phone');
         this.isProcessing = true; this._disableInput();
-        this.inputEl.value = ''; this.inputEl.style.height = 'auto';
+        if (!sticker) {
+            this.inputEl.value = ''; this.inputEl.style.height = 'auto';
+        }
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
         const displayMsg = this.pushMode ? (message || '（轻戳尤夏）') : message;
         const serverMsg = this.pushMode ? `/推进 ${message}` : message;
         const isPushCmd = this.pushMode;
         if (this.pushMode) this.togglePushMode();
         const viaPhone = forceChannel === 'phone' || !this.coLocated;
-        if (viaPhone) {
+        if (sticker) {
+            // 发表情包：本机先渲染成图片，她的回应照常走流式
+            if (viaPhone) {
+                if (window.phonePanel) {
+                    window.phonePanel.pushSticker(sticker.url);
+                    window.phonePanel.showTyping();
+                }
+            } else {
+                this._addStickerBubble(sticker.url, 'me');
+            }
+        } else if (viaPhone) {
             if (window.phonePanel) {
                 window.phonePanel.push('user', displayMsg, false);
                 window.phonePanel.showTyping();
@@ -517,7 +546,9 @@ class ChatManager {
         }
         AnimationEngine.showThinking(this.messagesContainer);
         try {
-            const payload = { conversation_id: this.currentConvId, message: serverMsg };
+            const payload = { conversation_id: this.currentConvId };
+            if (sticker) payload.sticker = sticker.path;
+            else payload.message = serverMsg;
             if (forceChannel) payload.channel = forceChannel;
             const response = await authFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -831,6 +862,22 @@ class ChatManager {
         }
     }
 
+    /** 直接渲染一张表情包图片（玩家发表情包，或历史回放） */
+    _addStickerBubble(url, who = 'me') {
+        if (!url) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = `message-row ${who === 'me' ? 'user' : 'assistant'} sticker-row`;
+        const img = document.createElement('img');
+        img.className = 'sticker-img';
+        img.src = url;
+        img.alt = '表情包';
+        img.onload = () => AnimationEngine.scrollToBottom(this.messagesContainer);
+        wrapper.appendChild(img);
+        this.messagesContainer.appendChild(wrapper);
+        AnimationEngine.fadeIn(img);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
+
     _addEventOrganizing() {
         const existing = document.getElementById('eventOrganizingHint');
         if (existing) return;
@@ -897,7 +944,9 @@ class ChatManager {
                         } catch (e) {}
                         this._addNpcBubble(name, text);
                     } else if (msg.role === 'user') {
-                        this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
+                        const st = stickerMessageOf(msg.content);
+                        if (st) this._addStickerBubble(st.url, 'me');
+                        else this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
                     } else {
                         this._parseAndRenderHistory(msg.content);
                     }
@@ -1168,6 +1217,10 @@ class PhonePanel {
         this.render();
         if (markUnread && !this.isOpen) this.setUnread(this.unread + 1);
     }
+    pushSticker(url) {
+        this.messages.push({ role: 'user', sticker: url });
+        this.render();
+    }
     showTyping() {
         if (!this.list || document.getElementById('phoneTyping')) return;
         const el = document.createElement('div');
@@ -1191,7 +1244,13 @@ class PhonePanel {
         if (!this.list) return;
         this.list.innerHTML = this.messages.length === 0
             ? '<div class="phone-empty">还没有消息</div>'
-            : this.messages.map(m => `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${this._e(unwrapStructured(m.content))}</div>`).join('');
+            : this.messages.map(m => {
+                const sticker = m.sticker || (m.role === 'user' ? (stickerMessageOf(m.content) || {}).url : null);
+                const inner = sticker
+                    ? `<img class="phone-sticker" src="${this._e(sticker)}" alt="表情包">`
+                    : this._e(unwrapStructured(m.content));
+                return `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${inner}</div>`;
+            }).join('');
         this.list.scrollTop = this.list.scrollHeight;
     }
     async send() {
@@ -1412,6 +1471,114 @@ class SettingsPanel {
     }
 }
 
+class StickerPanel {
+    constructor() {
+        this.el = document.getElementById('stickerPanel');
+        this.grid = document.getElementById('stickerGrid');
+        this.file = document.getElementById('stickerFile');
+        this.hint = document.getElementById('stickerHint');
+        this.items = [];
+        this.isOpen = false;
+        this._bind();
+    }
+    _bind() {
+        const close = document.getElementById('btnStickerClose');
+        if (close) close.addEventListener('click', () => this.close());
+        const refresh = document.getElementById('btnStickerRefresh');
+        if (refresh) refresh.addEventListener('click', () => this.load());
+        const imp = document.getElementById('btnStickerImport');
+        if (imp) imp.addEventListener('click', () => this.file && this.file.click());
+        if (this.file) this.file.addEventListener('change', () => this._upload());
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isOpen) this.close();
+        });
+    }
+    toggle() { this.isOpen ? this.close() : this.open(); }
+    open() {
+        if (!this.el) return;
+        this.isOpen = true;
+        this.el.classList.add('open');
+        this.load();
+    }
+    close() {
+        this.isOpen = false;
+        if (this.el) this.el.classList.remove('open');
+    }
+    _channel() {
+        const radio = document.querySelector('input[name="stickerChannel"]:checked');
+        const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
+        if (cm && !cm.coLocated) return 'phone';    // 异地只能发手机
+        return radio ? radio.value : 'chat';
+    }
+    async load() {
+        if (!this.grid) return;
+        try {
+            const res = await authFetch('/api/stickers/list?limit=300');
+            if (!res.ok) return;
+            const data = await res.json();
+            this.items = data.items || [];
+            this.render();
+            if (this.hint) {
+                this.hint.textContent = this.items.length
+                    ? `共 ${data.total || this.items.length} 张，点图直接发送`
+                    : '表情包库是空的';
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    render() {
+        if (!this.grid) return;
+        if (!this.items.length) {
+            this.grid.innerHTML = '<div class="sticker-empty">表情包库是空的，点「相册导入」一次选多张图</div>';
+            return;
+        }
+        this.grid.innerHTML = this.items.map((it, i) => {
+            const tip = [it.emotion, it.caption].filter(Boolean).join(' / ');
+            return `<img class="sticker-pick" data-i="${i}" src="${this._e(it.url)}" ` +
+                   `title="${this._e(tip)}" alt="${this._e(it.emotion || '表情')}">`;
+        }).join('');
+        this.grid.querySelectorAll('.sticker-pick').forEach(img => {
+            img.addEventListener('click', () => {
+                const item = this.items[Number(img.dataset.i)];
+                if (item) this._send(item);
+            });
+        });
+    }
+    _send(item) {
+        const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
+        if (!cm) return;
+        const channel = this._channel();
+        this.close();
+        cm.sendMessage(channel === 'phone' ? 'phone' : undefined, item);
+    }
+    async _upload() {
+        const files = Array.from((this.file && this.file.files) || []);
+        if (!files.length) return;
+        if (this.hint) this.hint.textContent = `正在导入 ${files.length} 张…`;
+        const form = new FormData();
+        files.forEach(f => form.append('files', f, f.name));
+        try {
+            const res = await authFetch('/api/stickers/upload', { method: 'POST', body: form });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            if (this.hint) {
+                this.hint.textContent = `导入 ${data.uploaded_count || 0} 张` +
+                    (data.duplicates ? `，重复 ${data.duplicates}` : '') +
+                    (data.pending ? `，还有 ${data.pending} 张待打标` : '');
+            }
+            await this.load();
+        } catch (e) {
+            if (this.hint) this.hint.textContent = '导入失败：' + (e.message || e);
+        } finally {
+            if (this.file) this.file.value = '';
+        }
+    }
+    _e(t) {
+        const d = document.createElement('div');
+        d.textContent = t == null ? '' : String(t);
+        return d.innerHTML;
+    }
+}
+
 class EmotionAssistant {
     constructor() {
         this.chatManager = new ChatManager();
@@ -1419,6 +1586,8 @@ class EmotionAssistant {
         this.eventPanel = new EventPanel();
         this.phonePanel = new PhonePanel();
         window.phonePanel = this.phonePanel;
+        this.stickerPanel = new StickerPanel();
+        window.stickerPanel = this.stickerPanel;
         this.settingsPanel = new SettingsPanel();
         this.uiController = new UIController();
         window.emotionAssistant = this;
