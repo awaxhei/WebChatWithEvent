@@ -44,6 +44,11 @@ VAGUE = {"嗯", "哦", "噢", "随便", "都行", "好啊", "好", "行", "嗯�
 REPEAT = ["哈哈", "嘿嘿", "呜呜", "嗯嗯", "啊啊"]
 CMD_START = ("先", "快", "别", "记得", "注意", "小心", "去", "把")
 MOODS = {"平静", "开心", "认真", "害羞", "放松", "无语", "惊讶", "不爽"}
+# 口癖：唔姆 是招牌（目标使用率 20%~40%），唔 / 嗯 是最短的两个版本
+TIC_MAIN = "唔姆"
+TIC_ALL = ("唔姆", "唔", "嗯")
+# 口癖的错误用法：叠用、拉长
+TIC_BAD_RE = re.compile(r"(唔姆|唔|嗯)\1|(唔姆|唔|嗯)\s*[～~—]+|唔姆[诶啊嗯呀哦]")
 
 JUDGE_PROMPT = (
     "你在给一段角色扮演对话做质量评审。\n"
@@ -134,8 +139,8 @@ CASES = [
     ("手机-晚安", "晚安，早点睡", "phone"),
 ]
 
-stats = {"cases": 0, "violations": [], "scores": [], "samples": []}
-
+stats = {"cases": 0, "violations": [], "scores": [], "samples": [],
+         "tic_hits": 0, "tic_any": 0, "tic_only": 0, "tic_adjacent": 0}
 
 def parse_sse(body):
     out = []
@@ -150,6 +155,20 @@ def parse_sse(body):
 
 def strip_prefix(text):
     return re.sub(r"^\s*(?:尤夏|青梅|她|我)\s*[:：]\s*", "", text or "")
+
+
+def unwrap(content):
+    """库里的一条内容 → 她实际说出来的话（JSON 拆 对白/消息，纯文本原样）"""
+    raw = (content or "").strip()
+    if not raw.startswith("{"):
+        return strip_prefix(raw)
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return strip_prefix(raw)
+    if not isinstance(obj, dict):
+        return strip_prefix(raw)
+    return strip_prefix(str(obj.get("对白") or obj.get("消息") or ""))
 
 
 def judge(deepseek, mine, hers):
@@ -232,6 +251,10 @@ def main():
         if not shown:
             stats["violations"].append(f"[{name}] 空回复")
             continue
+        # 一轮可能落好几条（她把话拆成两三条短 JSON），口癖那条不一定是最后一条
+        turn_text = " ".join(
+            strip_prefix(unwrap(m["content"])) for m in msgs[n_before:]
+        ) if msgs[n_before:] else shown
 
         # ── 结构规则 ──
         if done_channel == "chat":
@@ -258,6 +281,24 @@ def main():
             stats["violations"].append(f"[{name}] 万能词敷衍：{shown}")
         if mood and mood not in MOODS:
             stats["violations"].append(f"[{name}] 心情取值非法：{mood}")
+        # 口癖：叠用/拉长是硬伤；另有使用率统计（见报告）
+        if TIC_BAD_RE.search(turn_text):
+            stats["violations"].append(f"[{name}] 口癖叠用或拉长：{turn_text[:20]}")
+        tic_hits = turn_text.count(TIC_MAIN)
+        if tic_hits > 1:
+            stats["violations"].append(f"[{name}] 一轮里「唔姆」出现 {tic_hits} 次")
+        if tic_hits:
+            stats["tic_hits"] += 1
+        starts_tic = turn_text.lstrip().startswith(TIC_MAIN) or \
+            turn_text.lstrip("。…，, ").startswith(TIC_MAIN)
+        if starts_tic and stats.get("_prev_tic"):
+            stats["tic_adjacent"] += 1
+        stats["_prev_tic"] = starts_tic
+        if any(t in turn_text for t in TIC_ALL):
+            stats["tic_any"] += 1
+        # 整条只有口癖：偶尔可以（心情糟），多了就是敷衍
+        if turn_text.strip("。…，, ！!") in (TIC_MAIN, "唔", "嗯"):
+            stats["tic_only"] += 1
 
         # ── 情感评分 ──
         score = judge(deepseek, mine, shown)
@@ -271,6 +312,8 @@ def main():
                 stats["samples"].append((name, mine, shown, score))
         print(f"  {idx}/{len(CASES)} {name} ok")
 
+    if stats["tic_only"] > 2:
+        stats["violations"].append(f"[全篇] 整条只有口癖的回复有 {stats['tic_only']} 条（最多 2 条）")
     write_report()
     print(f"\n完成 {stats['cases']} 个场景，违例 {len(stats['violations'])} 条")
     return 0
@@ -292,6 +335,11 @@ def write_report():
     lines.append(f"- 平均分：亲密 {avg['亲密']} / 傲娇 {avg['傲娇']} / 冷淡 {avg['冷淡']} / 萌 {avg['萌']}")
     lines.append(f"- 脑回路清奇：{weird} 条；说教：{lecture} 条；答非所问：{off} 条")
     lines.append(f"- 情感方向：靠近 {near} / 回避 {away} / 平衡 {len(sc) - near - away}")
+    tic_rate = round(100.0 * stats["tic_hits"] / n)
+    any_rate = round(100.0 * stats["tic_any"] / n)
+    lines.append(f"- 口癖「唔姆」：{stats['tic_hits']} 条（{tic_rate}%）；"
+                 f"含唔/嗯/唔姆的 {stats['tic_any']} 条（{any_rate}%）；"
+                 f"整条只有口癖 {stats['tic_only']} 条；连着两轮都用 {stats['tic_adjacent']} 次")
     off_names = [s["name"] for s in sc if s.get("答非所问")]
     weird_names = [s["name"] for s in sc if s.get("脑回路清奇")]
     if off_names:
