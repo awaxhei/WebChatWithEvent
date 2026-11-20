@@ -75,6 +75,35 @@ _COLON_AFTER_QUOTE = re.compile(r'(?<=["])\s*[：:]\s*')
 _SPEAKER_PREFIX = re.compile(r"^\s*(?:尤夏|青梅|她|我|对方|旁白)\s*[:：]\s*")
 
 
+_SENT_END = re.compile(r"(?<=[。！？…!?])")
+
+
+def _split_long(text, limit=24):
+    """把一条过长的台词按句号拆短。
+
+    她的人设是「一条最多 20 字」，但模型偶尔写成 30-60 字的一段。
+    与其整段塞进一个气泡，不如按句读拆成几条——节奏对，前端的多条气泡也更好看。
+    """
+    text = (text or "").strip()
+    if not text or len(text) <= limit:
+        return [text] if text else []
+    pieces = [p.strip() for p in _SENT_END.split(text) if p.strip()]
+    out, buf = [], ""
+    for piece in pieces:
+        if len(buf) + len(piece) <= limit:
+            buf += piece
+            continue
+        if buf:
+            out.append(buf)
+        while len(piece) > limit:
+            out.append(piece[:limit])
+            piece = piece[limit:]
+        buf = piece
+    if buf:
+        out.append(buf)
+    return out or [text]
+
+
 def _strip_speaker(text):
     """去掉台词开头的「尤夏：」这类前缀（只剥一层，不动正文）"""
     return _SPEAKER_PREFIX.sub("", (text or "").strip(), count=1).strip()
@@ -472,31 +501,48 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     mood = ""
     for obj in objects:
         if obj.get("对白") and can_speak:
-            speech.append(_strip_speaker(str(obj["对白"])))
+            # 一条对白超过 24 字就按句号拆开：她要的是短句，模型偶尔会写长
+            speech.extend(_split_long(_strip_speaker(str(obj["对白"]))))
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
-            phone_msgs.append(_strip_speaker(str(obj["消息"])))
+            phone_msgs.extend(_split_long(_strip_speaker(str(obj["消息"])), limit=40))
         if not mood and obj.get("心情"):
             mood = str(obj["心情"]).strip()[:8]
 
-    # 心情只影响界面头像；存进 chat 的 JSON 里，前端能按每条消息画表情
+    # 心情只影响界面头像；不在白名单里的（模型偶尔会发明"担心"这类）丢掉，沿用上一次
+    if mood and mood not in MOOD_FACES:
+        mood = ""
     if mood:
         try:
             db.set_yuxia_mood(conv_id, mood)
         except Exception:
             pass
 
+    # 异地时她只有「消息」通道：模型偶尔还是会给「对白」，别丢掉，转成消息发出来
+    if not can_speak and speech:
+        phone_msgs.extend(speech)
+        speech = []
+    # 异地时对白没人看：把「对白」也当消息处理（上面已经转过了）
     if speech or stickers_used:
-        payload = {}
-        if speech:
-            payload["对白"] = "\n".join(speech)
-        if stickers_used:
-            payload["表情包"] = ",".join(stickers_used)
-        if mood:
-            payload["心情"] = mood
-        db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
-                       channel=CHAT_CHANNEL, scene=yuxia_loc)
+        # 每条对白单独存一条消息（一次说几句本来就该是几条 JSON），
+        # 这样节奏是短的，前端也是分开的气泡
+        first = True
+        for part in speech:
+            payload = {"对白": part}
+            if first and stickers_used:
+                payload["表情包"] = ",".join(stickers_used)
+            if first and mood:
+                payload["心情"] = mood
+            db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
+                           channel=CHAT_CHANNEL, scene=yuxia_loc)
+            first = False
+        if stickers_used and not speech:
+            payload = {"表情包": ",".join(stickers_used)}
+            if mood:
+                payload["心情"] = mood
+            db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
+                           channel=CHAT_CHANNEL, scene=yuxia_loc)
 
     for msg in phone_msgs:
         db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc)

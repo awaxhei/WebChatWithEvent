@@ -205,6 +205,35 @@ def main():
           bool(stale_row) and stale_row["status"] == "gone",
           str(dict(stale_row) if stale_row else None))
 
+    # ── 5d) 模型把 who 填成「你」「尤夏」「青梅」时，不许建出同名 NPC
+    # 以前 who 直接拿去建人，于是库里出现了一个叫「尤夏」的 NPC，
+    # 之后每一句都被它接走（试玩里 3 轮连续出现）。
+    conv_r = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_r)
+    locations.switch_both(app_db, conv_r, "煎饼摊")
+    for bogus in ("你", "您", "尤夏", "青梅"):
+        got, _ = resolve(app_db, conv_r, "煎饼摊", "随便说点什么吧",
+                         json.dumps({"addressed": True, "who": bogus}, ensure_ascii=False))
+        names = [n["name"] for n in app_db.get_npcs(conv_r, location="煎饼摊")]
+        check(f"who=「{bogus}」不会建出同名 NPC",
+              bool(got) and bogus not in names, str(names))
+    names = [n["name"] for n in app_db.get_npcs(conv_r, location="煎饼摊")]
+    check("保留称呼都按地点改成了默认身份", names == ["摊主"], str(names))
+
+    # 库里残留的同名 NPC 会被退场
+    conv_r2 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_r2)
+    locations.switch_both(app_db, conv_r2, "街上")
+    stale2 = app_db.add_npc(conv_r2, "尤夏", "尤夏", "街上", "")
+    npc.find_addressed(app_db, conv_r2, "街上", "嗯")
+    row2 = app_db.get_npc(stale2)
+    check("库里残留的「尤夏」NPC 会被退场",
+          bool(row2) and row2["status"] == "gone",
+          str(dict(row2) if row2 else None))
+    spawned = npc.spawn_named(app_db, conv_r2, "街上", "青梅")
+    check("spawn_named 也不会建出「青梅」",
+          bool(spawned) and spawned["name"] != "青梅", str(spawned))
+
     # ── 6) 手动创建 / 退场
     r = c.post(f"/api/npcs/{conv}", json={"name": "煎饼摊老板娘", "role": "老板娘",
                                           "location": "煎饼摊"})

@@ -36,6 +36,12 @@ ROLE_SUFFIXES = (
 # 同一地点最多几个 NPC（连同全局上限一起用）
 PER_LOCATION_CAP = 3
 
+# 这些不是"第三人"：模型偶尔会把 who 填成「你」「我」「尤夏」「青梅」，
+# 那样就会建出一个叫「尤夏」的 NPC，之后每句都会被它接走。
+RESERVED_NAMES = {
+    "你", "您", "我", "她", "他", "它", "你们", "我们", "大家", "对方", "自己",
+    "尤夏", "青梅", "主人", "路人甲", "路人乙",
+}
 # 只用于清理历史数据：把以前被正则误当成称呼建出来的口头禅 NPC 退场。
 # 它不参与任何判断，新 NPC 的名字完全由模型给。
 _EN_INTERJECTIONS = {
@@ -47,9 +53,13 @@ _EN_INTERJECTIONS = {
 
 
 def _is_bogus_name(name):
-    """只用于清理历史数据：以前被正则误当成称呼建出来的口头禅 NPC"""
+    """不是"第三人"的名字：口头禅（hey/hi）或者 你/我/尤夏/青梅 这类"""
     n = (name or "").strip()
-    return bool(n) and n.isascii() and n.lower() in _EN_INTERJECTIONS
+    if not n:
+        return False
+    if n in RESERVED_NAMES:
+        return True
+    return n.isascii() and n.lower() in _EN_INTERJECTIONS
 
 
 def _role_of(name):
@@ -167,6 +177,9 @@ def _create(db, conv_id, location, name):
     name = (name or "").strip()[:12]
     if not name:
         return None
+    if name in RESERVED_NAMES:
+        # 这不是第三人（是玩家、她本人或代词）→ 按地点取个默认身份
+        name = _default_name(location)
     role = _role_of(name)
     try:
         present = db.get_npcs(conv_id, location=location)

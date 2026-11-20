@@ -214,6 +214,19 @@ def main():
         objs = chat_mod._extract_json_objects(chat_mod._normalize_quotes(raw))
         check("中文引号与中文冒号也能解析",
               bool(objs) and "唔——诶" in (objs[0].get("消息") or ""), str(objs))
+
+        # 一条过长的对白要按句号拆短（她的人设是短句，模型偶尔会写成一段）
+        long_line = "你回来了啊。今天外面冷不冷。我把粥热好了放在桌上，你自己去端。"
+        parts = chat_mod._split_long(long_line, limit=24)
+        check("过长的对白会拆成几条", len(parts) > 1, str(parts))
+        check("拆完每条都不超长", all(len(p) <= 24 for p in parts), str([len(p) for p in parts]))
+        check("拆完不丢字", "".join(parts) == long_line, "".join(parts))
+        check("短句原样保留", chat_mod._split_long("嗯。", limit=24) == ["嗯。"],
+              str(chat_mod._split_long("嗯。", limit=24)))
+        check("没有句号也能硬拆", all(len(p) <= 10 for p in chat_mod._split_long("啊" * 35, limit=10)),
+              str(chat_mod._split_long("啊" * 35, limit=10)))
+        check("说话人前缀会被剥掉", chat_mod._strip_speaker("尤夏：嗯。") == "嗯。",
+              chat_mod._strip_speaker("尤夏：嗯。"))
     finally:
         chat_mod.deepseek = real_deepseek
 
