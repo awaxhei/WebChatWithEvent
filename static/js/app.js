@@ -175,6 +175,7 @@ class ChatManager {
         this.locationTag = document.getElementById('locationTag');
         this.locationPicker = document.getElementById('locationPicker');
         this.sceneDesc = document.getElementById('sceneDesc');
+        this.sceneDescOther = document.getElementById('sceneDescOther');
         this.sceneCard = document.getElementById('sceneCard');
         this.welcomeEl = document.querySelector('.welcome-message');
         this._bindEvents();
@@ -232,6 +233,29 @@ class ChatManager {
         document.addEventListener('click', () => this._toggleLocationPicker(false));
     }
     togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
+
+    // ── 行动速度（1 很慢 … 5 很快；等待期仍是递增的，最长 20 秒） ──
+    _speedText(speed) {
+        return ({ 1: '很慢', 2: '偏慢', 3: '正常', 4: '偏快', 5: '很快' })[speed] || '正常';
+    }
+    _setSpeedUI(speed) {
+        this.speed = Math.max(1, Math.min(5, Number(speed) || 3));
+        const input = document.getElementById('speedRange');
+        const label = document.getElementById('speedLabel');
+        if (input && Number(input.value) !== this.speed) input.value = String(this.speed);
+        if (label) label.textContent = this._speedText(this.speed);
+    }
+    async _saveSpeed(speed) {
+        this._setSpeedUI(speed);
+        if (!this.currentConvId) return;
+        try {
+            await authFetch(`/api/speed/${this.currentConvId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ speed: this.speed }),
+            });
+        } catch (e) {}
+    }
 
     // ── 暂停自动推进（她不自主行动、世界引擎停转；正常对话不受影响） ──
     async togglePause() {
@@ -415,7 +439,7 @@ class ChatManager {
             this.moodFace = scene.mood_face;
             if (window.phonePanel) window.phonePanel.setMood(scene.mood_face);
         }
-        if (typeof scene.speed === 'number') this._setSpeedUI(scene.speed);
+        if (typeof scene.speed === 'number' && this._setSpeedUI) this._setSpeedUI(scene.speed);
         if (typeof scene.paused === 'boolean' && scene.paused !== this.paused) {
             this._setPaused(scene.paused);
         }
@@ -426,11 +450,23 @@ class ChatManager {
                 ? yuxiaLoc
                 : `${yuxiaLoc}（你在${playerLoc}）`;
         }
-        const desc = this.coLocated
-            ? (scene.player_description || scene.description)
-            : (scene.player_description || scene.description);
-        if (this.sceneDesc && desc) {
-            this.sceneDesc.textContent = desc;
+        // 场景描写严格按"谁在哪"来取：分开时两边都列出来。
+        // 以前两边都取 player_description，缺了就退回 description（她的地点），
+        // 于是站在厨房却读到客厅的描写，看起来像"不知道我们不在一个地方"。
+        if (this.sceneDesc) {
+            if (this.coLocated) {
+                this.sceneDesc.textContent = scene.player_description || scene.description
+                    || '（正在读取场景…）';
+                if (this.sceneDescOther) this.sceneDescOther.style.display = 'none';
+            } else {
+                this.sceneDesc.textContent = `你在${playerLoc}：`
+                    + (scene.player_description || '（正在读取…）');
+                if (this.sceneDescOther) {
+                    this.sceneDescOther.textContent = `尤夏在${yuxiaLoc}：`
+                        + (scene.yuxia_description || '（正在读取…）');
+                    this.sceneDescOther.style.display = 'block';
+                }
+            }
             if (this.sceneCard) this.sceneCard.style.display = 'block';
         }
         if (scene.locations && this.locationPicker) {

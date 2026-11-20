@@ -1075,3 +1075,10 @@ html, body {
     border-radius: 10px; padding: 3px 6px; white-space: nowrap;
     user-select: none; margin-bottom: 2px;
 }
+
+/* 分处两地时，场景卡里两段描写上下排（你的地点 / 她的地点） */
+.scene-desc.scene-other {
+    margin-top: 4px; padding-top: 4px;
+    border-top: 1px dashed rgba(148, 163, 184, 0.35);
+    opacity: 0.85;
+}

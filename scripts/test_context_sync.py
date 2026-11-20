@@ -349,6 +349,34 @@ def main():
     finally:
         chat_mod.deepseek = real
 
+    # ── 12) 分处两地时，两边的场景描写必须各自独立（不能拿另一边的顶替）
+    convX = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, convX)
+    llmX = CaptureLLM()          # chat_sync 返回失败 → 环境描写走 fallback，按地点生成
+    chat_mod.deepseek = llmX
+    try:
+        c.post(f"/api/move/{convX}", json={"who": "player", "location": "厨房"})
+        scene = {}
+        for _ in range(6):
+            scene = c.get(f"/api/scene/{convX}").get_json() or {}
+            if not scene.get("pending"):
+                break
+            time.sleep(1.2)
+        check("分处两地时场景接口标明不同地点",
+              scene.get("co_located") is False
+              and scene.get("location") != scene.get("player_location"),
+              f"{scene.get('location')} / {scene.get('player_location')}")
+        check("她那边和玩家那边的描写各自独立",
+              bool(scene.get("yuxia_description")) and bool(scene.get("player_description"))
+              and scene.get("yuxia_description") != scene.get("player_description"),
+              f"{str(scene.get('yuxia_description'))[:30]} | {str(scene.get('player_description'))[:30]}")
+        check("玩家那边的描写是他所在地点的",
+              "厨房" in (scene.get("player_description") or ""), str(scene.get("player_description")))
+        check("她那边的描写是她所在地点的",
+              "公寓客厅" in (scene.get("yuxia_description") or ""), str(scene.get("yuxia_description")))
+    finally:
+        chat_mod.deepseek = real
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

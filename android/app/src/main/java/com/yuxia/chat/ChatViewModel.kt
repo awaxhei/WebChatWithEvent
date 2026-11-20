@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -45,6 +46,7 @@ data class UiState(
     val pushMode: Boolean = false,
     val moodFace: String = "(ᗜ ‸ ᗜ)",
     val speed: Int = 3,
+    val yuxiaDesc: String = "",
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -57,6 +59,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var streamRaw = ""
     private var renderedObjects = 0
     private var lastMsgCount = 0
+    private var sceneRetries = 0
     private val app get() = getApplication<Application>()
 
     // ── 启动 ────────────────────────────────────────
@@ -267,6 +270,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             playerLocation = scene.optString("player_location"),
             coLocated = scene.optBoolean("co_located", true),
             sceneDesc = scene.optString("player_description").ifBlank { scene.optString("description") },
+            yuxiaDesc = scene.optString("yuxia_description").ifBlank { scene.optString("description") },
             storyTime = scene.optString("story_time").ifBlank { state.storyTime },
             storyMinutes = scene.optInt("story_minutes", state.storyMinutes),
             paused = scene.optBoolean("paused", state.paused),
@@ -275,6 +279,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             moodFace = scene.optString("mood_face").ifBlank { state.moodFace },
             speed = scene.optInt("speed", state.speed),
         )
+        // 环境描写是后台生成的：pending 就隔一会儿再取一次（最多 6 次）
+        if (scene.optBoolean("pending", false)) {
+            if (sceneRetries < 6) {
+                sceneRetries += 1
+                viewModelScope.launch {
+                    delay(1600)
+                    refreshScene()				
+                }
+            }
+        } else {
+            sceneRetries = 0
+        }
     }
 
     // ── 故事进展 / 时间 / 会话管理 ───────────────────

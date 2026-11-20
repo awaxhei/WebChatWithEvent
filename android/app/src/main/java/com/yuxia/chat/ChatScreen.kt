@@ -347,12 +347,30 @@ private fun SceneStrip(s: UiState) {
                 )
             }
         }
-        if (s.sceneDesc.isNotBlank()) {
+        if (s.coLocated) {
+            if (s.sceneDesc.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    s.sceneDesc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
+        } else {
+            // 分处两地：两边都写出来，避免读着像在同一个场景
             Spacer(Modifier.height(2.dp))
             Text(
-                s.sceneDesc,
+                "你在${s.playerLocation}：" + s.sceneDesc.ifBlank { "（正在读取…）" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "尤夏在${s.location}：" + s.yuxiaDesc.ifBlank { "（正在读取…）" },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 maxLines = 2,
             )
         }
