@@ -37,6 +37,11 @@ data class UiState(
     val unread: Int = 0,
     val importing: Boolean = false,
     val toast: String? = null,
+    val events: List<EventItem> = emptyList(),
+    val eventsLoaded: Boolean = false,
+    val storyMinutes: Int = 0,
+    val npcs: List<String> = emptyList(),
+    val pushMode: Boolean = false,
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -242,15 +247,86 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (name.isNotBlank()) names.add(name)
             }
         }
+        val npcNames = ArrayList<String>()
+        scene.optJSONArray("npcs")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val npc = arr.optJSONObject(i) ?: continue
+                val name = npc.optString("name")
+                if (name.isNotBlank()) npcNames.add(name)
+            }
+        }
         state = state.copy(
             location = scene.optString("location"),
             playerLocation = scene.optString("player_location"),
             coLocated = scene.optBoolean("co_located", true),
             sceneDesc = scene.optString("player_description").ifBlank { scene.optString("description") },
             storyTime = scene.optString("story_time").ifBlank { state.storyTime },
+            storyMinutes = scene.optInt("story_minutes", state.storyMinutes),
             paused = scene.optBoolean("paused", state.paused),
             locations = if (names.isEmpty()) state.locations else names,
+            npcs = npcNames,
         )
+    }
+
+    // ── 故事进展 / 时间 / 会话管理 ───────────────────
+
+    /** 故事进展面板的数据（和网页同一个接口） */
+    fun loadEvents() {
+        val conv = state.convId
+        if (conv.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) { Api.events(app, conv) }
+                state = state.copy(
+                    events = Model.events(res),
+                    eventsLoaded = true,
+                    storyTime = res.optString("story_time").ifBlank { state.storyTime },
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** 拨时间表盘：和网页一样只往前走、一次最多三天（服务端校验） */
+    fun setTime(hour: Int, minute: Int) {
+        val conv = state.convId
+        if (conv.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val scene = withContext(Dispatchers.IO) { Api.setTime(app, conv, hour, minute) }
+                applyScene(scene)
+                val from = scene.optString("from")
+                val to = scene.optString("to")
+                if (from.isNotBlank() && to.isNotBlank()) {
+                    appendEntry(false, Entry.Narration("时间流转：$from → $to"))
+                }
+                loadEvents()
+            } catch (e: Exception) {
+                state = state.copy(toast = e.message ?: "时间没拨动")
+            }
+        }
+    }
+
+    fun deleteConversation(id: String) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { Api.deleteConversation(app, id) }
+                if (state.convId == id) {
+                    Prefs.setConvId(app, "")
+                    state = state.copy(
+                        convId = "", entries = emptyList(), phoneEntries = emptyList(),
+                        events = emptyList(), eventsLoaded = false,
+                    )
+                }
+                loadConversations(goToList = true)
+            } catch (e: Exception) {
+                state = state.copy(toast = e.message ?: "删除失败")
+            }
+        }
+    }
+
+    fun togglePushMode() {
+        state = state.copy(pushMode = !state.pushMode)
     }
 
     fun moveTo(location: String, together: Boolean) {
@@ -295,11 +371,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { sendInternal(null, item, viaPhone) }
     }
 
-    private suspend fun sendInternal(text: String?, sticker: StickerItem?, viaPhone: Boolean) {
+    private suspend fun sendInternal(text: String?, sticker: StickerItem?, viaPhone: Boolean,
+                                     echo: Boolean = true) {
         val conv = state.convId.ifEmpty { return }
         val phone = viaPhone || !state.coLocated
-        val mine = if (sticker != null) Entry.Me(stickerUrl = sticker.url) else Entry.Me(text = text.orEmpty())
-        appendEntry(phone, mine)
+        if (echo) {
+            val mine = if (sticker != null) Entry.Me(stickerUrl = sticker.url) else Entry.Me(text = text.orEmpty())
+            appendEntry(phone, mine)
+        }
         streamRaw = ""
         renderedObjects = 0
         state = state.copy(busy = true, streaming = true, error = null)
@@ -319,6 +398,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(busy = false, streaming = false, unread = 0)
         streamRaw = ""
         viewModelScope.launch { withContext(Dispatchers.IO) { noteSeen() } }
+        loadEvents()
+    }
+
+    /** 故事推进模式：不发"我"的气泡，只提示一句，然后让她接着演 */
+    fun sendPush(hint: String) {
+        if (state.busy) return
+        val body = hint.trim()
+        appendEntry(false, Entry.Narration(if (body.isBlank()) "（轻戳尤夏）" else body))
+        viewModelScope.launch { sendInternal("/推进 " + body, null, false, echo = false) }
     }
 
     private fun applyEvent(ev: JSONObject, phone: Boolean) {
@@ -349,6 +437,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (text.isNotBlank()) appendEntry(phone, Entry.StateDesc(text))
             }
             "autonomy" -> handleAutonomy(ev)
+            "event_update" -> {
+                // 世界引擎推来的最新事件（和网页右侧面板同一个数据源）
+                if (ev.has("events")) {
+                    state = state.copy(events = Model.events(ev), eventsLoaded = true)
+                }
+            }
             "done" -> {
                 lastMsgCount = ev.optInt("msg_count", lastMsgCount)
                 if (ev.has("channel")) {

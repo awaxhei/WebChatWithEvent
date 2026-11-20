@@ -32,6 +32,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
@@ -90,6 +93,8 @@ fun ChatScreen(vm: ChatViewModel) {
     var showPhone by remember { mutableStateOf(false) }
     var showStickers by remember { mutableStateOf(false) }
     var showLocations by remember { mutableStateOf(false) }
+    var showEvents by remember { mutableStateOf(false) }
+    var showTimeDial by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -140,6 +145,12 @@ fun ChatScreen(vm: ChatViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showTimeDial = true }) {
+                        Icon(Icons.Filled.Schedule, contentDescription = "调整时间")
+                    }
+                    IconButton(onClick = { showEvents = true; vm.loadEvents() }) {
+                        Icon(Icons.Filled.ListAlt, contentDescription = "故事进展")
+                    }
                     IconButton(onClick = { showLocations = true }) {
                         Icon(Icons.Filled.Place, contentDescription = "换地方")
                     }
@@ -164,6 +175,10 @@ fun ChatScreen(vm: ChatViewModel) {
                             DropdownMenuItem(
                                 text = { Text("刷新场景") },
                                 onClick = { menuOpen = false; vm.refreshScene() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("故事推进模式：" + if (s.pushMode) "开" else "关") },
+                                onClick = { menuOpen = false; vm.togglePushMode() },
                             )
                             DropdownMenuItem(
                                 text = { Text("表情包库") },
@@ -204,16 +219,34 @@ fun ChatScreen(vm: ChatViewModel) {
                 onValueChange = { input = it },
                 busy = s.busy,
                 coLocated = s.coLocated,
+                pushMode = s.pushMode,
+                onTogglePush = vm::togglePushMode,
                 onSend = {
                     val text = input
                     input = ""
                     keyboard?.hide()
-                    vm.send(text)
+                    if (s.pushMode) vm.sendPush(text) else vm.send(text)
                 },
                 onStickers = { showStickers = true; vm.refreshStickers() },
                 onPhone = { showPhone = true; vm.loadPhone() },
             )
         }
+    }
+
+    if (showEvents) {
+        EventSheet(
+            state = s,
+            onClose = { showEvents = false },
+            onRefresh = { vm.loadEvents() },
+        )
+    }
+
+    if (showTimeDial) {
+        TimeDialDialog(
+            state = s,
+            onClose = { showTimeDial = false },
+            onConfirm = { hour, minute -> vm.setTime(hour, minute) },
+        )
     }
 
     if (showPhone) {
@@ -277,12 +310,23 @@ private fun SceneStrip(s: UiState) {
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
             .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
-        if (s.storyTime.isNotBlank()) {
-            Text(
-                s.storyTime,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (s.storyTime.isNotBlank()) {
+                Text(
+                    s.storyTime,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // 现场有谁（煎饼摊老板这类），和网页的场景卡一致
+            if (s.npcs.isNotEmpty()) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "在场：" + s.npcs.joinToString("、"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
         }
         if (s.sceneDesc.isNotBlank()) {
             Spacer(Modifier.height(2.dp))
@@ -412,6 +456,8 @@ private fun InputBar(
     onValueChange: (String) -> Unit,
     busy: Boolean,
     coLocated: Boolean,
+    pushMode: Boolean,
+    onTogglePush: () -> Unit,
     onSend: () -> Unit,
     onStickers: () -> Unit,
     onPhone: () -> Unit,
@@ -427,12 +473,27 @@ private fun InputBar(
             IconButton(onClick = onStickers) {
                 Icon(Icons.Filled.EmojiEmotions, contentDescription = "表情包")
             }
+            // 故事推进模式：不扮演玩家说话，只推一把剧情
+            IconButton(onClick = onTogglePush) {
+                Icon(
+                    Icons.Filled.AutoAwesome,
+                    contentDescription = "故事推进模式",
+                    tint = if (pushMode) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f),
                 placeholder = {
-                    Text(if (coLocated) "跟尤夏说点什么…" else "不在同一个地方，发消息给她…")
+                    Text(
+                        when {
+                            pushMode -> "推进剧情…（留空＝轻戳一下）"
+                            coLocated -> "跟尤夏说点什么…"
+                            else -> "不在同一个地方，发消息给她…"
+                        }
+                    )
                 },
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(),

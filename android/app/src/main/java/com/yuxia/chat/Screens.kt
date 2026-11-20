@@ -18,9 +18,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +63,7 @@ fun AppRoot(vm: ChatViewModel) {
             onNew = vm::newConversation,
             onRefresh = { vm.loadConversations() },
             onApiKey = vm::openApiKeyScreen,
+            onDelete = vm::deleteConversation,
         )
         Screen.Chat -> ChatScreen(vm)
     }
@@ -193,7 +196,9 @@ fun ConversationsScreen(
     onNew: () -> Unit,
     onRefresh: () -> Unit,
     onApiKey: () -> Unit,
+    onDelete: (String) -> Unit,
 ) {
+    var pendingDelete by remember { mutableStateOf<ConvBrief?>(null) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -234,11 +239,37 @@ fun ConversationsScreen(
                         supportingContent = {
                             Text(conv.updatedAt, style = MaterialTheme.typography.labelSmall)
                         },
+                        trailingContent = {
+                            IconButton(onClick = { pendingDelete = conv }) {
+                                Icon(
+                                    Icons.Filled.DeleteOutline,
+                                    contentDescription = "删除",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
                         modifier = Modifier.clickable { onOpen(conv.id) },
                     )
                     HorizontalDivider()
                 }
             }
         }
+    }
+
+    pendingDelete?.let { conv ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除对话") },
+            text = { Text("「${conv.title}」里的全部消息、事件和记忆都会一起删掉，不能恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(conv.id)
+                    pendingDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
     }
 }

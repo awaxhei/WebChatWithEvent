@@ -12,6 +12,24 @@ data class StickerItem(
     val caption: String,
 )
 
+/** 故事进展面板里的一条事件 */
+data class EventItem(
+    val id: Long,
+    val type: String,
+    val title: String,
+    val desc: String,
+    val status: String,
+    val storyTime: String,
+) {
+    /** "第一天 07:03" → "第一天"，用来按天分组 */
+    val day: String
+        get() = Regex("第[^\\s]+天").find(storyTime)?.value ?: "未分组"
+
+    /** "第一天 07:03" → "07:03" */
+    val clock: String
+        get() = Regex("\\d{1,2}:\\d{2}").find(storyTime)?.value ?: ""
+}
+
 /** 聊天里的一行 */
 sealed interface Entry {
     /** 我说的（图片贴纸时 text 为空） */
@@ -137,5 +155,39 @@ object Model {
             if (s.emotion.isNotEmpty() && !map.containsKey(s.emotion)) map[s.emotion] = s.url
         }
         return map
+    }
+
+    /** /api/events 或 /api/history 里的事件数组 */
+    fun events(obj: JSONObject): List<EventItem> {
+        val arr = obj.optJSONArray("events") ?: return emptyList()
+        val out = ArrayList<EventItem>()
+        for (i in 0 until arr.length()) {
+            val e = arr.optJSONObject(i) ?: continue
+            out.add(
+                EventItem(
+                    id = e.optLong("id"),
+                    type = e.optString("event_type").ifBlank { "misc" },
+                    title = e.optString("title"),
+                    desc = e.optString("description"),
+                    status = e.optString("status").ifBlank { "active" },
+                    storyTime = e.optString("story_time"),
+                )
+            )
+        }
+        return out
+    }
+
+    /** 按"第几天"分组（保持时间正序） */
+    fun groupByDay(events: List<EventItem>): List<Pair<String, List<EventItem>>> {
+        val order = ArrayList<String>()
+        val groups = LinkedHashMap<String, MutableList<EventItem>>()
+        for (e in events) {
+            if (!groups.containsKey(e.day)) {
+                groups[e.day] = ArrayList()
+                order.add(e.day)
+            }
+            groups[e.day]!!.add(e)
+        }
+        return order.map { it to (groups[it] ?: emptyList()) }
     }
 }

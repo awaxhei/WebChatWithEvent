@@ -116,6 +116,35 @@ object Api {
         }
     }
 
+    /** 故事进展：事件列表 + 故事时间 */
+    fun events(ctx: Context, conv: String): JSONObject {
+        val req = builder(ctx, "/api/events/$conv").get().build()
+        client.newCall(req).execute().use { resp ->
+            return parse(resp, resp.body?.string().orEmpty())
+        }
+    }
+
+    /** 拨时间（只往前走，服务端最多允许 +3 天） */
+    fun setTime(ctx: Context, conv: String, hour: Int, minute: Int): JSONObject {
+        val body = JSONObject().put("hour", hour).put("minute", minute)
+        val req = builder(ctx, "/api/time/$conv")
+            .post(body.toString().toRequestBody(JSON_MEDIA)).build()
+        client.newCall(req).execute().use { resp ->
+            return parse(resp, resp.body?.string().orEmpty())
+        }
+    }
+
+    fun deleteConversation(ctx: Context, conv: String) {
+        val req = builder(ctx, "/api/history/$conv").delete().build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val raw = resp.body?.string().orEmpty()
+                val msg = runCatching { JSONObject(raw).optString("error") }.getOrNull().orEmpty()
+                throw ApiException(resp.code, msg.ifBlank { "HTTP ${resp.code}" })
+            }
+        }
+    }
+
     // ── 手机通道 ─────────────────────────────────────
 
     fun phone(ctx: Context, conv: String): JSONObject {
