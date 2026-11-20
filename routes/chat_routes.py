@@ -178,7 +178,7 @@ def _log_move(conv_id, who, from_location, to_location, created=False):
     return moved
 
 
-def _stored_user_content(sticker_path, sticker_desc, text):
+def _stored_user_content(sticker_path, sticker_desc, text, emotion=""):
     """玩家发表情包时，库里存成一条图片消息（前端/App 渲染成图）；普通消息原样存"""
     if not sticker_path:
         return text
@@ -186,7 +186,16 @@ def _stored_user_content(sticker_path, sticker_desc, text):
         "表情包": sticker_path,
         "url": stickers.url_for(sticker_path),
         "desc": sticker_desc,
+        "emotion": emotion,
     }, ensure_ascii=False)
+
+
+def _sticker_feeling(sticker_row):
+    """表情包代表的那股情绪：优先用情绪桶（委屈/无语/撒娇…），没有就用原词"""
+    if not sticker_row:
+        return ""
+    emotion = (sticker_row.get("emotion") or "").strip()
+    return stickers.canonical_emotion(emotion) or emotion
 
 
 def _parse_sticker_message(content):
@@ -209,7 +218,9 @@ def _parse_sticker_message(content):
 def _as_context_content(row):
     """把一条库里的消息转成喂给模型的内容。
 
-    - 玩家发的表情包转成一句"（青梅发来一个表情包：…）"；
+    - 玩家发的表情包转成"（青梅发来一个表情包，情绪是「无语」，画面是：…）"
+      ——重点是「情绪」这两个字：她以前只看到画面描述，就会去比较像不像自己，
+      回一句「那个不像尤夏」；
     - 手机通道的她本人的话是纯文本，包回 {"消息": ...}，让历史看起来和输出格式一致；
     - 当面通道存的就是她输出的 JSON（对白/表情包），原样回灌，顺带强化格式；
     - NPC 的话拆成"名字：台词"，不然她会以为是自己说的。
@@ -220,7 +231,10 @@ def _as_context_content(row):
         sticker = _parse_sticker_message(content)
         if sticker:
             label = sticker.get("desc") or sticker.get("表情包") or "表情包"
-            return f"（青梅发来一个表情包：{label}）"
+            feel = (sticker.get("emotion") or "").strip()
+            if feel:
+                return f"（青梅发来一个表情包，情绪是「{feel}」，画面是：{label}）"
+            return f"（青梅发来一个表情包，画面是：{label}）"
     if channel == "npc":
         try:
             data = json.loads(content)
@@ -285,6 +299,7 @@ def chat():
     # 玩家可以发一张表情包代替打字：sticker 传表情包相对路径
     sticker_path = (data.get("sticker") or "").strip().replace("\\", "/")
     sticker_row = db.get_sticker(sticker_path) if sticker_path else None
+    sticker_feel = ""
     sticker_desc = ""
     if sticker_path and not sticker_row:
         return jsonify({"error": "表情包不存在"}), 400
@@ -293,9 +308,14 @@ def chat():
     if not sticker_path and not user_message:
         return jsonify({"error": "消息不能为空"}), 400
     if sticker_row:
-        # 她读到的是一句人话，库里存的则是一条"图片消息"（前端/App 渲染成图）
+        # 她读到的是一句人话，库里存的则是一条"图片消息"（前端/App 渲染成图）。
+        # 这里先说「情绪」，再说画面：表情包是他此刻的表情，不是在说谁长得像谁。
+        sticker_feel = _sticker_feeling(sticker_row)
         sticker_desc = stickers.describe(db, sticker_path)
-        user_message = f"（青梅发来一个表情包：{sticker_desc}）"
+        if sticker_feel:
+            user_message = f"（青梅发来一个表情包，情绪是「{sticker_feel}」，画面是：{sticker_desc}）"
+        else:
+            user_message = f"（青梅发来一个表情包，画面是：{sticker_desc}）"
 
     _T0["t"] = 0.0
     _mark("请求进入")
@@ -356,7 +376,8 @@ def chat():
         addressed_npc = npc.resolve_addressed(db, conv_id, player_loc, user_message,
                                               deepseek, api_key=api_key)
 
-    db.add_message(conv_id, "user", _stored_user_content(sticker_path, sticker_desc, user_message),
+    db.add_message(conv_id, "user",
+                   _stored_user_content(sticker_path, sticker_desc, user_message, sticker_feel),
                    channel=channel, scene=player_loc)
     db.touch_conversation(conv_id)
     # 记下"她说完之后，玩家隔了多久才回"：等待时长按这个自适应

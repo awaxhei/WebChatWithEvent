@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -74,6 +75,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -225,7 +227,11 @@ fun ChatScreen(vm: ChatViewModel) {
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(s.entries) { entry -> EntryRow(entry, s.baseUrl, s.moodFace) }
+                itemsIndexed(s.entries) { i, entry ->
+                    // 连着说几句时只有第一句露脸（后面留空格子照样对齐），和网页一致
+                    val grouped = entry is Entry.Her && i > 0 && s.entries[i - 1] is Entry.Her
+                    EntryRow(entry, s.baseUrl, s.moodFace, grouped)
+                }
                 if (s.busy) item { TypingRow() }
             }
 
@@ -269,6 +275,9 @@ fun ChatScreen(vm: ChatViewModel) {
     }
 
     if (showPhone) {
+        // 面板开着就算"正在看"：这期间进来的手机消息不点红点，直接标已读
+        LaunchedEffect(Unit) { vm.setPhoneOpen(true) }
+        DisposableEffect(Unit) { onDispose { vm.setPhoneOpen(false) } }
         PhoneSheet(
             state = s,
             onClose = { showPhone = false },
@@ -382,23 +391,30 @@ private fun SceneStrip(s: UiState) {
  * 当面和手机两个通道都显示（人虽然就在眼前，但表情是「看得见」的）。
  */
 @Composable
-private fun MoodAvatar(face: String) {
+private fun MoodAvatar(face: String, grouped: Boolean = false) {
+    // 固定 38x38 的格子：气泡才能排成一列，不会因为颜文字宽度不同而左右错开
     Surface(
+        modifier = Modifier.size(38.dp),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
     ) {
-        Text(
-            face.ifBlank { "(ᗜ ‸ ᗜ)" },
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-            fontSize = 11.sp,
-            color = Color(0xFFA0AEC0),
-        )
+        Box(contentAlignment = Alignment.Center) {
+            if (!grouped) {
+                Text(
+                    face.ifBlank { "(ᗜ ‸ ᗜ)" },
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                    color = Color(0xFFA0AEC0),
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ ‸ ᗜ)") {
+private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ ‸ ᗜ)",
+                     grouped: Boolean = false) {
     when (entry) {
         is Entry.Me -> Row(
             Modifier.fillMaxWidth(),
@@ -412,7 +428,7 @@ private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ 
         }
 
         is Entry.Her -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            MoodAvatar(entry.face.ifBlank { currentFace })
+            MoodAvatar(entry.face.ifBlank { currentFace }, grouped)
             Spacer(Modifier.width(6.dp))
             Column {
                 if (entry.phone) {
@@ -671,7 +687,10 @@ private fun PhoneSheet(state: UiState, onClose: () -> Unit, onSend: (String) -> 
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(state.phoneEntries) { entry -> EntryRow(entry, state.baseUrl, state.moodFace) }
+                itemsIndexed(state.phoneEntries) { i, entry ->
+                    val grouped = entry is Entry.Her && i > 0 && state.phoneEntries[i - 1] is Entry.Her
+                    EntryRow(entry, state.baseUrl, state.moodFace, grouped)
+                }
                 if (state.phoneEntries.isEmpty()) {
                     item {
                         Text(

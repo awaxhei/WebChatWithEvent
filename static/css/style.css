@@ -720,6 +720,10 @@ html, body {
     justify-content: flex-start;
     padding: 4px 24px 4px 52px;
 }
+/* 她发的表情包也挂在同一个头像格子里，和她的气泡排在同一列 */
+.message-row.her-row.sticker-row { padding: 4px 24px 4px 0; align-items: flex-end; }
+.message-row.her-row.sticker-row .sticker-img,
+.message-row.her-row.sticker-row .sticker-holder { margin-left: 0; }
 .sticker-img {
     width: 80px;
     height: 80px;
@@ -1073,25 +1077,36 @@ html, body {
 .phone-row.me { justify-content: flex-end; }
 .phone-row.her { justify-content: flex-start; }
 .phone-avatar {
-    flex: 0 0 auto;
-    font-size: 11px; line-height: 1.2; color: var(--text-muted);
+    flex: 0 0 34px; width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; line-height: 1; letter-spacing: -0.4px;
+    color: var(--text-muted);
     background: var(--bg-secondary); border: 1px solid var(--border);
-    border-radius: 10px; padding: 3px 6px; white-space: nowrap;
-    user-select: none;
+    border-radius: 10px; white-space: nowrap;
+    user-select: none; margin-bottom: 1px;
 }
+.phone-avatar-ghost { visibility: hidden; }
 
 /* 当面聊天的头像：气泡左边一个小小的颜文字，和手机面板一致 */
 .message-row.her-row {
-    display: flex; align-items: flex-end; gap: 6px;
+    display: flex; align-items: flex-end; gap: 8px;
     justify-content: flex-start;
 }
+/* 固定宽高的格子：气泡才能排成一列，不会一张头像一个缩进 */
 .chat-avatar {
-    flex: 0 0 auto;
-    font-size: 11px; line-height: 1.2; color: var(--text-muted);
+    flex: 0 0 38px; width: 38px; height: 38px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; line-height: 1; letter-spacing: -0.4px;
+    color: var(--text-muted);
     background: var(--bg-secondary); border: 1px solid var(--border);
-    border-radius: 10px; padding: 3px 6px; white-space: nowrap;
-    user-select: none; margin-bottom: 2px;
+    border-radius: 12px; white-space: nowrap;
+    user-select: none; margin-bottom: 1px;
+    transition: background 0.2s ease;
 }
+.message-row.her-row .chat-avatar { align-self: flex-end; }
+/* 连着说几句时后面几句不重复露脸，但格子照样占位 */
+.chat-avatar-ghost { visibility: hidden; }
+.message-row.her-row .message-bubble { max-width: calc(78% - 46px); }
 
 /* 分处两地时，场景卡里两段描写上下排（你的地点 / 她的地点） */
 .scene-desc.scene-other {

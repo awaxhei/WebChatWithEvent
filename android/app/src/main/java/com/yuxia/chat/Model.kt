@@ -81,7 +81,16 @@ object Model {
     fun faceOf(mood: String?): String = MOOD_FACES[(mood ?: "").trim()] ?: ""
 
     fun stripSpeaker(text: String?): String =
-        (text ?: "").replace(SPEAKER_PREFIX, "").trim()
+        protectFace((text ?: "").replace(SPEAKER_PREFIX, "").trim())
+
+    private val KAOMOJI_RE = Regex("[（(][^（()）]{0,16}[）)]")
+    private val KAOMOJI_MARK = Regex("[ᗜ●￣ω‸・﹏_]")
+
+    /** 颜文字里的空格换成不断行空格：气泡一窄，(ᗜ ‸ ᗜ) 会被折成两行 */
+    fun protectFace(text: String): String =
+        KAOMOJI_RE.replace(text) { m ->
+            if (KAOMOJI_MARK.containsMatchIn(m.value)) m.value.replace(' ', '\u00A0') else m.value
+        }
 
     fun parseReply(content: String): Reply {
         val raw = content.trim()

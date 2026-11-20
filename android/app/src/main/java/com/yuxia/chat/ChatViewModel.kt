@@ -47,6 +47,8 @@ data class UiState(
     val moodFace: String = "(ᗜ ‸ ᗜ)",
     val speed: Int = 3,
     val yuxiaDesc: String = "",
+    /** 手机面板是不是开着：开着的时候进来的消息不算未读 */
+    val phoneOpen: Boolean = false,
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -224,7 +226,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             playerLocation = obj.optString("player_location"),
             coLocated = obj.optBoolean("co_located", true),
             storyTime = obj.optString("story_time"),
-            unread = obj.optInt("unread", 0),
+            unread = if (state.phoneOpen) 0 else obj.optInt("unread", 0),
         )
         refreshScene()
     }
@@ -533,9 +535,30 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun appendEntry(phone: Boolean, entry: Entry) {
         state = if (phone) {
-            state.copy(phoneEntries = state.phoneEntries + entry)
+            // 面板开着就当她已经在看：不累计未读，顺手告诉服务端已读
+            if (state.phoneOpen && entry is Entry.Her) {
+                viewModelScope.launch { markPhoneReadQuietly() }
+                state.copy(phoneEntries = state.phoneEntries + entry, unread = 0)
+            } else {
+                state.copy(phoneEntries = state.phoneEntries + entry)
+            }
         } else {
             state.copy(entries = state.entries + entry)
+        }
+    }
+
+    /** 手机面板开/关：开着的时候清掉未读并标已读 */
+    fun setPhoneOpen(open: Boolean) {
+        state = state.copy(phoneOpen = open, unread = if (open) 0 else state.unread)
+        if (open) viewModelScope.launch { markPhoneReadQuietly() }
+    }
+
+    private suspend fun markPhoneReadQuietly() {
+        val conv = state.convId
+        if (conv.isEmpty()) return
+        try {
+            withContext(Dispatchers.IO) { Api.markPhoneRead(app, conv) }
+        } catch (_: Exception) {
         }
     }
 
@@ -616,7 +639,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val res = withContext(Dispatchers.IO) { Api.idle(app, conv) }
                 if (!res.optBoolean("acted")) {
-                    state = state.copy(unread = res.optInt("unread", state.unread))
+                    // 面板开着时服务端那边的未读数没有意义（他正在看），一律按 0
+                    val unread = if (state.phoneOpen) 0 else res.optInt("unread", state.unread)
+                    state = state.copy(unread = unread)
+                    if (state.phoneOpen) markPhoneReadQuietly()
                     return@launch
                 }
                 val action = res.optString("action")

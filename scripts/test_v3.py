@@ -23,6 +23,7 @@ import core.clock as clock              # noqa: E402
 import core.locations as locations      # noqa: E402
 import core.memory as memory            # noqa: E402
 import core.stickers as stickers        # noqa: E402
+import routes.chat_routes as chat_mod   # noqa: E402
 
 FAILED = []
 
@@ -257,6 +258,42 @@ def test_stickers():
         shutil.rmtree(db_tmp, ignore_errors=True)
 
 
+def test_sticker_context():
+    """玩家发表情包时，她看到的必须是「情绪」，不能只有画面描述
+
+    以前只喂画面（"一个紫发女孩面无表情"），她就去比较像不像自己，
+    回一句「那个不像尤夏」——完全没有逻辑。
+    """
+    stored = chat_mod._stored_user_content(
+        "表情包/x.jpg", "一个紫发双马尾的女孩面无表情", "（青梅发来一个表情包）", "无语")
+    payload = json.loads(stored)
+    check("发送时把情绪一起存进库", payload.get("emotion") == "无语", stored)
+
+    label = chat_mod._as_context_content(
+        {"role": "user", "channel": "chat", "content": stored})
+    check("她看到的上下文里有「情绪是」", "情绪是「无语」" in label, label)
+    check("画面描述仍然保留", "紫发双马尾" in label, label)
+    check("情绪排在画面前面", label.index("情绪是") < label.index("画面是"), label)
+
+    # 老数据没有 emotion 字段：不能报错，也不该冒出空的「情绪是」（）
+    old_row = json.dumps({"表情包": "表情包/y.jpg", "url": "/static/stickers/y.jpg",
+                          "desc": "一只猫"}, ensure_ascii=False)
+    old_label = chat_mod._as_context_content(
+        {"role": "user", "channel": "chat", "content": old_row})
+    check("老数据没有情绪时只给画面", "画面是：一只猫" in old_label and "情绪是" not in old_label,
+          old_label)
+
+    # 情绪词归桶：桶名优先（"失落" 的图按「委屈」讲给她听）
+    class Row(dict):
+        pass
+    check("表情包的情绪按桶给",
+          chat_mod._sticker_feeling(Row(emotion="失落")) == "委屈",
+          chat_mod._sticker_feeling(Row(emotion="失落")))
+    check("认不出来的情绪原样给",
+          chat_mod._sticker_feeling(Row(emotion="量子力学")) == "量子力学")
+    check("空行不炸", chat_mod._sticker_feeling(None) == "")
+
+
 # ── v4：场景 / 手机 / 事件分级 ──────────────────────
 
 def test_v4_scenes_phone_tiers():
@@ -366,6 +403,8 @@ def main():
     test_memory()
     print("\n── 表情包 ──")
     test_stickers()
+    print("\n── 表情包的上下文 ──")
+    test_sticker_context()
     print("\n── 老库迁移 ──")
     test_migration()
 

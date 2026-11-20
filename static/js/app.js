@@ -102,6 +102,13 @@ const SPEAKER_PREFIX_RE = /^\s*(?:尤夏|青梅|她|我|对方|旁白)\s*[:：]\
 function stripSpeakerPrefix(text) {
     return String(text == null ? '' : text).replace(SPEAKER_PREFIX_RE, '');
 }
+// 颜文字里的空格换成不断行空格：气泡一窄，(ᗜ ‸ ᗜ) 就会被折成 "(ᗜ ﹏" + "ᗜ)" 两行
+const KAOMOJI_RE = /[（(][^（()）]{0,16}[）)]/g;
+const KAOMOJI_MARK_RE = /[ᗜ●￣ω‸・﹏_]/;
+function protectKaomoji(text) {
+    return String(text == null ? '' : text).replace(KAOMOJI_RE, (m) =>
+        KAOMOJI_MARK_RE.test(m) ? m.replace(/ /g, '\u00a0') : m);
+}
 function unwrapStructured(text) {
     const t = (text || '').trim();
     if (!t.startsWith('{')) return text;
@@ -860,8 +867,10 @@ class ChatManager {
 
     // ── 渲染方法 ──
     _addBubble(role, content, isStream) {
-        const row = document.createElement('div');
         const isNote = role === 'narration';
+        // 她的话统一走头像气泡：历史里以前混用过不带头像的气泡，看着就歪
+        if (role === 'assistant' && !isNote) return this._addHerBubble(content, null, isStream);
+        const row = document.createElement('div');
         row.className = isNote ? 'message-row narration-row' : `message-row ${role}`;
         if (isStream) row.classList.add('stream-temp');
         const bubble = document.createElement('div');
@@ -874,19 +883,35 @@ class ChatManager {
         return bubble;
     }
 
-    /** 她说的话：气泡左边挂一个颜文字头像（当面也显示，头像跟着心情变） */
-    _addHerBubble(text, mood, isStream) {
+    /** 她说的话：气泡左边挂一个颜文字头像（当面也显示，头像跟着心情变）
+     *
+     * 头像用固定宽度的格子，气泡才会排成一列；连着说几句时只有第一句露脸，
+     * 后面几句留一个看不见的空格，位置照样对齐（不然一屏全是脸，很吵）。
+     */
+    _herRow(extraClass) {
         const row = document.createElement('div');
-        row.className = 'message-row assistant her-row';
-        if (isStream) row.classList.add('stream-temp');
-        const face = moodFace(mood) || this.moodFace || '(ᗜ ‸ ᗜ)';
+        row.className = 'message-row assistant her-row' + (extraClass ? ' ' + extraClass : '');
+        const prev = this.messagesContainer.lastElementChild;
+        const grouped = !!(prev && prev.classList.contains('her-row'));
+        const face = this.moodFace || '(ᗜ ‸ ᗜ)';
         const avatar = document.createElement('span');
-        avatar.className = 'chat-avatar';
-        avatar.textContent = face;
+        avatar.className = 'chat-avatar' + (grouped ? ' chat-avatar-ghost' : '');
+        avatar.textContent = grouped ? '' : face;
+        avatar.dataset.face = face;
+        row.appendChild(avatar);
+        return row;
+    }
+
+    _addHerBubble(text, mood, isStream) {
+        const row = this._herRow(isStream ? 'stream-temp' : '');
+        const face = moodFace(mood);
+        const avatar = row.querySelector('.chat-avatar');
+        if (face && avatar && !avatar.classList.contains('chat-avatar-ghost')) {
+            avatar.textContent = face;
+        }
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.textContent = stripSpeakerPrefix(text);
-        row.appendChild(avatar);
+        bubble.textContent = protectKaomoji(stripSpeakerPrefix(text));
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
         AnimationEngine.slideIn(row);
@@ -916,9 +941,11 @@ class ChatManager {
 
     async _addSticker(emotion) {
         // 后端按「情绪词 → 表情包标签/语义」匹配，前端只负责渲染
-        const wrapper = document.createElement('div');
-        wrapper.className = 'message-row assistant sticker-row stream-temp';
-        wrapper.innerHTML = `<div class="sticker-fallback">[${emotion}]</div>`;
+        const wrapper = this._herRow('sticker-row');
+        const holder = document.createElement('div');
+        holder.className = 'sticker-holder';
+        holder.innerHTML = `<div class="sticker-fallback">[${this._e(emotion)}]</div>`;
+        wrapper.appendChild(holder);
         this.messagesContainer.appendChild(wrapper);
         AnimationEngine.scrollToBottom(this.messagesContainer);
 
@@ -935,8 +962,8 @@ class ChatManager {
             img.title = [pick.emotion, pick.tags].filter(Boolean).join(' / ') || emotion;
             img.onerror = () => { /* 保持文字兜底 */ };
             img.onload = () => {
-                wrapper.innerHTML = '';
-                wrapper.appendChild(img);
+                holder.innerHTML = '';
+                holder.appendChild(img);
                 AnimationEngine.fadeIn(img);
                 AnimationEngine.scrollToBottom(this.messagesContainer);
             };
@@ -948,8 +975,10 @@ class ChatManager {
     /** 直接渲染一张表情包图片（玩家发表情包，或历史回放） */
     _addStickerBubble(url, who = 'me') {
         if (!url) return;
-        const wrapper = document.createElement('div');
-        wrapper.className = `message-row ${who === 'me' ? 'user' : 'assistant'} sticker-row`;
+        const wrapper = who === 'me'
+            ? Object.assign(document.createElement('div'),
+                            { className: 'message-row user sticker-row' })
+            : this._herRow('sticker-row');
         const img = document.createElement('img');
         img.className = 'sticker-img';
         img.src = url;
@@ -1304,7 +1333,11 @@ class PhonePanel {
         this.messages.push({ role, content: text });
         if (role === 'assistant') this.hideTyping();
         this.render();
-        if (markUnread && !this.isOpen) this.setUnread(this.unread + 1);
+        if (role === 'assistant') {
+            // 面板开着就当她已经在看：不点红点，直接标已读
+            if (this.isOpen) this._markReadThrottled();
+            else if (markUnread) this.setUnread(this.unread + 1);
+        }
     }
     pushSticker(url) {
         this.messages.push({ role: 'user', sticker: url });
@@ -1324,6 +1357,11 @@ class PhonePanel {
         if (el) el.remove();
     }
     setUnread(n) {
+        // 面板开着的时候不存在"未读"：从轮询回来的旧计数一律按 0 处理
+        if (this.isOpen && n > 0) {
+            this._markReadThrottled();
+            n = 0;
+        }
         this.unread = n;
         if (!this.badge) return;
         this.badge.textContent = n > 99 ? '99+' : String(n);
@@ -1331,11 +1369,12 @@ class PhonePanel {
     }
     render() {
         if (!this.list) return;
-        // 她的头像：一个会随心情变化的颜文字（当面场景不显示头像，只在手机里）
+        // 她的头像：一个会随心情变化的颜文字（固定宽度的格子，气泡才排得齐）
         const face = this.moodFace
             || (window.emotionAssistant && window.emotionAssistant.chatManager
                 && window.emotionAssistant.chatManager.moodFace)
             || '(ᗜ ‸ ᗜ)';
+        let prevWasHer = false;
         this.list.innerHTML = this.messages.length === 0
             ? '<div class="phone-empty">还没有消息</div>'
             : this.messages.map(m => {
@@ -1343,11 +1382,16 @@ class PhonePanel {
                 const inner = sticker
                     ? `<img class="phone-sticker" src="${this._e(sticker)}" alt="表情包">`
                     : this._e(m.role === 'user' ? unwrapStructured(m.content)
-                                                   : stripSpeakerPrefix(unwrapStructured(m.content)));
+                                                   : protectKaomoji(stripSpeakerPrefix(unwrapStructured(m.content))));
                 if (m.role === 'user') {
+                    prevWasHer = false;
                     return `<div class="phone-row me"><div class="phone-msg me">${inner}</div></div>`;
                 }
-                return `<div class="phone-row her"><span class="phone-avatar">${this._e(face)}</span>`
+                const grouped = prevWasHer;
+                prevWasHer = true;
+                return `<div class="phone-row her">`
+                     + `<span class="phone-avatar${grouped ? ' phone-avatar-ghost' : ''}">`
+                     + (grouped ? '' : this._e(face)) + `</span>`
                      + `<div class="phone-msg her">${inner}</div></div>`;
             }).join('');
         this.list.scrollTop = this.list.scrollHeight;
@@ -1380,6 +1424,14 @@ class PhonePanel {
         const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
         if (!cm || !cm.currentConvId) return;
         try { await authFetch(`/api/phone/read/${cm.currentConvId}`, { method: 'POST' }); } catch (e) {}
+    }
+    // 面板开着时新消息会接连到达，防抖一下再告诉服务端，别每条都打一次
+    _markReadThrottled() {
+        if (this._readTimer) return;
+        this._readTimer = setTimeout(() => {
+            this._readTimer = null;
+            this._markRead();
+        }, 800);
     }
     _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 }
