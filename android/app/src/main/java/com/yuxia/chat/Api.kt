@@ -134,6 +134,16 @@ object Api {
         }
     }
 
+    /** 行动速度 1..5（等待期仍然是递增的，最长 20 秒） */
+    fun setSpeed(ctx: Context, conv: String, speed: Int): JSONObject {
+        val body = JSONObject().put("speed", speed)
+        val req = builder(ctx, "/api/speed/$conv")
+            .post(body.toString().toRequestBody(JSON_MEDIA)).build()
+        client.newCall(req).execute().use { resp ->
+            return parse(resp, resp.body?.string().orEmpty())
+        }
+    }
+
     fun deleteConversation(ctx: Context, conv: String) {
         val req = builder(ctx, "/api/history/$conv").delete().build()
         client.newCall(req).execute().use { resp ->

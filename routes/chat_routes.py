@@ -33,6 +33,8 @@ from services.event_engine import (
 from config import (
     CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP,
     STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
+    MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT,
+    AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
 )
 
 chat_bp = Blueprint("chat", __name__)
@@ -67,6 +69,15 @@ def _mark(label):
 _CURLY_QUOTES = str.maketrans({"“": '"', "”": '"'})
 # 引号修好之后，还要处理"中文冒号"：{"消息"： "..."}
 _COLON_AFTER_QUOTE = re.compile(r'(?<=["])\s*[：:]\s*')
+
+# 模型偶尔会自己加个说话人前缀（"尤夏：……别揉。"）。台词里不该有名字和冒号，
+# 而且一旦它这么写，多半整段都不是合法 JSON，落到兜底路径就直接显示了。
+_SPEAKER_PREFIX = re.compile(r"^\s*(?:尤夏|青梅|她|我|对方|旁白)\s*[:：]\s*")
+
+
+def _strip_speaker(text):
+    """去掉台词开头的「尤夏：」这类前缀（只剥一层，不动正文）"""
+    return _SPEAKER_PREFIX.sub("", (text or "").strip(), count=1).strip()
 
 
 def _normalize_quotes(text):
@@ -214,6 +225,15 @@ def _scene_payload(conv_id, api_key):
     view["story_minutes"] = now
     view["unread"] = db.get_phone_unread(conv_id)
     view["paused"] = db.is_paused(conv_id)
+    # 她的心情（界面头像画成对应的颜文字）与行动速度
+    try:
+        view["mood"] = db.get_yuxia_mood(conv_id) or MOOD_DEFAULT
+        view["mood_face"] = MOOD_FACES.get(view["mood"], MOOD_FACES[MOOD_DEFAULT])
+        view["speed"] = db.get_speed(conv_id, AUTONOMY_SPEED_DEFAULT)
+    except Exception:
+        view["mood"] = MOOD_DEFAULT
+        view["mood_face"] = MOOD_FACES[MOOD_DEFAULT]
+        view["speed"] = AUTONOMY_SPEED_DEFAULT
     # 现场有谁（NPC），前端可以显示"在场：老板"
     try:
         locs = {view.get("location"), view.get("player_location")}
@@ -427,21 +447,32 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     if not objects:
         # 模型没按 JSON 输出（或报错）：按当前通道原样存一条，前端照常显示
         fallback_channel = PHONE_CHANNEL if not can_speak else channel
-        db.add_message(conv_id, "assistant", clean,
+        fallback_text = _strip_speaker(clean)
+        db.add_message(conv_id, "assistant", fallback_text,
                        channel=fallback_channel, scene=yuxia_loc)
         db.set_last_yuxia_at(conv_id, time.time(), fallback_channel)
-        if not clean.startswith(("API 错误", "错误:", "无法连接", "[生成失败")):
-            memory_engine.remember_assistant_message(db, conv_id, clean, now_minutes)
+        if not fallback_text.startswith(("API 错误", "错误:", "无法连接", "[生成失败")):
+            memory_engine.remember_assistant_message(db, conv_id, fallback_text, now_minutes)
         return
 
     speech, stickers_used, phone_msgs = [], [], []
+    mood = ""
     for obj in objects:
         if obj.get("对白") and can_speak:
-            speech.append(str(obj["对白"]).strip())
+            speech.append(_strip_speaker(str(obj["对白"])))
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
-            phone_msgs.append(str(obj["消息"]).strip())
+            phone_msgs.append(_strip_speaker(str(obj["消息"])))
+        if not mood and obj.get("心情"):
+            mood = str(obj["心情"]).strip()[:8]
+
+    # 心情只影响界面头像；存进 chat 的 JSON 里，前端能按每条消息画表情
+    if mood:
+        try:
+            db.set_yuxia_mood(conv_id, mood)
+        except Exception:
+            pass
 
     if speech or stickers_used:
         payload = {}
@@ -449,6 +480,8 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
             payload["对白"] = "\n".join(speech)
         if stickers_used:
             payload["表情包"] = ",".join(stickers_used)
+        if mood:
+            payload["心情"] = mood
         db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
                        channel=CHAT_CHANNEL, scene=yuxia_loc)
 
@@ -674,6 +707,29 @@ def adjust_time(conv_id):
     payload["from"] = before
     payload["to"] = after
     return jsonify(payload)
+
+
+@chat_bp.route("/api/speed/<conv_id>", methods=["POST"])
+@require_auth
+def set_speed(conv_id):
+    """行动速度（1 慢 … 5 快）。
+
+    等待期仍然是动态的（FIRST × GROWTH^n），速度只是整体乘一个系数；
+    任何速度下最多等 20 秒（`AUTONOMY_WAIT_MAX_SECONDS`）。
+    """
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    try:
+        speed = int(data.get("speed", AUTONOMY_SPEED_DEFAULT))
+    except (TypeError, ValueError):
+        return jsonify({"error": "速度必须是数字"}), 400
+    speed = max(AUTONOMY_SPEED_MIN, min(AUTONOMY_SPEED_MAX, speed))
+    db.set_speed(conv_id, speed)
+    return jsonify({"speed": speed,
+                    "min": AUTONOMY_SPEED_MIN, "max": AUTONOMY_SPEED_MAX})
 
 
 @chat_bp.route("/api/pause/<conv_id>", methods=["POST"])
@@ -991,7 +1047,7 @@ def _readable_reply(content, channel):
     """把她的一条输出拆成"能放进通知里的一句话" + 表情包图片地址"""
     raw = (content or "").strip()
     if channel == PHONE_CHANNEL:
-        return raw, ""
+        return _strip_speaker(raw), ""
     sticker_url = ""
     try:
         obj = json.loads(raw)

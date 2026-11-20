@@ -176,6 +176,10 @@ class ChatDB:
                 ("last_yuxia_channel", "TEXT DEFAULT ''"),
                 # v7：玩家平均多久回一句（秒，指数滑动平均），用来自适应等待时长
                 ("reply_latency", "REAL DEFAULT 0"),
+                # v8：她此刻的心情（界面头像用的颜文字由它决定）
+                ("yuxia_mood", "TEXT DEFAULT ''"),
+                # v8：玩家可调的行动速度 1..5（乘在等待期上，上限 20 秒）
+                ("speed", "INTEGER DEFAULT 3"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -665,6 +669,29 @@ class ChatDB:
         with self._get_conn() as conn:
             row = conn.execute("SELECT paused FROM conversations WHERE id=?", (conv_id,)).fetchone()
         return bool(row and row["paused"])
+
+    # ----- v8：她的心情（头像用）与行动速度 -----
+    def set_yuxia_mood(self, conv_id, mood):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET yuxia_mood=? WHERE id=?",
+                         (str(mood or "")[:8], conv_id))
+
+    def get_yuxia_mood(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT yuxia_mood FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+        return (row["yuxia_mood"] or "") if row else ""
+
+    def set_speed(self, conv_id, speed):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET speed=? WHERE id=?",
+                         (int(speed), conv_id))
+
+    def get_speed(self, conv_id, default=3):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT speed FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        value = row["speed"] if row else None
+        return int(value or default)
 
     # ----- v7：她最后一次说话（用于"先等玩家，等不及了才行动"） -----
     def set_last_yuxia_at(self, conv_id, ts, channel="chat"):

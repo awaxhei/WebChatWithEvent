@@ -10,6 +10,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.border
+import androidx.compose.material3.Slider
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -103,6 +105,7 @@ fun ChatScreen(vm: ChatViewModel) {
     var showLocations by remember { mutableStateOf(false) }
     var showEvents by remember { mutableStateOf(false) }
     var showTimeDial by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -123,7 +126,7 @@ fun ChatScreen(vm: ChatViewModel) {
     // 她在页面上的自主行动：每 20 秒问一次（服务端按等待期决定要不要真的动）
     LaunchedEffect(s.convId, s.paused) {
         while (true) {
-            delay(20_000)
+            delay(8_000)   // 服务端等待期最短几秒，轮询太慢会让她反应变钝
             vm.pollIdle()
         }
     }
@@ -183,6 +186,10 @@ fun ChatScreen(vm: ChatViewModel) {
                             DropdownMenuItem(
                                 text = { Text("刷新场景") },
                                 onClick = { menuOpen = false; vm.refreshScene() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("行动速度：" + listOf("很慢", "偏慢", "正常", "偏快", "很快")[s.speed.coerceIn(1, 5) - 1]) },
+                                onClick = { menuOpen = false; showSpeed = true },
                             )
                             DropdownMenuItem(
                                 text = { Text("故事推进模式：" + if (s.pushMode) "开" else "关") },
@@ -247,6 +254,10 @@ fun ChatScreen(vm: ChatViewModel) {
             onClose = { showEvents = false },
             onRefresh = { vm.loadEvents() },
         )
+    }
+
+    if (showSpeed) {
+        SpeedDialog(state = s, onClose = { showSpeed = false }, onChange = vm::setSpeed)
     }
 
     if (showTimeDial) {
@@ -345,6 +356,39 @@ private fun SceneStrip(s: UiState) {
                 maxLines = 2,
             )
         }
+    }
+}
+
+/**
+ * 手机里的消息：她的话旁边挂一个颜文字头像，头像内容跟着心情变。
+ * （当面聊天不显示头像——人就在眼前）
+ */
+@Composable
+private fun PhoneEntryRow(entry: Entry, state: UiState) {
+    if (entry is Entry.Her) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            MoodAvatar(state.moodFace)
+            Spacer(Modifier.width(6.dp))
+            Bubble(entry.text, mine = false)
+        }
+        return
+    }
+    EntryRow(entry, state.baseUrl)
+}
+
+@Composable
+private fun MoodAvatar(face: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+    ) {
+        Text(
+            face.ifBlank { "(ᗜ ‸ ᗜ)" },
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            fontSize = 11.sp,
+            color = Color(0xFFA0AEC0),
+        )
     }
 }
 
@@ -620,7 +664,7 @@ private fun PhoneSheet(state: UiState, onClose: () -> Unit, onSend: (String) -> 
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(state.phoneEntries) { entry -> EntryRow(entry, state.baseUrl) }
+                items(state.phoneEntries) { entry -> PhoneEntryRow(entry, state) }
                 if (state.phoneEntries.isEmpty()) {
                     item {
                         Text(
@@ -771,6 +815,44 @@ private fun StickerSheet(
             Spacer(Modifier.height(10.dp))
         }
     }
+}
+
+@Composable
+private fun SpeedDialog(
+    state: UiState,
+    onClose: () -> Unit,
+    onChange: (Int) -> Unit,
+) {
+    val labels = mapOf(1 to "很慢", 2 to "偏慢", 3 to "正常", 4 to "偏快", 5 to "很快")
+    var value by remember { mutableStateOf(state.speed.toFloat()) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = {
+            TextButton(onClick = { onChange(value.toInt()); onClose() }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
+        title = { Text("行动速度") },
+        text = {
+            Column {
+                Text(
+                    "她多久会自己接一句 / 动一下：${labels[value.toInt()] ?: "正常"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Slider(
+                    value = value,
+                    onValueChange = { value = it },
+                    valueRange = 1f..5f,
+                    steps = 3,
+                )
+                Text(
+                    "等待期仍然是递增的（你刚说完话最容易动，之后越等越久），最长 20 秒。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+    )
 }
 
 @Composable

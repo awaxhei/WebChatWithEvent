@@ -8,6 +8,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from config import (
     PRESET_ACCOUNTS, DEEPSEEK_MODEL, CHARACTER_NAME, DEFAULT_LOCATION,
     DEFAULT_STORY_TIME, DEFAULT_STORY_SUMMARY, DEEPSEEK_API_KEY, IDLE_POLL_SECONDS,
+    MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT, AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
 )
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
@@ -111,6 +112,12 @@ def get_client_config():
         # 仅暴露"是否存在服务端 Key"这一布尔值，绝不返回 Key 本身
         "has_server_key": bool(DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip()),
         "idle_poll_seconds": IDLE_POLL_SECONDS,
+        # 头像用的心情表情表 / 行动速度范围（网页和 App 都按这个画）
+        "mood_faces": MOOD_FACES,
+        "mood_default": MOOD_DEFAULT,
+        "speed_default": AUTONOMY_SPEED_DEFAULT,
+        "speed_min": AUTONOMY_SPEED_MIN,
+        "speed_max": AUTONOMY_SPEED_MAX,
     }
 
 

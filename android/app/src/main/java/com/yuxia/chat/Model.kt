@@ -66,13 +66,21 @@ object Model {
     /** 她的一条输出（当面通道存的是 JSON） */
     class Reply(val speeches: List<String>, val stickerEmotions: List<String>)
 
+    /** 模型偶尔把"尤夏："也写进台词，显示前切掉（只剥开头一层） */
+    private val SPEAKER_PREFIX = Regex("^\\s*(?:尤夏|青梅|她|我|对方|旁白)\\s*[:：]\\s*")
+
+    fun stripSpeaker(text: String?): String =
+        (text ?: "").replace(SPEAKER_PREFIX, "").trim()
+
     fun parseReply(content: String): Reply {
         val raw = content.trim()
-        if (!raw.startsWith("{")) return Reply(listOf(raw).filter { it.isNotEmpty() }, emptyList())
+        if (!raw.startsWith("{")) {
+            return Reply(listOf(stripSpeaker(raw)).filter { it.isNotEmpty() }, emptyList())
+        }
         val obj = runCatching { JSONObject(raw) }.getOrNull()
-            ?: return Reply(listOf(raw), emptyList())
+            ?: return Reply(listOf(stripSpeaker(raw)), emptyList())
         val speech = obj.optString("对白")
-            .split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+            .split("\n").map { stripSpeaker(it) }.filter { it.isNotEmpty() }
         val stickers = obj.optString("表情包")
             .split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
         return Reply(speech, stickers)

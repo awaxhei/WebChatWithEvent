@@ -53,7 +53,7 @@ class NotifyService : Service() {
                 runCatching { Api.idle(this, conv) }
                 runCatching { poll(conv) }
             }
-            delay(15_000)
+            delay(8_000)
         }
     }
 

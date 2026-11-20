@@ -394,9 +394,27 @@ AUTONOMY_AFTER_ACT_GRACE_SECONDS = 180
 #   等待 = FIRST × GROWTH^n   （n = 你上次说话后她已经自主输出的次数）
 AUTONOMY_WAIT_FIRST_SECONDS = 8      # 刚说完话的第一段，等得最短
 AUTONOMY_WAIT_GROWTH = 1.8           # 每多一次自主输出，等待 ×1.8
-AUTONOMY_WAIT_MAX_SECONDS = 180      # 封顶，避免她彻底不动
+AUTONOMY_WAIT_MAX_SECONDS = 20       # 封顶（玩家可调速度，但任何速度下最多等 20 秒）
 AUTONOMY_WAIT_PHONE_FACTOR = 1.5     # 发手机消息的第一段多等一点（要先看到红点）
 AUTONOMY_WAIT_QUESTION_FACTOR = 1.3  # 她刚问了你一句时，整体乘这个系数
+# 玩家可调的行动速度（1=很慢 … 5=很快），乘在"第一段等待"上；
+# 会话里的 speed 存 conversations.speed，默认 3
+AUTONOMY_SPEED_FACTORS = {1: 1.8, 2: 1.35, 3: 1.0, 4: 0.75, 5: 0.5}
+AUTONOMY_SPEED_DEFAULT = 3
+AUTONOMY_SPEED_MIN = 1
+AUTONOMY_SPEED_MAX = 5
+# 头像用的表情（心情 → 颜文字）；前端/App 都按这张表画
+MOOD_FACES = {
+    "平静": "(ᗜ ‸ ᗜ)",
+    "开心": "(ᗜ ᴗ ᗜ)",
+    "认真": "(ᗜ ・ ᗜ)",
+    "害羞": "(ᗜ ﹏ ᗜ)",
+    "放松": "(ᗜ ω ᗜ)",
+    "无语": "(ᗜ _ ᗜ)",
+    "惊讶": "(ᗜ o ᗜ)",
+    "不爽": "(● ‸ ●)",
+}
+MOOD_DEFAULT = "平静"
 # 前端轮询闲置的间隔（秒）
 IDLE_POLL_SECONDS = 8
 AUTONOMY_PROMPT = (

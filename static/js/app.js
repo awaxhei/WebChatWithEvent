@@ -88,6 +88,12 @@ const authFetch = (url, options = {}) => {
 // 把"本该是结构化的整段 JSON"还原成里面的文本。
 // 用于兜底：模型偶尔把 {"消息": "..."} 原样存进消息（例如用了中文引号/冒号导致解析失败），
 // 历史里就会显示成一坨 JSON。这里在渲染时再拆一次。
+// 模型偶尔会把说话人前缀也写进台词（"尤夏：……别揉。"），显示前一刀切掉。
+// 只剥开头一层，正文里正常出现的"尤夏"不动。
+const SPEAKER_PREFIX_RE = /^\s*(?:尤夏|青梅|她|我|对方|旁白)\s*[:：]\s*/;
+function stripSpeakerPrefix(text) {
+    return String(text == null ? '' : text).replace(SPEAKER_PREFIX_RE, '');
+}
 function unwrapStructured(text) {
     const t = (text || '').trim();
     if (!t.startsWith('{')) return text;
@@ -150,6 +156,8 @@ class ChatManager {
         this.currentConvId = ''; this.isProcessing = false; this.pushMode = false;
         this.coLocated = true;
         this.paused = false;
+        this.moodFace = '(ᗜ ‸ ᗜ)';   // 她的头像（随心情变）
+        this.speed = 3;               // 行动速度 1..5
         this.moveTogether = false;
         this.messagesContainer = document.getElementById('chatMessages');
         this.inputEl = document.getElementById('messageInput');
@@ -169,6 +177,11 @@ class ChatManager {
         this.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } });
         this.inputEl.addEventListener('input', () => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 120) + 'px'; });
         if (this.btnPushMode) this.btnPushMode.addEventListener('click', () => this.togglePushMode());
+        const speedRange = document.getElementById('speedRange');
+        if (speedRange) {
+            speedRange.addEventListener('input', () => this._setSpeedUI(Number(speedRange.value)));
+            speedRange.addEventListener('change', () => this._saveSpeed(Number(speedRange.value)));
+        }
         const btnSticker = document.getElementById('btnSticker');
         if (btnSticker) btnSticker.addEventListener('click', () => {
             if (window.stickerPanel) window.stickerPanel.toggle();
@@ -389,6 +402,12 @@ class ChatManager {
         if (!scene) return;
         this.coLocated = !!scene.co_located;
         if (typeof scene.story_minutes === 'number') this.storyMinutes = scene.story_minutes;
+        // 她的心情 → 手机里的颜文字头像
+        if (scene.mood_face) {
+            this.moodFace = scene.mood_face;
+            if (window.phonePanel) window.phonePanel.setMood(scene.mood_face);
+        }
+        if (typeof scene.speed === 'number') this._setSpeedUI(scene.speed);
         if (typeof scene.paused === 'boolean' && scene.paused !== this.paused) {
             this._setPaused(scene.paused);
         }
@@ -803,7 +822,7 @@ class ChatManager {
         if (isStream) row.classList.add('stream-temp');
         const bubble = document.createElement('div');
         bubble.className = isNote ? 'scene-note' : 'message-bubble';
-        bubble.textContent = content;
+        bubble.textContent = (role === 'user' || isNote) ? content : stripSpeakerPrefix(content);
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
         AnimationEngine.slideIn(row);
@@ -1068,6 +1087,7 @@ class PhonePanel {
         this.messages = [];
         this.unread = 0;
         this.isOpen = false;
+        this.moodFace = '';   // 她的头像（颜文字），随心情变
         this._win = null;
         this._bind();
         this._initWindow();
@@ -1211,6 +1231,11 @@ class PhonePanel {
         this.render();
         this.setUnread(unread || 0);
     }
+    setMood(face) {
+        if (!face || face === this.moodFace) return;
+        this.moodFace = face;
+        if (this.isOpen) this.render();
+    }
     push(role, text, markUnread) {
         this.messages.push({ role, content: text });
         if (role === 'assistant') this.hideTyping();
@@ -1242,14 +1267,24 @@ class PhonePanel {
     }
     render() {
         if (!this.list) return;
+        // 她的头像：一个会随心情变化的颜文字（当面场景不显示头像，只在手机里）
+        const face = this.moodFace
+            || (window.emotionAssistant && window.emotionAssistant.chatManager
+                && window.emotionAssistant.chatManager.moodFace)
+            || '(ᗜ ‸ ᗜ)';
         this.list.innerHTML = this.messages.length === 0
             ? '<div class="phone-empty">还没有消息</div>'
             : this.messages.map(m => {
                 const sticker = m.sticker || (m.role === 'user' ? (stickerMessageOf(m.content) || {}).url : null);
                 const inner = sticker
                     ? `<img class="phone-sticker" src="${this._e(sticker)}" alt="表情包">`
-                    : this._e(unwrapStructured(m.content));
-                return `<div class="phone-msg ${m.role === 'user' ? 'me' : 'her'}">${inner}</div>`;
+                    : this._e(m.role === 'user' ? unwrapStructured(m.content)
+                                                   : stripSpeakerPrefix(unwrapStructured(m.content)));
+                if (m.role === 'user') {
+                    return `<div class="phone-row me"><div class="phone-msg me">${inner}</div></div>`;
+                }
+                return `<div class="phone-row her"><span class="phone-avatar">${this._e(face)}</span>`
+                     + `<div class="phone-msg her">${inner}</div></div>`;
             }).join('');
         this.list.scrollTop = this.list.scrollHeight;
     }

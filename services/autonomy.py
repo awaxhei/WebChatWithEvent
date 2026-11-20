@@ -28,7 +28,8 @@ from config import (
     AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
     AUTONOMY_WAIT_FIRST_SECONDS, AUTONOMY_WAIT_GROWTH,
     AUTONOMY_WAIT_MAX_SECONDS, AUTONOMY_WAIT_PHONE_FACTOR,
-    AUTONOMY_WAIT_QUESTION_FACTOR,
+    AUTONOMY_WAIT_QUESTION_FACTOR, AUTONOMY_SPEED_FACTORS,
+    AUTONOMY_SPEED_DEFAULT, AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -197,18 +198,29 @@ def _asked_question(db, conv_id):
     return bool(_QUESTION_TAIL.search(text[-6:]))
 
 
+def _speed_factor(db, conv_id):
+    """玩家调的行动速度（1 慢 … 5 快）→ 乘在等待期上的系数"""
+    try:
+        speed = db.get_speed(conv_id, AUTONOMY_SPEED_DEFAULT)
+    except Exception:
+        speed = AUTONOMY_SPEED_DEFAULT
+    speed = max(AUTONOMY_SPEED_MIN, min(AUTONOMY_SPEED_MAX, int(speed or AUTONOMY_SPEED_DEFAULT)))
+    return AUTONOMY_SPEED_FACTORS.get(speed, 1.0)
+
+
 def _wait_seconds_needed(db, conv_id):
     """她说完话之后，该等玩家多久才能再自己动。
 
     递增式等待：你刚说完话的那一小段时间里，她最容易被允许动（等得短）；
     她每自主做一件事，下一段的等待就翻一档，越来越长，直到你开口。
 
-        等待 = FIRST × GROWTH^n     （n = 你上次说话之后她已经自主输出的次数）
+        等待 = FIRST × GROWTH^n × 速度系数     （n = 你上次说话之后她已经自主输出的次数）
 
-    另外两个小修正：
+    另外几个小修正：
     - 手机消息的第一段稍微长一点（你得先看到红点、打开手机）
     - 她刚问了你一句 → 整段乘一个系数（问到点上了，值得多等）
     - 刚动完手还没说话 → 允许她马上补一句（这是交互感的关键）
+    - **上限 20 秒**：不管速度多慢、n 多大，最多等 20 秒
     """
     at, channel = db.get_last_yuxia(conv_id)
     if not at:
@@ -220,13 +232,15 @@ def _wait_seconds_needed(db, conv_id):
 
     done = len(_autonomy_after_last_user(db, conv_id))
     base = AUTONOMY_WAIT_FIRST_SECONDS * (AUTONOMY_WAIT_GROWTH ** done)
+    base *= _speed_factor(db, conv_id)
 
     if channel == "phone" and done == 0:
         base *= AUTONOMY_WAIT_PHONE_FACTOR
     if _asked_question(db, conv_id):
         base *= AUTONOMY_WAIT_QUESTION_FACTOR
 
-    base = max(AUTONOMY_WAIT_FIRST_SECONDS, min(base, AUTONOMY_WAIT_MAX_SECONDS))
+    floor = max(2, int(AUTONOMY_MIN_INTERVAL_SECONDS * 0.5))
+    base = max(floor, min(base, AUTONOMY_WAIT_MAX_SECONDS))
     return (int(round(base)), at)
 
 

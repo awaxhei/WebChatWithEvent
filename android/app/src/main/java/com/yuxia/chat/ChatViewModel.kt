@@ -43,6 +43,8 @@ data class UiState(
     val storyMinutes: Int = 0,
     val npcs: List<String> = emptyList(),
     val pushMode: Boolean = false,
+    val moodFace: String = "(ᗜ ‸ ᗜ)",
+    val speed: Int = 3,
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -181,7 +183,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val role = row.optString("role")
                 val content = row.optString("content")
                 when (channel) {
-                    "phone" -> phoneEntries.add(if (role == "user") meEntry(content) else Entry.Her(content, phone = true))
+                    "phone" -> phoneEntries.add(
+                        if (role == "user") meEntry(content)
+                        else Entry.Her(Model.stripSpeaker(content), phone = true))
                     "state" -> lastState = content
                     "npc" -> {
                         val npc = runCatching { JSONObject(content) }.getOrNull()
@@ -266,6 +270,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             paused = scene.optBoolean("paused", state.paused),
             locations = if (names.isEmpty()) state.locations else names,
             npcs = npcNames,
+            moodFace = scene.optString("mood_face").ifBlank { state.moodFace },
+            speed = scene.optInt("speed", state.speed),
         )
     }
 
@@ -343,6 +349,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 appendEntry(false, Entry.Narration(if (together) "你和尤夏一起走到了$location" else "你走到了$location"))
             } catch (e: Exception) {
                 state = state.copy(toast = e.message ?: "移动失败")
+            }
+        }
+    }
+
+    /** 行动速度 1..5：只影响她多久自己动一下，等待期仍然是递增的（上限 20 秒） */
+    fun setSpeed(speed: Int) {
+        val conv = state.convId
+        if (conv.isEmpty()) return
+        val value = speed.coerceIn(1, 5)
+        state = state.copy(speed = value)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { Api.setSpeed(app, conv, value) }
+            } catch (_: Exception) {
             }
         }
     }
@@ -471,7 +491,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val text = ev.optString("content")
                 if (text.isNotBlank()) {
                     val channel = ev.optString("channel")
-                    appendEntry(channel == "phone", Entry.Her(text, phone = channel == "phone"))
+                    appendEntry(channel == "phone", Entry.Her(Model.stripSpeaker(text), phone = channel == "phone"))
                 }
             }
         }
@@ -516,7 +536,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         val content = row.optString("content")
                         list.add(
                             if (row.optString("role") == "user") meEntry(content)
-                            else Entry.Her(content, phone = true)
+                            else Entry.Her(Model.stripSpeaker(content), phone = true)
                         )
                     }
                 }
@@ -591,7 +611,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         val text = res.optString("text")
                         val channel = res.optString("channel")
                         if (text.isNotBlank()) {
-                            appendEntry(channel == "phone", Entry.Her(text, phone = channel == "phone"))
+                            appendEntry(channel == "phone", Entry.Her(Model.stripSpeaker(text), phone = channel == "phone"))
                         }
                     }
                 }

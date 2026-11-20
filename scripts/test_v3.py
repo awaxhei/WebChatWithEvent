@@ -4,6 +4,7 @@ v3 子系统离线单元测试（不调用任何 LLM）
 
 用法：python scripts/test_v3.py
 """
+import json
 import os
 import shutil
 import sqlite3
@@ -305,10 +306,12 @@ def test_migration():
         convs = db.get_conversations(1)
         check("旧会话数据仍在", len(convs) >= 1)
         if convs:
-            conv = convs[0]["id"]
-            # 真实库里可能已有记忆（跑过对话），先清空再验证回填逻辑
-            db.delete_memories(conv)
+            # 自己造一个老会话：真实库可能处于 WAL 状态，复制出来的 chat.db 里未必有消息
+            conv = db.create_conversation(1)
+            db.add_message(conv, "user", "老会话")
+            db.add_message(conv, "assistant", json.dumps({"对白": "嗯。"}, ensure_ascii=False))
             filled = memory.backfill_if_empty(db, conv, clock.initial_minutes())
+            check("旧会话可回填记忆", filled > 0, f"filled={filled}")
             check("旧会话可回填记忆", filled > 0, f"filled={filled}")
     finally:
         database.DB_PATH = original
