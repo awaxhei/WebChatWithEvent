@@ -106,22 +106,16 @@ def find_addressed(db, conv_id, location, message):
             continue
         kept.append(npc)
     present = kept
-    # 1) 句子里提到了现场某个人的名字 → 就是在跟他说
+    # 句子里提到了现场某个人的名字 / 身份 → 就是在跟他说
     for npc in present:
         if _hit(message, npc.get("name")):
             return npc
     for npc in present:
         if _hit(message, npc.get("role")):
             return npc
-    # 2) 没点名，但上一轮就是 NPC 说的 → 当作在跟他继续聊
-    if "尤夏" in (message or ""):
-        return None
-    last_npc = _recent_npc(db, conv_id)
-    if not last_npc:
-        return None
-    for npc in present:
-        if npc.get("name") == last_npc.get("name"):
-            return npc
+    # 其余情况（包括"接着上一位 NPC 说话"）都不在这里猜，交给模型判断。
+    # 以前有个"上一轮是 NPC 就继续找他"的机械规则，结果只要喊过一次老板，
+    # 之后每一句都被老板接走——105 轮试玩里有 71 轮变成了和摊主的对话。
     return None
 
 

@@ -1584,7 +1584,9 @@ class StickerPanel {
         const close = document.getElementById('btnStickerClose');
         if (close) close.addEventListener('click', () => this.close());
         const refresh = document.getElementById('btnStickerRefresh');
-        if (refresh) refresh.addEventListener('click', () => this.load());
+        // 刷新 = 重新扫描目录 + 给新图打标，然后重载列表
+        // （往 static/stickers/ 里丢文件之后，点这一下就够了）
+        if (refresh) refresh.addEventListener('click', () => this.reindex());
         const imp = document.getElementById('btnStickerImport');
         if (imp) imp.addEventListener('click', () => this.file && this.file.click());
         if (this.file) this.file.addEventListener('change', () => this._upload());
@@ -1608,6 +1610,21 @@ class StickerPanel {
         const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
         if (cm && !cm.coLocated) return 'phone';    // 异地只能发手机
         return radio ? radio.value : 'chat';
+    }
+    async reindex() {
+        if (this.hint) this.hint.textContent = '正在扫描并打标…';
+        try {
+            const res = await authFetch('/api/stickers/refresh', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (this.hint) {
+                this.hint.textContent = `重扫完成：共 ${data.total || 0} 张` +
+                    (data.indexed ? `，新增 ${data.indexed}` : '') +
+                    (data.tagged_now ? `，打标 ${data.tagged_now}` : '');
+            }
+        } catch (e) {
+            if (this.hint) this.hint.textContent = '重扫失败：' + (e.message || e);
+        }
+        await this.load();
     }
     async load() {
         if (!this.grid) return;

@@ -167,12 +167,18 @@ def main():
     finally:
         chat_mod.deepseek = real
 
-    # ── 4b) 没点名时，上一轮是 NPC 说话 → 继续由他接
-    follow = npc.find_addressed(app_db, conv, "煎饼摊", "加个蛋多少钱")
-    check("没点名也能接上（上一轮是 NPC 在说话）",
+    # ── 4b) 没点名时：交给模型判断"是不是在继续跟他说"（不再用机械规则）
+    follow, follow_stub = resolve(app_db, conv, "煎饼摊", "加个蛋多少钱",
+                                  '{"addressed": true, "who": "老板"}')
+    check("没点名时由模型判断是否继续跟 NPC 说",
           bool(follow) and follow["id"] == boss["id"], str(follow))
+    check("这种「接着说」会问一次模型", follow_stub.calls == 1, str(follow_stub.calls))
     check("明确叫尤夏时不会路由到 NPC",
           npc.find_addressed(app_db, conv, "煎饼摊", "尤夏，你吃辣吗") is None)
+    # 模型说"不是在跟第三人说话"就不找他
+    nothing, _ = resolve(app_db, conv, "煎饼摊", "我们等会儿去买点菜吧",
+                         '{"addressed": false, "who": ""}')
+    check("模型说不是找 NPC 就不路由", nothing is None, str(nothing))
 
     # ── 5) 模型说"没在跟第三人说话" → 不建人（含口头禅回归）
     conv_h = app_db.create_conversation(user)

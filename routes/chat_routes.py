@@ -445,14 +445,27 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         # 中文引号当 JSON 引号用：掰回英文引号再试一次
         objects = _extract_json_objects(_normalize_quotes(clean))
     if not objects:
-        # 模型没按 JSON 输出（或报错）：按当前通道原样存一条，前端照常显示
+        # 模型没按 JSON 输出（或报错）：**按行拆开**再存。
+        # 以前整段原样存成一条纯文本，历史里就全是纯文本，模型越聊越不回 JSON；
+        # 现在把每一行包成一条「对白」（手机通道则是多条消息），结构不丢。
         fallback_channel = PHONE_CHANNEL if not can_speak else channel
-        fallback_text = _strip_speaker(clean)
-        db.add_message(conv_id, "assistant", fallback_text,
-                       channel=fallback_channel, scene=yuxia_loc)
+        parts = [_strip_speaker(p) for p in re.split(r"[\r\n]+", clean)]
+        parts = [p for p in parts if p]
+        if not parts:
+            return
+        is_error = parts[0].startswith(("API 错误", "错误:", "无法连接", "[生成失败"))
+        for part in parts[:4]:
+            if can_speak:
+                db.add_message(conv_id, "assistant",
+                               json.dumps({"对白": part}, ensure_ascii=False),
+                               channel=CHAT_CHANNEL, scene=yuxia_loc)
+            else:
+                db.add_message(conv_id, "assistant", part,
+                               channel=fallback_channel, scene=yuxia_loc)
         db.set_last_yuxia_at(conv_id, time.time(), fallback_channel)
-        if not fallback_text.startswith(("API 错误", "错误:", "无法连接", "[生成失败")):
-            memory_engine.remember_assistant_message(db, conv_id, fallback_text, now_minutes)
+        if not is_error:
+            memory_engine.remember_assistant_message(
+                db, conv_id, " ".join(parts)[:200], now_minutes)
         return
 
     speech, stickers_used, phone_msgs = [], [], []
