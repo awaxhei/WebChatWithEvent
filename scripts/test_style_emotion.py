@@ -52,11 +52,13 @@ TIC_BAD_RE = re.compile(r"(唔姆|唔|嗯)\1|(唔姆|唔|嗯)\s*[～~—]+|唔�
 
 JUDGE_PROMPT = (
     "你在给一段角色扮演对话做质量评审。\n"
-    "设定：尤夏 20 岁，猫娘，面无表情、话少、心口不一、有点孩子气；\n"
+    "设定：尤夏 20 岁，猫娘，面无表情、话少、心口不一、有点孩子气；"
+    "生活上很不行、处处依赖同居的青梅。\n"
     "青梅是她同居的青梅竹马，两人关系很近但没有挑明。\n\n"
     "只评「尤夏的这一句回复」，输出一个 JSON：\n"
     '{"亲密":0-5,"傲娇":0-5,"冷淡":0-5,"萌":0-5,"脑回路清奇":true/false,'
-    '"说教":true/false,"答非所问":true/false,"情感方向":"靠近|回避|平衡","理由":"不超过20字"}\n\n'
+    '"说教":true/false,"答非所问":true/false,"生活白痴":0-5,'
+    '"情感方向":"靠近|回避|平衡","理由":"不超过20字"}\n\n'
     "口径：\n"
     "- 亲密：有没有把关系往前推（在意、靠近、想被注意、独占）\n"
     "- 傲娇：心口不一的程度\n"
@@ -64,6 +66,9 @@ JUDGE_PROMPT = (
     "- 萌：孩子气、小动物感、让人心软的程度\n"
     "- 脑回路清奇：理由偏离常理但自洽\n"
     "- 说教：在叮嘱/教育对方怎么生活（应当 false）\n"
+    "- 生活白痴：这句有没有露出「生活上不行、靠他」的样子——具体的小事故"
+    "（糊了、变粉了、找不到钥匙）、先嘴硬后小声认、拐弯求助，都给高分；"
+    "抽象的「我好笨」「都靠你了」或一味卖惨给低分；完全没露出就是 0\n"
     "- 答非所问：对方问的是具体的事（吃没吃、几点、在哪、谁）却没回应才算 true；\n"
     "  对方问的是感情/私密问题（喜欢吗、想我吗）时，嘴硬回避、反问、岔开都不算答非所问\n"
     "- 情感方向：这句让人感觉她在靠近、在回避，还是平衡\n"
@@ -137,6 +142,13 @@ CASES = [
     ("手机-想你", "有点想你了", "phone"),
     ("手机-生气", "你半天不回我消息", "phone"),
     ("手机-晚安", "晚安，早点睡", "phone"),
+    # 生活白痴（依赖青梅的部分，看能不能露出"生活上不行"）
+    ("生活-糊锅", "厨房怎么一股糊味", "chat"),
+    ("生活-洗衣", "你把我的白衬衫一起洗了？", "chat"),
+    ("生活-电费单", "电费单你看了吗，该交了", "chat"),
+    ("生活-迷路", "你怎么还没到家", "chat"),
+    ("生活-饿着", "你中午吃了什么", "chat"),
+    ("生活-教她", "看着我做，水开了再下面", "chat"),
 ]
 
 stats = {"cases": 0, "violations": [], "scores": [], "samples": [],
@@ -307,6 +319,7 @@ def main():
         else:
             score["name"] = name
             score["shown"] = shown
+            score["mine"] = mine
             stats["scores"].append(score)
             if len(stats["samples"]) < 200:
                 stats["samples"].append((name, mine, shown, score))
@@ -324,7 +337,9 @@ def write_report():
     sc = stats["scores"]
     n = max(1, len(sc))
     avg = {k: round(sum(s.get(k, 0) or 0 for s in sc) / n, 2)
-           for k in ("亲密", "傲娇", "冷淡", "萌")}
+           for k in ("亲密", "傲娇", "冷淡", "萌", "生活白痴")}
+    daily = [s for s in sc if s.get("name", "").startswith("生活")]
+    daily_avg = round(sum(s.get("生活白痴", 0) or 0 for s in daily) / len(daily), 2) if daily else 0
     weird = sum(1 for s in sc if s.get("脑回路清奇"))
     lecture = sum(1 for s in sc if s.get("说教"))
     off = sum(1 for s in sc if s.get("答非所问"))
@@ -333,6 +348,8 @@ def write_report():
     lines = ["# 风格 / 情感评审报告", ""]
     lines.append(f"- 场景数：**{len(sc)}**")
     lines.append(f"- 平均分：亲密 {avg['亲密']} / 傲娇 {avg['傲娇']} / 冷淡 {avg['冷淡']} / 萌 {avg['萌']}")
+    lines.append(f"- 生活白痴：全篇 {avg['生活白痴']}；生活场景 {daily_avg}"
+                 f"（{len(daily)} 条，看下面「生活白痴」一节）")
     lines.append(f"- 脑回路清奇：{weird} 条；说教：{lecture} 条；答非所问：{off} 条")
     lines.append(f"- 情感方向：靠近 {near} / 回避 {away} / 平衡 {len(sc) - near - away}")
     tic_rate = round(100.0 * stats["tic_hits"] / n)
@@ -350,6 +367,11 @@ def write_report():
     lines.append(f"## 规则违例（{len(stats['violations'])}）")
     for v in stats["violations"][:60]:
         lines.append(f"- {v}")
+    lines.append("")
+    lines.append("## 生活白痴（依赖青梅的那一面）")
+    for s in sorted(daily, key=lambda x: x.get("生活白痴") or 0):
+        lines.append(f"- **{s['name']}** 生活白痴{s.get('生活白痴')}｜青梅：{s.get('mine', '')}")
+        lines.append(f"  - 尤夏：{s['shown']}")
     lines.append("")
     lines.append("## 逐条（按萌分从低到高，先看最差的）")
     for s in sorted(sc, key=lambda x: (x.get("萌") or 0, x.get("亲密") or 0))[:20]:
