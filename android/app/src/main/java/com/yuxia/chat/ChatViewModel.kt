@@ -201,7 +201,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             entries.add(meEntry(content))
                         } else {
                             val reply = Model.parseReply(content)
-                            reply.speeches.forEach { entries.add(Entry.Her(it)) }
+                            reply.speeches.forEach {
+                                entries.add(Entry.Her(it, face = Model.faceOf(reply.mood)))
+                            }
                             reply.stickerEmotions.forEach { emotion ->
                                 state.emotionIndex[emotion]?.let { entries.add(Entry.HerSticker(it)) }
                             }
@@ -504,7 +506,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val index = Model.emotionIndex(state.stickers)
         for (i in renderedObjects until objects.size) {
             val reply = Model.parseReply(objects[i])
-            reply.speeches.forEach { appendEntry(phone, Entry.Her(it, phone = phone)) }
+            val face = Model.faceOf(reply.mood)
+            reply.speeches.forEach { appendEntry(phone, Entry.Her(it, phone = phone, face = face)) }
             reply.stickerEmotions.forEach { emotion ->
                 index[emotion]?.let { appendEntry(phone, Entry.HerSticker(it)) }
             }

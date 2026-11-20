@@ -90,6 +90,14 @@ const authFetch = (url, options = {}) => {
 // 历史里就会显示成一坨 JSON。这里在渲染时再拆一次。
 // 模型偶尔会把说话人前缀也写进台词（"尤夏：……别揉。"），显示前一刀切掉。
 // 只剥开头一层，正文里正常出现的"尤夏"不动。
+// 心情 → 头像颜文字（和服务端 config.MOOD_FACES 保持一致）
+const MOOD_FACES = {
+    '平静': '(ᗜ ‸ ᗜ)', '开心': '(ᗜ ᴗ ᗜ)', '认真': '(ᗜ ・ ᗜ)', '害羞': '(ᗜ ﹏ ᗜ)',
+    '放松': '(ᗜ ω ᗜ)', '无语': '(ᗜ _ ᗜ)', '惊讶': '(ᗜ o ᗜ)', '不爽': '(● ‸ ●)',
+};
+function moodFace(mood) {
+    return MOOD_FACES[mood] || '';
+}
 const SPEAKER_PREFIX_RE = /^\s*(?:尤夏|青梅|她|我|对方|旁白)\s*[:：]\s*/;
 function stripSpeakerPrefix(text) {
     return String(text == null ? '' : text).replace(SPEAKER_PREFIX_RE, '');
@@ -717,7 +725,7 @@ class ChatManager {
     _renderJSONObject(obj) {
         // 主页面只呈现「对白」和「表情包」；动作与神态由系统的场景描写负责
         if (obj["对白"]) {
-            this._addBubble('assistant', obj["对白"], true);
+            this._addHerBubble(obj["对白"], obj["心情"], true);
         }
 
         // 手机消息：不进主页面，交给手机面板并亮红点
@@ -823,6 +831,26 @@ class ChatManager {
         const bubble = document.createElement('div');
         bubble.className = isNote ? 'scene-note' : 'message-bubble';
         bubble.textContent = (role === 'user' || isNote) ? content : stripSpeakerPrefix(content);
+        row.appendChild(bubble);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.slideIn(row);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+        return bubble;
+    }
+
+    /** 她说的话：气泡左边挂一个颜文字头像（当面也显示，头像跟着心情变） */
+    _addHerBubble(text, mood, isStream) {
+        const row = document.createElement('div');
+        row.className = 'message-row assistant her-row';
+        if (isStream) row.classList.add('stream-temp');
+        const face = moodFace(mood) || this.moodFace || '(ᗜ ‸ ᗜ)';
+        const avatar = document.createElement('span');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = face;
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble';
+        bubble.textContent = stripSpeakerPrefix(text);
+        row.appendChild(avatar);
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
         AnimationEngine.slideIn(row);
@@ -1009,7 +1037,7 @@ class ChatManager {
             if (!trimmed.startsWith('{')) continue;
             try {
                 const obj = JSON.parse(this._normalizeQuotes(trimmed));
-                if (obj["对白"]) this._addBubble('assistant', obj["对白"]);
+                if (obj["对白"]) this._addHerBubble(obj["对白"], obj["心情"]);
                 if (obj["消息"] && window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
                 if (obj["表情包"]) {
                     String(obj["表情包"]).split(/[,，]/).filter(Boolean)

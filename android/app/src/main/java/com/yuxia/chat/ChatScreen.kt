@@ -225,7 +225,7 @@ fun ChatScreen(vm: ChatViewModel) {
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(s.entries) { entry -> EntryRow(entry, s.baseUrl) }
+                items(s.entries) { entry -> EntryRow(entry, s.baseUrl, s.moodFace) }
                 if (s.busy) item { TypingRow() }
             }
 
@@ -360,22 +360,9 @@ private fun SceneStrip(s: UiState) {
 }
 
 /**
- * 手机里的消息：她的话旁边挂一个颜文字头像，头像内容跟着心情变。
- * （当面聊天不显示头像——人就在眼前）
+ * 她的头像：一个小小的颜文字，内容跟着心情变。
+ * 当面和手机两个通道都显示（人虽然就在眼前，但表情是「看得见」的）。
  */
-@Composable
-private fun PhoneEntryRow(entry: Entry, state: UiState) {
-    if (entry is Entry.Her) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            MoodAvatar(state.moodFace)
-            Spacer(Modifier.width(6.dp))
-            Bubble(entry.text, mine = false)
-        }
-        return
-    }
-    EntryRow(entry, state.baseUrl)
-}
-
 @Composable
 private fun MoodAvatar(face: String) {
     Surface(
@@ -393,7 +380,7 @@ private fun MoodAvatar(face: String) {
 }
 
 @Composable
-private fun EntryRow(entry: Entry, baseUrl: String) {
+private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ ‸ ᗜ)") {
     when (entry) {
         is Entry.Me -> Row(
             Modifier.fillMaxWidth(),
@@ -406,7 +393,9 @@ private fun EntryRow(entry: Entry, baseUrl: String) {
             }
         }
 
-        is Entry.Her -> Row(Modifier.fillMaxWidth()) {
+        is Entry.Her -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            MoodAvatar(entry.face.ifBlank { currentFace })
+            Spacer(Modifier.width(6.dp))
             Column {
                 if (entry.phone) {
                     Text(
@@ -664,7 +653,7 @@ private fun PhoneSheet(state: UiState, onClose: () -> Unit, onSend: (String) -> 
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(state.phoneEntries) { entry -> PhoneEntryRow(entry, state) }
+                items(state.phoneEntries) { entry -> EntryRow(entry, state.baseUrl, state.moodFace) }
                 if (state.phoneEntries.isEmpty()) {
                     item {
                         Text(

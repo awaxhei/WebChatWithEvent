@@ -36,7 +36,8 @@ sealed interface Entry {
     data class Me(val text: String = "", val stickerUrl: String = "") : Entry
 
     /** 她当面说的 / 手机里发的 */
-    data class Her(val text: String, val phone: Boolean = false) : Entry
+    data class Her(val text: String, val phone: Boolean = false,
+                     val face: String = "") : Entry
 
     /** 她发的表情包 */
     data class HerSticker(val url: String) : Entry
@@ -64,10 +65,19 @@ object Model {
     }
 
     /** 她的一条输出（当面通道存的是 JSON） */
-    class Reply(val speeches: List<String>, val stickerEmotions: List<String>)
+    class Reply(val speeches: List<String>, val stickerEmotions: List<String>,
+               val mood: String = "")
 
     /** 模型偶尔把"尤夏："也写进台词，显示前切掉（只剥开头一层） */
     private val SPEAKER_PREFIX = Regex("^\\s*(?:尤夏|青梅|她|我|对方|旁白)\\s*[:：]\\s*")
+
+    // 心情 → 头像颜文字（和服务端 config.MOOD_FACES 一致）
+    private val MOOD_FACES = mapOf(
+        "平静" to "(ᗜ ‸ ᗜ)", "开心" to "(ᗜ ᴗ ᗜ)", "认真" to "(ᗜ ・ ᗜ)", "害羞" to "(ᗜ ﹏ ᗜ)",
+        "放松" to "(ᗜ ω ᗜ)", "无语" to "(ᗜ _ ᗜ)", "惊讶" to "(ᗜ o ᗜ)", "不爽" to "(● ‸ ●)",
+    )
+
+    fun faceOf(mood: String?): String = MOOD_FACES[(mood ?: "").trim()] ?: ""
 
     fun stripSpeaker(text: String?): String =
         (text ?: "").replace(SPEAKER_PREFIX, "").trim()

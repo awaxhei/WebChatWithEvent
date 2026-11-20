@@ -1062,3 +1062,16 @@ html, body {
     border-radius: 10px; padding: 3px 6px; white-space: nowrap;
     user-select: none;
 }
+
+/* 当面聊天的头像：气泡左边一个小小的颜文字，和手机面板一致 */
+.message-row.her-row {
+    display: flex; align-items: flex-end; gap: 6px;
+    justify-content: flex-start;
+}
+.chat-avatar {
+    flex: 0 0 auto;
+    font-size: 11px; line-height: 1.2; color: var(--text-muted);
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 3px 6px; white-space: nowrap;
+    user-select: none; margin-bottom: 2px;
+}
