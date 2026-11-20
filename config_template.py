@@ -449,16 +449,18 @@ NPC_CAP = 12
 # 判断"在跟谁说话"：只做分类，关掉思考、限制输出长度，尽量快
 NPC_DETECT_PROMPT = (
     "你在判断一段角色扮演对话里，玩家这句话是不是在跟「尤夏之外的第三人」说话。\n\n"
-    "现场的人：{present}\n"
-    "尤夏是玩家同居的伙伴，一直在场。\n\n"
+    "现场已有的人：{present}\n"
+    "最近的对话：\n{recent}\n\n"
+    "尤夏是玩家同居的伙伴，一直在场，不算第三人。\n\n"
     "规则：\n"
-    "1. 玩家在对尤夏说话、自言自语、描述自己的动作或想法 → addressed=false\n"
-    "2. 玩家在跟摊主、店员、路人、司机等第三人说话（叫称呼、点单、问价、搭话） → addressed=true\n"
-    "3. 只是顺口提到第三人的名字、自己在叙述，而不是对他说 → addressed=false\n"
-    "4. who 填玩家用来称呼对方的词（尽量短，2 到 6 个字）；判断不出来就留空\n"
-    "5. 英文口头禅（hey / hi / ok / hello / wait / lol）是语气词，不是在叫谁 → addressed=false；\n"
-    "6. 玩家只是喊了一声（如「hey?」「喂？」）而没说事 → addressed=false\n"
-    "7. 只输出 JSON，不要解释\n\n"
+    "1. 玩家在对尤夏说话、自言自语、描述动作或想法 → addressed=false\n"
+    "2. 玩家在叫某个人、对第三人点单/问价/搭话/抱怨 → addressed=true\n"
+    "3. 只是顺口提到某人的名字、自己在叙述，而不是对他说 → addressed=false\n"
+    "4. 英文口头禅（hey、hi、ok、wait、lol）和中文语气词（嘿、喂、诶、嗯）是语气，不是在叫谁 → addressed=false\n"
+    "5. 玩家只是喊了一声、没提任何事（例如「hey?」「喂？」）→ addressed=false\n"
+    "6. 玩家在接着上一位 NPC 说话（看上面的最近的对话）→ addressed=true，who 用那个人的名字\n"
+    "7. who 填玩家用来称呼对方的词（2 到 6 个字）；能对上现场名单就用名单里的名字；判断不出来就留空\n"
+    "8. 只输出 JSON，不要解释\n\n"
     '输出格式：{"addressed": true/false, "who": "<称呼或空>"}\n'
 )
 NPC_PROMPT = (

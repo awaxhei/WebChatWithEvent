@@ -4,9 +4,14 @@
 设计取舍：
 - NPC 绑定在**地点**上：玩家走到那个地点时他们在场，走开就不在
 - 只做简单问答：一次一两句话，用小模型（flash）现生成，不维护长期人设
-- 动态增减：玩家喊「老板」而现场没有 NPC 时自动补一个；
-  也可以显式创建 / 让某个 NPC 退场（active → gone）
+- 动态增减：现场没有这个人、但玩家确实在跟第三人说话 → 让模型判断后补一个
 - 上限 NPC_CAP，防止一路走一路刷出几百个路人
+
+「玩家在跟谁说话」这件事**只交给模型判断**：
+之前用正则猜"句首称呼"，`hey?` 会被当成在叫一个叫 hey 的人，
+凭空冒出一个 NPC 回你一句"？"。现在没有任何正则参与判断，
+唯一的机械匹配是"这句话里提到了现场某个人的名字"——那只是找回已有角色，
+不会创建新角色。
 
 和尤夏的关系：NPC 说的话也会进对话历史（channel='npc'），
 尤夏能看到、也能接话，但她不替 NPC 说话。
@@ -17,54 +22,9 @@ import time
 
 from config import NPC_ENABLED, NPC_PROMPT, NPC_CAP, NPC_LLM_DETECT, NPC_DETECT_PROMPT
 
+# 只用来剥掉模型偶尔带出的 ``` 围栏 / 从文字里捞出 JSON（属于解析，不是判断）
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
-# 玩家用这些称呼喊人时，说明现场应该有个 NPC
-ROLE_HINTS = {
-    "老板": "老板",
-    "老板娘": "老板娘",
-    "店主": "店主",
-    "摊主": "摊主",
-    "店员": "店员",
-    "服务员": "服务员",
-    "收银": "收银员",
-    "前台": "前台",
-    "师傅": "师傅",
-    "保安": "保安",
-    "门卫": "门卫",
-    "司机": "司机",
-    "快递": "快递员",
-    "外卖": "外卖员",
-    "大爷": "大爷",
-    "阿姨": "阿姨",
-}
-
-# 同一地点最多几个 NPC（连同全局上限一起用）
-PER_LOCATION_CAP = 3
-
-# 判定"玩家在喊人"：句首一个称呼 + 标点/空白，或者 @名字
-# 第一个捕获组是 @，第二个是名字本身
-_VOCATIVE_RE = re.compile(
-    r"^[\s（(「【\"'“]*(@?)([\u4e00-\u9fa5A-Za-z0-9]{2,8})[，,：:！!？?、\s]")
-# 这些词虽然出现在句首，但不是称呼
-_VOCATIVE_STOP = {
-    "你", "您", "尤夏", "我", "喂", "那个", "这个", "我说", "然后", "所以",
-    "不过", "而且", "就是", "今天", "明天", "昨天", "现在", "刚才", "老板们",
-    "嗯", "啊", "诶", "哎", "呃", "唉", "嘿", "哈", "嗷", "哦", "喔", "呐",
-    "草", "靠", "啧", "那个", "等等", "等下",
-}
-# 纯英文的口头禅：不带 @ 时一律不当称呼
-# （"hey?" 曾经被当成"你在叫一个叫 hey 的人"，于是凭空冒出一个 NPC）
-_LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9]{1,8}$")
-_EN_INTERJECTIONS = {
-    "hey", "hi", "hello", "yo", "ok", "okay", "yes", "no", "yeah", "nope",
-    "thanks", "thank", "please", "pls", "lol", "hmm", "huh", "um", "uh",
-    "wait", "well", "sorry", "good", "nice", "omg", "wow", "gg", "nb",
-    "emmm", "emd", "emm", "abc", "lmao", "rofl", "sup", "bro",
-}
-_HAN_RE = re.compile(r"[\u4e00-\u9fa5]")
-# 称呼里不该出现的字（动词/语气词/指示词）——用来把"给我来个煎饼"挡在外面
-_VOCATIVE_BLOCK = set("给我你您他她它们吗呢吧了啊呀哦啦要帮买卖吃喝看做走拿这那怎么谁是")
 # 常见身份后缀：用来把"算命先生"这类称呼拆出身份
 ROLE_SUFFIXES = (
     "老板娘", "老板", "店主", "摊主", "店长", "经理", "掌柜", "店员", "店员",
@@ -73,46 +33,23 @@ ROLE_SUFFIXES = (
     "护士", "警察", "老师", "同学", "摊贩", "小贩", "路人",
 )
 
+# 同一地点最多几个 NPC（连同全局上限一起用）
+PER_LOCATION_CAP = 3
+
+# 只用于清理历史数据：把以前被正则误当成称呼建出来的口头禅 NPC 退场。
+# 它不参与任何判断，新 NPC 的名字完全由模型给。
+_EN_INTERJECTIONS = {
+    "hey", "hi", "hello", "yo", "ok", "okay", "yes", "no", "yeah", "nope",
+    "thanks", "thank", "please", "pls", "lol", "hmm", "huh", "um", "uh",
+    "wait", "well", "sorry", "good", "nice", "omg", "wow", "gg", "nb",
+    "emmm", "emd", "emm", "lmao", "rofl", "sup", "bro",
+}
+
 
 def _is_bogus_name(name):
-    """是不是被误当成称呼的英文口头禅（hey / hi / ok …）"""
+    """只用于清理历史数据：以前被正则误当成称呼建出来的口头禅 NPC"""
     n = (name or "").strip()
-    return bool(_LATIN_ONLY_RE.match(n)) and n.lower() in _EN_INTERJECTIONS
-
-
-def extract_vocative(message):
-    """从玩家这句话里抽出他在喊谁。
-
-    不限于固定词表：句首「称呼 + 标点」的写法（"算命先生，帮我看看"）
-    或者 @名字 都能识别，这样表里没有的名字也能当场出现。
-
-    两条硬规则（都是被实战坑出来的）：
-    - 不带 @ 的纯英文一律不算称呼：hey / hi / ok / wait 是口头禅，
-      以前 "hey?" 会凭空生成一个叫 hey 的 NPC
-    - 语气词（嗯/啊/诶…）即使在词表外也不当称呼
-    """
-    text = (message or "").strip()
-    if not text:
-        return None
-    m = _VOCATIVE_RE.match(text)
-    if not m:
-        return None
-
-    explicit = m.group(1) == "@"
-    cand = m.group(2)
-    if cand in _VOCATIVE_STOP:
-        return None
-    if set(cand) & _VOCATIVE_BLOCK:
-        return None
-    if not explicit:
-        # 没打 @ 又没有一个汉字 → 口头禅，不是称呼
-        if not _HAN_RE.search(cand):
-            return None
-        if cand.lower() in _EN_INTERJECTIONS:
-            return None
-    elif _is_bogus_name(cand):
-        return None
-    return cand
+    return bool(n) and n.isascii() and n.lower() in _EN_INTERJECTIONS
 
 
 def _role_of(name):
@@ -146,14 +83,19 @@ def _hit(haystack, needle):
 
 
 def find_addressed(db, conv_id, location, message):
-    """玩家这句话是不是在跟现场的某个 NPC 说"""
+    """这句话是不是在跟现场的某个 NPC 说（**不创建任何人**）
+
+    只做两件机械的事：找回"句子里提到名字/身份"的现场 NPC、
+    以及"上一轮就是他在说话"的延续。都找不到就返回 None，
+    要不要新增角色交给 detect_addressed 的模型判断。
+    """
     if not NPC_ENABLED or not message:
         return None
     try:
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         return None
-    # 0) 先把以前误建的口头禅 NPC 退场（"hey?" 那次留下的）
+    # 先把以前正则误建的口头禅 NPC 退场（历史数据清理）
     kept = []
     for npc in present:
         if _is_bogus_name(npc.get("name")):
@@ -164,22 +106,14 @@ def find_addressed(db, conv_id, location, message):
             continue
         kept.append(npc)
     present = kept
-    # 1) 点名找（名字优先，其次身份）
+    # 1) 句子里提到了现场某个人的名字 → 就是在跟他说
     for npc in present:
         if _hit(message, npc.get("name")):
             return npc
     for npc in present:
         if _hit(message, npc.get("role")):
             return npc
-    # 2) 喊了一个现场没有的新称呼（"城管，……"）
-    #    这时绝不能走"接着上一轮"的分支，否则新角色永远出不来
-    vocative = extract_vocative(message)
-    if vocative:
-        for npc in present:
-            if npc.get("name") == vocative or npc.get("role") == vocative:
-                return npc
-        return None
-    # 3) 没点名，但上一轮就是 NPC 说的 → 当作在跟他继续聊
+    # 2) 没点名，但上一轮就是 NPC 说的 → 当作在跟他继续聊
     if "尤夏" in (message or ""):
         return None
     last_npc = _recent_npc(db, conv_id)
@@ -239,9 +173,6 @@ def _create(db, conv_id, location, name):
     name = (name or "").strip()[:12]
     if not name:
         return None
-    # 口头禅不是人名：hey / hi / ok 这类一律不建
-    if _is_bogus_name(name):
-        return None
     role = _role_of(name)
     try:
         present = db.get_npcs(conv_id, location=location)
@@ -258,19 +189,6 @@ def _create(db, conv_id, location, name):
     persona = f"{location}的{role}，说话随意、简短，只管自己眼前的事。"
     npc_id = db.add_npc(conv_id, name, role, location, persona)
     return db.get_npc(npc_id)
-
-
-def spawn_placeholder(db, conv_id, location, message):
-    """现场没有这个人，但玩家喊了他的称呼 → 当场生成一个
-
-    称呼不限于固定词表：句首「算命先生，……」这种写法也能认出来。
-    """
-    if not NPC_ENABLED:
-        return None
-    name = extract_vocative(message)
-    if not name:
-        return None
-    return _create(db, conv_id, location, name)
 
 
 def _default_name(location):
@@ -327,10 +245,10 @@ def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
 
 
 def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
-    """用一个小模型判断"这句话是不是在跟第三人说话"。
+    """让模型判断"这句话是不是在跟第三人说话、叫的是谁"。
 
-    只在固定规则识别不出称呼时用：玩家把称呼写在句子中间、或者干脆没写称呼，
-    规则会漏掉，这里补一次判断。关掉思考、限制 120 token，尽量不拖慢首字。
+    这是**唯一**的判断入口：不再有任何正则去猜"句首称呼"。
+    关掉思考、限制 120 token，尽量不拖慢首字。
     返回 {"addressed": bool, "who": str} 或 None。
     """
     if not NPC_LLM_DETECT or not message:
@@ -340,7 +258,30 @@ def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
     except Exception:
         present = []
     names = "、".join(n.get("name") or "" for n in present) or "（现场暂时没有第三人）"
-    system = NPC_DETECT_PROMPT.replace("{present}", names)
+
+    # 把最近几句给模型看，它才知道"是在叫新的人"还是"接着上一位说"
+    try:
+        rows = [m for m in db.get_messages(conv_id)
+                if (m.get("channel") or "chat") in ("chat", "phone", "npc")][-4:]
+    except Exception:
+        rows = []
+    lines = []
+    for m in rows:
+        channel = m.get("channel") or "chat"
+        if channel == "npc":
+            try:
+                data = json.loads(m["content"])
+                lines.append(f"{data.get('name', '路人')}：{data.get('text', '')}")
+            except Exception:
+                continue
+        else:
+            speaker = "青梅" if m["role"] == "user" else "尤夏"
+            lines.append(f"{speaker}（{'手机' if channel == 'phone' else '当面'}）：{m['content']}")
+    recent = "\n".join(lines) or "（还没有对话）"
+
+    system = (NPC_DETECT_PROMPT
+              .replace("{present}", names)
+              .replace("{recent}", recent))
     try:
         raw = deepseek.chat_sync(
             [{"role": "user", "content": message}],
@@ -371,6 +312,31 @@ def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
     addressed = bool(data.get("addressed"))
     who = str(data.get("who") or "").strip()[:12]
     return {"addressed": addressed, "who": who}
+
+
+def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=None):
+    """玩家这句话是对谁说的：「先找回现场的」→「再让模型判断要不要新增」。
+
+    判断完全由模型做，这里只负责把结论落到名册上：
+    - 句子里提到现场某人的名字 / 上一轮就是他在说话 → 直接找他（不花 token）
+    - 否则问一次模型；模型说"在跟第三人说话"才建人（who 为空则按地点取名）
+    """
+    if not NPC_ENABLED or not message:
+        return None
+    found = find_addressed(db, conv_id, location, message)
+    if found:
+        return found
+    if deepseek is None:
+        return None
+    decision = detect_addressed(db, conv_id, location, message, deepseek, api_key=api_key)
+    if not decision or not decision.get("addressed"):
+        return None
+    who = decision.get("who") or ""
+    if who:
+        existing = db.find_npc(conv_id, who, location)
+        if existing:
+            return existing
+    return spawn_named(db, conv_id, location, who)
 
 
 def present_block(db, conv_id, location):

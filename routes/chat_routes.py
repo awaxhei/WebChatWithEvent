@@ -299,20 +299,13 @@ def chat():
         CHAT_CHANNEL if co_located else PHONE_CHANNEL)
     can_speak = channel == CHAT_CHANNEL
 
-    # 现场有没有玩家正在搭话的 NPC：先找现成的，再按称呼补，最后交给小模型判别
-    # （发表情包时不找人，免得凭空冒出一个"你在叫谁"的 NPC）
+    # 现场有没有玩家正在搭话的 NPC：
+    # 「在跟谁说话」只交给模型判断（不再用正则猜句首称呼——以前 "hey?" 会凭空
+    # 冒出一个叫 hey 的 NPC）。这里先找回现场的，认不出来就问一次小模型。
     addressed_npc = None
     if not sticker_row:
-        addressed_npc = npc.find_addressed(db, conv_id, player_loc, user_message)
-        if not addressed_npc:
-            addressed_npc = npc.spawn_placeholder(db, conv_id, player_loc, user_message)
-        if not addressed_npc:
-            decision = npc.detect_addressed(db, conv_id, player_loc, user_message,
-                                            deepseek, api_key=api_key)
-            if decision and decision.get("addressed"):
-                who = decision.get("who") or ""
-                addressed_npc = (db.find_npc(conv_id, who, player_loc) if who else None) \
-                    or npc.spawn_named(db, conv_id, player_loc, who)
+        addressed_npc = npc.resolve_addressed(db, conv_id, player_loc, user_message,
+                                              deepseek, api_key=api_key)
 
     db.add_message(conv_id, "user", _stored_user_content(sticker_path, sticker_desc, user_message),
                    channel=channel, scene=player_loc)
