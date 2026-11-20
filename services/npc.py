@@ -43,12 +43,26 @@ ROLE_HINTS = {
 PER_LOCATION_CAP = 3
 
 # 判定"玩家在喊人"：句首一个称呼 + 标点/空白，或者 @名字
-_VOCATIVE_RE = re.compile(r"^[\s（(「【\"'“]*@?([\u4e00-\u9fa5A-Za-z0-9]{2,8})[，,：:！!？?、\s]")
+# 第一个捕获组是 @，第二个是名字本身
+_VOCATIVE_RE = re.compile(
+    r"^[\s（(「【\"'“]*(@?)([\u4e00-\u9fa5A-Za-z0-9]{2,8})[，,：:！!？?、\s]")
 # 这些词虽然出现在句首，但不是称呼
 _VOCATIVE_STOP = {
     "你", "您", "尤夏", "我", "喂", "那个", "这个", "我说", "然后", "所以",
     "不过", "而且", "就是", "今天", "明天", "昨天", "现在", "刚才", "老板们",
+    "嗯", "啊", "诶", "哎", "呃", "唉", "嘿", "哈", "嗷", "哦", "喔", "呐",
+    "草", "靠", "啧", "那个", "等等", "等下",
 }
+# 纯英文的口头禅：不带 @ 时一律不当称呼
+# （"hey?" 曾经被当成"你在叫一个叫 hey 的人"，于是凭空冒出一个 NPC）
+_LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9]{1,8}$")
+_EN_INTERJECTIONS = {
+    "hey", "hi", "hello", "yo", "ok", "okay", "yes", "no", "yeah", "nope",
+    "thanks", "thank", "please", "pls", "lol", "hmm", "huh", "um", "uh",
+    "wait", "well", "sorry", "good", "nice", "omg", "wow", "gg", "nb",
+    "emmm", "emd", "emm", "abc", "lmao", "rofl", "sup", "bro",
+}
+_HAN_RE = re.compile(r"[\u4e00-\u9fa5]")
 # 称呼里不该出现的字（动词/语气词/指示词）——用来把"给我来个煎饼"挡在外面
 _VOCATIVE_BLOCK = set("给我你您他她它们吗呢吧了啊呀哦啦要帮买卖吃喝看做走拿这那怎么谁是")
 # 常见身份后缀：用来把"算命先生"这类称呼拆出身份
@@ -60,21 +74,45 @@ ROLE_SUFFIXES = (
 )
 
 
+def _is_bogus_name(name):
+    """是不是被误当成称呼的英文口头禅（hey / hi / ok …）"""
+    n = (name or "").strip()
+    return bool(_LATIN_ONLY_RE.match(n)) and n.lower() in _EN_INTERJECTIONS
+
+
 def extract_vocative(message):
     """从玩家这句话里抽出他在喊谁。
 
     不限于固定词表：句首「称呼 + 标点」的写法（"算命先生，帮我看看"）
     或者 @名字 都能识别，这样表里没有的名字也能当场出现。
+
+    两条硬规则（都是被实战坑出来的）：
+    - 不带 @ 的纯英文一律不算称呼：hey / hi / ok / wait 是口头禅，
+      以前 "hey?" 会凭空生成一个叫 hey 的 NPC
+    - 语气词（嗯/啊/诶…）即使在词表外也不当称呼
     """
     text = (message or "").strip()
     if not text:
         return None
     m = _VOCATIVE_RE.match(text)
-    if m:
-        cand = m.group(1)
-        if cand not in _VOCATIVE_STOP and not (set(cand) & _VOCATIVE_BLOCK):
-            return cand
-    return None
+    if not m:
+        return None
+
+    explicit = m.group(1) == "@"
+    cand = m.group(2)
+    if cand in _VOCATIVE_STOP:
+        return None
+    if set(cand) & _VOCATIVE_BLOCK:
+        return None
+    if not explicit:
+        # 没打 @ 又没有一个汉字 → 口头禅，不是称呼
+        if not _HAN_RE.search(cand):
+            return None
+        if cand.lower() in _EN_INTERJECTIONS:
+            return None
+    elif _is_bogus_name(cand):
+        return None
+    return cand
 
 
 def _role_of(name):
@@ -115,6 +153,17 @@ def find_addressed(db, conv_id, location, message):
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         return None
+    # 0) 先把以前误建的口头禅 NPC 退场（"hey?" 那次留下的）
+    kept = []
+    for npc in present:
+        if _is_bogus_name(npc.get("name")):
+            try:
+                db.set_npc_status(npc["id"], "gone")
+            except Exception:
+                pass
+            continue
+        kept.append(npc)
+    present = kept
     # 1) 点名找（名字优先，其次身份）
     for npc in present:
         if _hit(message, npc.get("name")):
@@ -189,6 +238,9 @@ def _create(db, conv_id, location, name):
     """按称呼建一个 NPC；同名/同身份已存在就直接复用"""
     name = (name or "").strip()[:12]
     if not name:
+        return None
+    # 口头禅不是人名：hey / hi / ok 这类一律不建
+    if _is_bogus_name(name):
         return None
     role = _role_of(name)
     try:

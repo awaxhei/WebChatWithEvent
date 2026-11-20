@@ -52,9 +52,12 @@ def get_events(conv_id):
     if denied:
         return denied
     now = init_clock(db, conv_id)
+    events = db.get_recent_events(conv_id, limit=50)
     return jsonify({
-        "events": db.get_recent_events(conv_id, limit=50),
+        "events": events,
         "story_time": clock.format_time(now),
         "initialized": db.is_events_initialized(conv_id),
         "location": db.get_current_location(conv_id),
+        # 和 /api/history 一致：用最新事件的描述当"故事摘要"（网页事件栏顶部那行）
+        "story_summary": events[-1]["description"] if events else "",
     })

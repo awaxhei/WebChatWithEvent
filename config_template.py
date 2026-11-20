@@ -456,7 +456,9 @@ NPC_DETECT_PROMPT = (
     "2. 玩家在跟摊主、店员、路人、司机等第三人说话（叫称呼、点单、问价、搭话） → addressed=true\n"
     "3. 只是顺口提到第三人的名字、自己在叙述，而不是对他说 → addressed=false\n"
     "4. who 填玩家用来称呼对方的词（尽量短，2 到 6 个字）；判断不出来就留空\n"
-    "5. 只输出 JSON，不要解释\n\n"
+    "5. 英文口头禅（hey / hi / ok / hello / wait / lol）是语气词，不是在叫谁 → addressed=false；\n"
+    "6. 玩家只是喊了一声（如「hey?」「喂？」）而没说事 → addressed=false\n"
+    "7. 只输出 JSON，不要解释\n\n"
     '输出格式：{"addressed": true/false, "who": "<称呼或空>"}\n'
 )
 NPC_PROMPT = (

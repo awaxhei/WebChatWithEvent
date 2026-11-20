@@ -38,6 +38,7 @@ data class UiState(
     val importing: Boolean = false,
     val toast: String? = null,
     val events: List<EventItem> = emptyList(),
+    val storySummary: String = "",
     val eventsLoaded: Boolean = false,
     val storyMinutes: Int = 0,
     val npcs: List<String> = emptyList(),
@@ -279,6 +280,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val res = withContext(Dispatchers.IO) { Api.events(app, conv) }
                 state = state.copy(
                     events = Model.events(res),
+                    storySummary = res.optString("story_summary").ifBlank { state.storySummary },
                     eventsLoaded = true,
                     storyTime = res.optString("story_time").ifBlank { state.storyTime },
                 )

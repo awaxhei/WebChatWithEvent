@@ -95,6 +95,17 @@ fun EventSheet(state: UiState, onClose: () -> Unit, onRefresh: () -> Unit) {
                 }
             }
 
+            // 故事摘要（网页事件栏顶部那行，同一份数据）
+            if (state.storySummary.isNotBlank()) {
+                Text(
+                    state.storySummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+
             if (!state.eventsLoaded) {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 24.dp),

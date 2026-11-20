@@ -4,6 +4,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -79,6 +86,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -371,56 +379,127 @@ private fun EntryRow(entry: Entry, baseUrl: String) {
             StickerImage(baseUrl, entry.url)
         }
 
-        is Entry.Narration -> Text(
-            entry.text,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        is Entry.Narration -> WorldNarration(entry.text)
 
         is Entry.StateDesc -> Text(
             entry.text,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
             fontStyle = FontStyle.Italic,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color(0xFF6B7280),
         )
 
-        is Entry.Npc -> Row(Modifier.fillMaxWidth()) {
-            Column {
+        is Entry.Npc -> NpcBubble(entry.name, entry.text)
+    }
+}
+
+/** 世界旁白：居中的虚线小卡片，带「— 世界 —」标签（网页同款） */
+@Composable
+private fun WorldNarration(text: String) {
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "— 世界 —",
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 2.sp, fontSize = 10.sp),
+            color = Color(0xFFA0AEC0),
+        )
+        Spacer(Modifier.height(3.dp))
+        Box(
+            Modifier
+                .widthIn(max = 420.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0x0AF59E0B))
+                .dashedBorder(Color(0x33F59E0B), 14.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                fontStyle = FontStyle.Italic,
+                color = Color(0xFF6B7280),
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+/** NPC 气泡：灰色虚线边框 + 名字（网页同款） */
+@Composable
+private fun NpcBubble(name: String, text: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Column {
+            Text(
+                name,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = Color(0xFF94A3B8),
+            )
+            Spacer(Modifier.height(2.dp))
+            Box(
+                Modifier
+                    .widthIn(max = 280.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color(0x1F94A3B8))
+                    .dashedBorder(Color(0x7394A3B8), 18.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
                 Text(
-                    entry.name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
+                    text,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                    color = Color(0xFF4A5568),
                 )
-                Bubble(entry.text, mine = false, dim = true)
             }
         }
     }
 }
 
+/** 虚线圆角边框 */
+private fun Modifier.dashedBorder(color: Color, corner: Dp): Modifier = drawBehind {
+    val stroke = Stroke(
+        width = 1.dp.toPx(),
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f),
+    )
+    drawRoundRect(
+        color = color,
+        cornerRadius = CornerRadius(corner.toPx(), corner.toPx()),
+        style = stroke,
+    )
+}
+
 @Composable
 private fun Bubble(text: String, mine: Boolean, dim: Boolean = false) {
-    Surface(
-        color = when {
-            mine -> MaterialTheme.colorScheme.primaryContainer
-            dim -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            else -> MaterialTheme.colorScheme.surface
-        },
-        shape = RoundedCornerShape(
-            topStart = 14.dp, topEnd = 14.dp,
-            bottomStart = if (mine) 14.dp else 4.dp,
-            bottomEnd = if (mine) 4.dp else 14.dp,
-        ),
-        tonalElevation = 1.dp,
+    // 和网页一致：气泡圆角 18，靠说话人的那一角收成 6；我的是实心靛紫，她的是浅底 + 细边
+    val shape = RoundedCornerShape(
+        topStart = 18.dp, topEnd = 18.dp,
+        bottomStart = if (mine) 18.dp else 6.dp,
+        bottomEnd = if (mine) 6.dp else 18.dp,
+    )
+    val shadowColor = if (mine) Color(0x4D6366F1) else Color(0x0F000000)
+    Box(
+        Modifier
+            .shadow(4.dp, shape, ambientColor = shadowColor, spotColor = shadowColor)
+            .clip(shape)
+            .background(
+                when {
+                    mine -> Color(0xFF6366F1)
+                    dim -> Color(0xFFF7FAFC)
+                    else -> Color(0xFFF7FAFC)
+                }
+            )
+            .then(
+                if (mine) Modifier else Modifier.dashedBorder(Color.Transparent, 18.dp)
+            )
+            .border(if (mine) 0.dp else 1.dp, if (mine) Color.Transparent else Color(0xFFE2E8F0), shape)
+            .widthIn(max = 292.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Text(
             text,
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 24.sp),
+            color = if (mine) Color.White else Color(0xFF2D3748),
         )
     }
 }
@@ -432,8 +511,8 @@ private fun StickerImage(baseUrl: String, url: String) {
         contentDescription = "表情包",
         contentScale = ContentScale.Fit,
         modifier = Modifier
-            .size(132.dp)
-            .clip(RoundedCornerShape(12.dp)),
+            .size(96.dp)
+            .clip(RoundedCornerShape(10.dp)),
     )
 }
 
@@ -589,6 +668,12 @@ private fun StickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var viaPhone by remember { mutableStateOf(!state.coLocated) }
+    var emotion by remember { mutableStateOf("") }
+    // 情绪筛选（和网页一样按情绪归类，只列实际有的）
+    val emotions = remember(state.stickers) {
+        state.stickers.map { it.emotion.trim() }.filter { it.isNotEmpty() }.distinct().take(12)
+    }
+    val shown = if (emotion.isEmpty()) state.stickers else state.stickers.filter { it.emotion == emotion }
 
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(
@@ -612,6 +697,27 @@ private fun StickerSheet(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !viaPhone, onClick = { viaPhone = false }, label = { Text("当面") })
                 FilterChip(selected = viaPhone, onClick = { viaPhone = true }, label = { Text("手机") })
+            }
+            if (emotions.isNotEmpty()) {
+                LazyRow(
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            selected = emotion.isEmpty(),
+                            onClick = { emotion = "" },
+                            label = { Text("全部", fontSize = 11.sp) },
+                        )
+                    }
+                    items(emotions) { e ->
+                        FilterChip(
+                            selected = emotion == e,
+                            onClick = { emotion = if (emotion == e) "" else e },
+                            label = { Text(e, fontSize = 11.sp) },
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(6.dp))
             if (state.importing) {
@@ -638,7 +744,7 @@ private fun StickerSheet(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(state.stickers) { item ->
+                    items(shown) { item ->
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.clickable { onPick(item, viaPhone) },

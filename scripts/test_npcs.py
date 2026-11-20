@@ -176,6 +176,23 @@ def main():
     check("叫尤夏不会生成 NPC",
           npc.spawn_placeholder(app_db, conv3, "街上", "尤夏，你吃辣吗") is None)
 
+    # ── 7b) 英文口头禅不是称呼（"hey?" 曾经凭空生成一个叫 hey 的 NPC）
+    for phrase in ("hey?", "hey", "hi, 你好", "ok", "hello there", "wait", "lol"):
+        check(f"口头禅「{phrase}」不会生成 NPC",
+              npc.spawn_placeholder(app_db, conv3, "街上", phrase) is None,
+              str(npc.extract_vocative(phrase)))
+    check("语气词不当称呼", npc.extract_vocative("诶，你看") is None)
+    check("@名字 仍然有效（可以叫英文名的 NPC）",
+          npc.extract_vocative("@Tom，你好") == "Tom", str(npc.extract_vocative("@Tom，你好")))
+    # 已经存在库里的口头禅 NPC 会被退场
+    stale = app_db.add_npc(conv3, "hey", "hey", "街上", "")
+    app_db.add_npc(conv3, "摊主老李", "摊主", "街上", "")
+    npc.find_addressed(app_db, conv3, "街上", "hey?")
+    stale_row = app_db.get_npc(stale)
+    check("库里残留的口头禅 NPC 会被退场",
+          bool(stale_row) and stale_row["status"] == "gone",
+          str(dict(stale_row) if stale_row else None))
+
     # ── 8) 同一地点超过上限时，最久没说话的先退场
     conv4 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv4)
