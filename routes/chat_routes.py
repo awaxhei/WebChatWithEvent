@@ -32,7 +32,7 @@ from services.event_engine import (
 )
 from config import (
     CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP,
-    STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
+    STICKER_DIR, STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
     MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT,
     AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
 )
@@ -248,15 +248,134 @@ def _as_context_content(row):
     return content
 
 
-def _context_window(conv_id, limit=10):
+def _context_window(conv_id, limit=10, with_images=True):
     """当面 + 手机 + NPC 合成一条时间线。
 
     之前只取当前通道的历史：切到手机就忘了刚当面说过的话，切回当面又不记得
     手机里聊了什么，两边各说各的。
+
+    表情包消息会把**图片本身**挂上去（不只是标签文字）：她真的能看见那张图。
     """
     rows = [m for m in db.get_messages(conv_id)
             if (m.get("channel") or "chat") in (CHAT_CHANNEL, PHONE_CHANNEL, "npc")][-limit:]
-    return [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
+    msgs = [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
+    if not with_images:
+        return msgs
+    return _attach_sticker_images(rows, msgs)
+
+
+# 一轮里最多挂几张图：图片很占额度，重点是"这两张长什么样"，
+# 历史里更早的表情包有文字描述就够了。
+MAX_CONTEXT_IMAGES = 3
+# 只往回看最近几条：再早的表情包早聊过去了，不必每轮都重发一遍图
+STICKER_IMAGE_WINDOW = 4
+# 单张图的体积上限：表情包里 90% 在 1.2 MB 以内，更大的直接退回文字描述，
+# 免得手机上一轮请求多背几 MB 的 base64。
+MAX_IMAGE_BYTES = 1200 * 1024
+
+_VISION_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def _sticker_image_part(rel_path, detail="low"):
+    """表情包 → 多模态消息里的 image_url 片段；读不出来/太大就返回 None"""
+    rel_path = (rel_path or "").replace("\\", "/")
+    if not rel_path:
+        return None
+    abs_path = os.path.join(STICKER_DIR, rel_path.replace("/", os.sep))
+    mime = _VISION_MIME.get(os.path.splitext(abs_path)[1].lower())
+    if not mime:
+        return None          # gif 这类动画图模型读不了，退回文字描述
+    try:
+        with open(abs_path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return None
+    if not raw or len(raw) > MAX_IMAGE_BYTES:
+        return None
+    import base64
+    b64 = base64.b64encode(raw).decode("ascii")
+    return {"type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}", "detail": detail}}
+
+
+def _her_sticker_path(row):
+    """她发的表情包（库里存的是情绪词）→ 当时会显示的那张图
+
+    /api/stickers/match 是确定性的（同样的库、同样的词 → 同样的图），
+    所以这里能还原出前端当时画的那一张。
+    """
+    if row.get("role") != "assistant":
+        return ""
+    try:
+        obj = json.loads(row.get("content") or "")
+    except Exception:
+        return ""
+    if not isinstance(obj, dict) or not obj.get("表情包") or obj.get("url"):
+        return ""
+    try:
+        hits = stickers.match(db, str(obj["表情包"]), top_k=1)
+    except Exception:
+        return ""
+    return (hits[0].get("path") or "") if hits else ""
+
+
+def _attach_sticker_images(rows, msgs):
+    """把这一轮该给她看的图挂到"他这条消息"上。
+
+    API 不允许 assistant 消息里带图（实测 400），所以她的表情包也只能
+    借他这一轮的消息送进去，用一句说明标清楚哪张是谁的：
+    - 他刚发的表情包 → 她终于能看图，而不只是读标签；
+    - 她上一条自己发的 → 下一轮她能看见自己发出去的是哪张。
+    """
+    if not rows or not msgs:
+        return msgs
+    # 他这一轮那句话：可能是最后一条，也可能后面还跟着 NPC 的回话
+    anchor = None
+    for i in range(len(rows) - 1, -1, -1):
+        if rows[i].get("role") == "user":
+            anchor = i
+            break
+    if anchor is None:
+        return msgs
+
+    parts, labels = [], []
+    his_done = False
+    for i in range(anchor, max(-1, anchor - STICKER_IMAGE_WINDOW), -1):
+        if len(parts) >= MAX_CONTEXT_IMAGES:
+            break
+        row = rows[i]
+        path, who = "", ""
+        if row.get("role") == "user":
+            his = _parse_sticker_message(row.get("content"))
+            if his and not his_done:
+                path, who = his.get("表情包"), "他"
+        else:
+            path, who = _her_sticker_path(row), "你"
+        if not path:
+            continue
+        part = _sticker_image_part(path)
+        if not part:
+            continue
+        parts.append(part)
+        labels.append(who)
+        if who == "他":
+            his_done = True
+
+    if not parts:
+        return msgs
+    # 按时间顺序摆（旧的在前面），说明文字里的序号才对得上
+    parts.reverse()
+    labels.reverse()
+    base = msgs[anchor]["content"]
+    if not isinstance(base, str):
+        return msgs
+    notes = [f"图 {n} 是{'他发来的' if who == '他' else '你上一条自己发出去的'}表情包。"
+             for n, who in enumerate(labels, 1)]
+    msgs[anchor]["content"] = [{"type": "text", "text": base + "\n" + "".join(notes)}] + parts
+    return msgs
 
 
 def _scene_payload(conv_id, api_key):

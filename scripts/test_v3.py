@@ -296,6 +296,97 @@ def test_sticker_context():
 
 # ── v4：场景 / 手机 / 事件分级 ──────────────────────
 
+def test_sticker_images():
+    """表情包要真的以「图片」送进她的上下文，而不是只有标签文字
+
+    实测 API 不接受 assistant 消息里带图，所以她的表情包也借他那一轮送进去，
+    用「图 1 / 图 2 是谁的」说明标清楚。
+    """
+    tmp = mkdtemp("yuxia_img_")
+    old_dir = chat_mod.STICKER_DIR
+    old_her = chat_mod._her_sticker_path
+    chat_mod.STICKER_DIR = tmp
+    try:
+        os.makedirs(os.path.join(tmp, "表情包"), exist_ok=True)
+        for rel in ("a.png", "b.jpg", "c.gif"):
+            with open(os.path.join(tmp, "表情包", rel), "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 200)
+
+        part = chat_mod._sticker_image_part("表情包/a.png")
+        check("png 能转成 image_url 片段",
+              bool(part) and part["type"] == "image_url"
+              and part["image_url"]["url"].startswith("data:image/png;base64,"),
+              str(part)[:80])
+        check("jpg 用 image/jpeg",
+              chat_mod._sticker_image_part("表情包/b.jpg")["image_url"]["url"]
+              .startswith("data:image/jpeg;base64,"))
+        check("gif 送给模型也读不了，退回文字", chat_mod._sticker_image_part("表情包/c.gif") is None)
+        check("文件不存在不炸", chat_mod._sticker_image_part("表情包/没有.png") is None)
+        check("空路径不炸", chat_mod._sticker_image_part("") is None)
+
+        # 他一轮里发了表情包，她上一条也发过表情包
+        his = json.dumps({"表情包": "表情包/a.png",
+                          "url": "/static/stickers/a.png", "desc": "一只猫"},
+                         ensure_ascii=False)
+        hers = json.dumps({"对白": "嗯", "表情包": "撒娇"}, ensure_ascii=False)
+        rows = [
+            {"role": "user", "channel": "chat", "content": his},
+            {"role": "assistant", "channel": "chat", "content": hers},
+            {"role": "user", "channel": "chat", "content": "你怎么了"},
+        ]
+        chat_mod._her_sticker_path = lambda row: "表情包/a.png" if row.get("content") == hers else ""
+        msgs = [{"role": r["role"], "content": chat_mod._as_context_content(r)} for r in rows]
+        out = chat_mod._attach_sticker_images(rows, msgs)
+        content = out[-1]["content"]
+        check("有表情包时消息变成多模态片段", isinstance(content, list), str(type(content)))
+        check("片段 = 一段文字 + 图", len(content) == 3 and content[0]["type"] == "text", str(len(content)))
+        check("他的图排在前面", "图 1 是他发来的表情包" in content[0]["text"], content[0]["text"])
+        check("她自己的图也带上", "图 2 是你上一条自己发出去的表情包" in content[0]["text"],
+              content[0]["text"])
+        check("原来那句话还在", "你怎么了" in content[0]["text"], content[0]["text"])
+
+        # 图挂在「他这条」消息上，别的消息不动
+        check("别的消息仍是纯文本", all(isinstance(m["content"], str) for m in out[:-1]))
+
+        # 没有表情包时一点都不改（不能白白塞进图片额度）
+        plain = [{"role": "user", "channel": "chat", "content": "在吗"}]
+        out2 = chat_mod._attach_sticker_images(
+            plain, [{"role": "user", "content": chat_mod._as_context_content(plain[0])}])
+        check("普通对话不会被改成多模态", isinstance(out2[0]["content"], str), str(out2[0]["content"]))
+
+        # 图片有上限：连着四张也只送到 MAX_CONTEXT_IMAGES
+        many = ([{"role": "assistant", "channel": "chat", "content": hers}] * 4
+                + [{"role": "user", "channel": "chat", "content": "看"}])
+        out3 = chat_mod._attach_sticker_images(
+            many, [{"role": r["role"], "content": chat_mod._as_context_content(r)} for r in many])
+        check("一轮最多送 MAX_CONTEXT_IMAGES 张图",
+              len(out3[-1]["content"]) == 1 + chat_mod.MAX_CONTEXT_IMAGES,
+              str(len(out3[-1]["content"])))
+
+        # 太大的图不塞进请求里（手机上会背几 MB 的 base64），退回文字描述
+        with open(os.path.join(tmp, "表情包", "big.png"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"0" * (chat_mod.MAX_IMAGE_BYTES + 1024))
+        check("超过体积上限的图退回文字描述",
+              chat_mod._sticker_image_part("表情包/big.png") is None)
+
+        # 太早的表情包不再每轮重发
+        old_her = [{"role": "assistant", "channel": "chat", "content": hers}]
+        padded = (old_her
+                  + [{"role": "user", "channel": "chat", "content": "一"}] * 6
+                  + [{"role": "assistant", "channel": "chat", "content": "嗯"}] * 6
+                  + [{"role": "user", "channel": "chat", "content": "现在"}])
+        out4 = chat_mod._attach_sticker_images(
+            padded, [{"role": r["role"], "content": chat_mod._as_context_content(r)} for r in padded])
+        check("隔了十来条的老表情包不再重发",
+              isinstance(out4[-1]["content"], str), str(type(out4[-1]["content"])))
+    finally:
+        chat_mod.STICKER_DIR = old_dir
+        chat_mod._her_sticker_path = old_her
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── v4：场景 / 手机 / 事件分级 ──────────────────────
+
 def test_v4_scenes_phone_tiers():
     import core.scenes as scenes
     from services.event_engine import pick_tier
@@ -405,6 +496,8 @@ def main():
     test_stickers()
     print("\n── 表情包的上下文 ──")
     test_sticker_context()
+    print("\n── 表情包当真图送给她 ──")
+    test_sticker_images()
     print("\n── 老库迁移 ──")
     test_migration()
 
