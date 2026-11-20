@@ -487,6 +487,13 @@ class ChatDB:
         with self._get_conn() as conn:
             conn.execute("UPDATE stickers SET tag_attempts=tag_attempts+1 WHERE id=?", (sticker_id,))
 
+    def reset_sticker_tags(self, sticker_id):
+        """清掉一条标签，让它重新排队（用于修掉早期从文件名凑出来的垃圾标签）"""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE stickers SET emotion='', tags='', caption='', tagged_by='',"
+                " embedding=NULL WHERE id=?", (sticker_id,))
+
     def get_stickers_without_embedding(self, limit=200):
         with self._get_conn() as conn:
             rows = conn.execute(

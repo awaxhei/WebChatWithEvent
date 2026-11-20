@@ -1001,7 +1001,8 @@ def sticker_stats():
     return jsonify({
         "total": db.count_stickers(),
         "tagged": db.count_stickers(tagged_only=True),
-        "emotions": db.get_sticker_emotions(),
+        # 按「情绪桶」给（自由情绪词有 171 个，前端排不下也筛不动）
+        "emotions": stickers.list_emotions(db),
     })
 
 

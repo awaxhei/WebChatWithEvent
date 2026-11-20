@@ -16,6 +16,7 @@ import os
 import random
 import re
 import urllib.parse
+from functools import lru_cache
 
 import core.textvec as tv
 from config import (
@@ -32,6 +33,69 @@ MIME = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
+
+# ── 情绪归并 ──────────────────────────────────────────
+# 视觉模型给每张图起的情绪词是自由的，864 张图里有 171 个不同的词
+# （无语 120 张、委屈 46 张……还有 86 个只出现一次）。
+# 直接拿自由词做精确匹配命中率很低，所以两边都先归到同一个「情绪桶」再比。
+# 桶名也是前端筛选用的一排按钮，所以数量要少、要一眼看懂。
+EMOTION_BUCKETS = {
+    "无语": ("无语", "无奈", "呆滞", "懵逼", "懵圈", "懵", "发懵", "发愣", "发呆",
+             "恍惚", "敷衍", "无所谓", "淡定", "高冷", "复杂", "茫然", "迷惑",
+             "生无可恋", "安详", "摆烂", "心累", "颓废", "沧桑", "苦笑", "尴尬",
+             "恶心", "升天", "自嘲", "无聊"),
+    "开心": ("开心", "大笑", "傻乐", "愉悦", "满足", "美滋滋", "幸福", "兴奋",
+             "元气", "享受", "安逸", "惬意", "轻松", "悠闲", "温馨", "治愈",
+             "暖心", "喜极而泣", "激动", "高兴", "热情", "释怀"),
+    "温柔": ("温柔", "关心", "安慰", "鼓励", "欣慰", "感动", "心疼", "感谢",
+             "友善", "友好", "体贴", "温暖", "宠溺"),
+    "害羞": ("害羞", "娇羞", "心动", "痴迷", "花痴", "脸红", "羞", "喜欢", "喜爱"),
+    "撒娇": ("撒娇", "卖萌", "乖巧", "俏皮", "调皮", "亲昵", "挑逗", "渴望",
+             "恳求", "迫不及待", "娇嗔", "佯怒", "傲娇", "可爱", "黏人",
+             "要抱抱", "呆萌"),
+    "得意": ("得意", "神气", "自信", "崇拜", "膜拜", "赞许", "赞赏", "得意洋洋",
+             "炫耀", "窃喜", "偷笑", "美"),
+    "嫌弃": ("嫌弃", "鄙视", "不屑", "嘲讽", "阴阳怪气", "吐槽", "嘲笑", "戏谑",
+             "调侃", "腹黑", "狡黠", "坏笑", "核善", "阴险", "黑色幽默", "搞怪",
+             "搞笑", "好笑", "否定", "挑刺", "厌世", "看戏", "吃瓜"),
+    "惊讶": ("震惊", "惊讶", "惊叹", "惊喜", "惊恐", "惊吓", "破防", "惊",
+             "不敢相信", "傻眼", "诡异"),
+    "不爽": ("生气", "愤怒", "气鼓鼓", "不悦", "抓狂", "发疯", "战意", "不服气",
+             "记仇", "暴躁", "怒", "不满", "火大"),
+    "委屈": ("委屈", "卑微", "无辜", "失落", "沮丧", "悲伤", "伤感", "忧郁",
+             "强颜欢笑", "大哭", "爆哭", "哭", "可怜", "难受", "伤心"),
+    "疑惑": ("疑惑", "困惑", "好奇", "怀疑", "狐疑", "迷惑不解", "思考",
+             "暗中观察", "问号", "费解"),
+    "期待": ("期待", "馋", "嘴馋", "饥饿", "沉迷", "饿", "想吃", "盼望",
+             "羡慕", "催促"),
+    "认真": ("认真", "严肃", "专注", "坚定", "平静", "正经", "硬核", "酷"),
+    "疲惫": ("疲惫", "困倦", "累", "无精打采", "犯困", "睡", "打哈欠", "慵懒"),
+    "崩溃": ("崩溃", "癫狂", "晕眩", "绝望", "哀嚎", "崩", "歇斯底里"),
+    "紧张": ("害怕", "胆怯", "紧张", "慌张", "警惕", "不安", "心惊", "畏惧"),
+}
+
+_ALIAS_TO_BUCKET = {}
+for _bucket, _aliases in EMOTION_BUCKETS.items():
+    _ALIAS_TO_BUCKET[_bucket] = _bucket
+    for _alias in _aliases:
+        _ALIAS_TO_BUCKET.setdefault(_alias, _bucket)
+# 长词优先：先匹配「生无可恋」再匹配「无」
+_SORTED_ALIASES = sorted(_ALIAS_TO_BUCKET, key=len, reverse=True)
+_BUCKET_ORDER = list(EMOTION_BUCKETS)
+
+
+@lru_cache(maxsize=4096)
+def canonical_emotion(word):
+    """把一个自由情绪词归到情绪桶；认不出来返回空串"""
+    w = _EMOTION_NOISE_RE.sub("", str(word or ""))
+    if not w:
+        return ""
+    if w in EMOTION_BUCKETS:
+        return w
+    for alias in _SORTED_ALIASES:
+        if alias in w:
+            return _ALIAS_TO_BUCKET[alias]
+    return ""
 
 
 # ── 索引 ──────────────────────────────────────────────
@@ -151,8 +215,12 @@ def _parse_tag_json(raw):
     return None
 
 
-def vision_tag(abs_path, api_key=None):
-    """调用多模态模型给单张图片打标，失败返回 None"""
+def vision_tag(abs_path, api_key=None, fast=False):
+    """调用多模态模型给单张图片打标，失败返回 None
+
+    fast=True 关掉思考、只留 400 token：打标就是"看图写三句话"，
+    不需要推理链，开着思考只会慢三倍、贵三倍（批量补齐时用这个）。
+    """
     import requests      # 延迟导入：App 冷启动时用不到，等真要打标再加载
     ext = os.path.splitext(abs_path)[1].lower()
     mime = MIME.get(ext, "image/png")
@@ -173,10 +241,12 @@ def vision_tag(abs_path, api_key=None):
             ],
         }],
         # 思考模式的思维链也会占用 max_tokens，所以额度要留够，否则 content 会是空串
-        "max_tokens": 2048,
-        "thinking": {"type": "enabled" if DEEPSEEK_THINKING else "disabled"},
+        "max_tokens": 400 if fast else 2048,
+        "thinking": {"type": "disabled" if fast else ("enabled" if DEEPSEEK_THINKING else "disabled")},
     }
-    if DEEPSEEK_THINKING:
+    if fast:
+        payload["temperature"] = 0.2
+    elif DEEPSEEK_THINKING:
         payload["reasoning_effort"] = DEEPSEEK_REASONING_EFFORT
     else:
         payload["temperature"] = 0.2
@@ -211,7 +281,11 @@ def vision_tag(abs_path, api_key=None):
 
 
 def auto_tag_all(db, api_key=None, limit=None):
-    """为未打标的图片批量打标（每张只运行一次）"""
+    """为未打标的图片批量打标（每张只运行一次）
+
+    打标走快速模式（关思考）：一次导入二十张图，开思考要等一分钟，
+    关了之后十来秒就完事，标注质量没有可感差别。
+    """
     limit = min(limit or VISION_MAX_PER_RUN, VISION_MAX_PER_RUN)
     pending = db.get_untagged_stickers(limit=limit)
     done = 0
@@ -223,7 +297,7 @@ def auto_tag_all(db, api_key=None, limit=None):
             info = {"emotion": note[:12], "tags": note[:120], "caption": note[:160]}
             source = "manual"
         elif VISION_ENABLED:
-            info = vision_tag(abs_path, api_key=api_key)
+            info = vision_tag(abs_path, api_key=api_key, fast=True)
             source = "vision"
         if info:
             db.set_sticker_tags(row["id"], info["emotion"], info["tags"], info["caption"], source)
@@ -251,6 +325,7 @@ def match(db, intent, top_k=3):
     if not intent:
         return _random_pick(rows, top_k)
 
+    intent_bucket = canonical_emotion(intent)
     intent_vec = tv.embed(intent)
     scored = []
     for row in rows:
@@ -261,6 +336,9 @@ def match(db, intent, top_k=3):
         score = 0.0
         if emotion and emotion == intent:
             score = 1.0
+        elif intent_bucket and canonical_emotion(emotion) == intent_bucket:
+            # 「委屈」和「失落」是同一个情绪桶：自由词对不上，桶一定能对上
+            score = 0.9
         elif intent in tags or emotion in intent or intent in emotion:
             score = 0.85
         else:
@@ -283,6 +361,7 @@ def match(db, intent, top_k=3):
         "path": r["path"],
         "url": url_for(r["path"]),
         "emotion": r.get("emotion") or "",
+        "bucket": canonical_emotion(r.get("emotion")),
         "tags": r.get("tags") or "",
         "caption": r.get("caption") or "",
         "score": round(s, 3),
@@ -295,6 +374,7 @@ def _random_pick(rows, top_k):
         "path": r["path"],
         "url": url_for(r["path"]),
         "emotion": r.get("emotion") or "",
+        "bucket": canonical_emotion(r.get("emotion")),
         "tags": r.get("tags") or "",
         "caption": r.get("caption") or "",
         "score": 0.0,
@@ -306,9 +386,17 @@ def url_for(rel_path):
 
 
 def list_emotions(db):
-    """给前端/prompt 用的情绪清单"""
-    names = db.get_sticker_emotions()
-    return [n for n in names if n]
+    """给前端/提示词用的情绪清单：按「情绪桶」给，按张数从多到少
+
+    以前这里吐的是 171 个自由情绪词，前端一排筛选按钮根本排不下，
+    也没法用来筛（点「疲惫」只出 8 张，点「无语」出 120 张）。
+    """
+    counts = {}
+    for row in db.get_all_stickers():
+        bucket = canonical_emotion(row.get("emotion") or "")
+        if bucket:
+            counts[bucket] = counts.get(bucket, 0) + 1
+    return sorted(counts, key=lambda b: (-counts[b], _BUCKET_ORDER.index(b)))
 
 
 # ── 手机相册多选导入 ──────────────────────────────────
@@ -376,15 +464,23 @@ def save_uploads(db, batch, api_key=None, max_files=None, max_mb=None):
 
 
 def list_for_picker(db, limit=300, offset=0, emotion=None):
-    """选择面板用的列表：新的在前，带可直接放进 <img> 的 url"""
+    """选择面板用的列表：新的在前，带可直接放进 <img> 的 url
+
+    emotion 可以是某个自由情绪词，也可以是情绪桶名（前端按钮就是桶名）。
+    """
     rows = db.get_all_stickers()
     if emotion:
-        rows = [r for r in rows if (r.get("emotion") or "").strip() == emotion]
+        bucket = canonical_emotion(emotion)
+        if bucket:
+            rows = [r for r in rows if canonical_emotion(r.get("emotion") or "") == bucket]
+        else:
+            rows = [r for r in rows if (r.get("emotion") or "").strip() == emotion]
     rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)
     items = [{
         "path": r["path"],
         "url": url_for(r["path"]),
         "emotion": r.get("emotion") or "",
+        "bucket": canonical_emotion(r.get("emotion")),
         "tags": r.get("tags") or "",
         "caption": r.get("caption") or "",
     } for r in rows[offset:offset + limit]]

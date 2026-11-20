@@ -720,11 +720,12 @@ private fun StickerSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var viaPhone by remember { mutableStateOf(!state.coLocated) }
     var emotion by remember { mutableStateOf("") }
-    // 情绪筛选（和网页一样按情绪归类，只列实际有的）
+    // 情绪筛选：后端把自由情绪词归成了十来个「情绪桶」，这一排才排得下
+    // （以前直接拿自由词 distinct，前 12 个到底是什么全看运气）
     val emotions = remember(state.stickers) {
-        state.stickers.map { it.emotion.trim() }.filter { it.isNotEmpty() }.distinct().take(12)
+        state.stickers.map { it.bucket.trim() }.filter { it.isNotEmpty() }.distinct().take(16)
     }
-    val shown = if (emotion.isEmpty()) state.stickers else state.stickers.filter { it.emotion == emotion }
+    val shown = if (emotion.isEmpty()) state.stickers else state.stickers.filter { it.bucket == emotion }
 
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(

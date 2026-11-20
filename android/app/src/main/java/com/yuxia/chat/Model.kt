@@ -9,6 +9,7 @@ data class StickerItem(
     val path: String,
     val url: String,
     val emotion: String,
+    val bucket: String = "",
     val caption: String,
 )
 
@@ -159,6 +160,7 @@ object Model {
                     path = item.optString("path"),
                     url = url,
                     emotion = item.optString("emotion"),
+                    bucket = item.optString("bucket").ifBlank { item.optString("emotion") },
                     caption = item.optString("caption"),
                 )
             )

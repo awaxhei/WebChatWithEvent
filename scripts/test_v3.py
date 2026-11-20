@@ -212,6 +212,41 @@ def test_stickers():
         nothing = stickers.match(db, "")
         check("空意图时随机兜底", len(nothing) >= 1 and nothing[-1]["score"] == 0.0)
 
+        # ── 情绪归并：自由情绪词先归到「情绪桶」再匹配 ──
+        # 视觉模型给 864 张图起了 171 个不同的情绪词，直接精确匹配几乎对不上
+        check("情绪桶名本身归到自己",
+              stickers.canonical_emotion("害羞") == "害羞",
+              stickers.canonical_emotion("害羞"))
+        check("同义词归到同一个桶",
+              stickers.canonical_emotion("失落") == stickers.canonical_emotion("委屈") == "委屈",
+              stickers.canonical_emotion("失落"))
+        check("长词优先（生无可恋 不是 无语 的意外）",
+              stickers.canonical_emotion("生无可恋") == "无语",
+              stickers.canonical_emotion("生无可恋"))
+        check("带修饰也能认出来",
+              stickers.canonical_emotion("有点委屈巴巴") == "委屈",
+              stickers.canonical_emotion("有点委屈巴巴"))
+        check("认不出来返回空串", stickers.canonical_emotion("量子力学") == "",
+              stickers.canonical_emotion("量子力学"))
+        check("空输入不炸", stickers.canonical_emotion("") == "")
+
+        db.set_sticker_tags(row["id"], "失落", "低头,眼眶红", "低着头不说话", "manual")
+        by_bucket = stickers.match(db, "委屈")
+        check("桶命中给 0.9（自由词不同也能对上一个）",
+              by_bucket and by_bucket[0]["emotion"] == "失落"
+              and 0.85 <= by_bucket[0]["score"] < 1.0,
+              str(by_bucket[0]) if by_bucket else "empty")
+        check("返回结果带 bucket 字段", by_bucket[0].get("bucket") == "委屈", str(by_bucket[0]))
+
+        db.set_sticker_tags(row["id"], "害羞", "脸红,捂脸", "猫娘捂脸", "manual")
+        check("情绪清单按桶给（不再吐一堆自由词）",
+              stickers.list_emotions(db) == ["害羞"], str(stickers.list_emotions(db)))
+        listed = stickers.list_for_picker(db, emotion="害羞")
+        check("面板按桶筛也能筛出来",
+              len(listed["items"]) == 1 and listed["items"][0]["bucket"] == "害羞", str(listed))
+        check("桶里没有别的图时筛出空",
+              not stickers.list_for_picker(db, emotion="开心")["items"])
+
         os.remove(os.path.join(tmp, "乱七八糟", "a1b2c3.png"))
         stats = stickers.refresh(db)
         check("文件删除后索引同步", stats["removed"] == 1 and stats["total"] == 1, str(stats))

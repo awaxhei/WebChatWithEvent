@@ -1576,7 +1576,10 @@ class StickerPanel {
         this.grid = document.getElementById('stickerGrid');
         this.file = document.getElementById('stickerFile');
         this.hint = document.getElementById('stickerHint');
+        this.filters = document.getElementById('stickerFilters');
         this.items = [];
+        this.emotions = [];
+        this.emotion = '';      // 当前筛的情绪桶，空 = 全部
         this.isOpen = false;
         this._bind();
     }
@@ -1629,10 +1632,13 @@ class StickerPanel {
     async load() {
         if (!this.grid) return;
         try {
-            const res = await authFetch('/api/stickers/list?limit=300');
+            const q = this.emotion ? '&emotion=' + encodeURIComponent(this.emotion) : '';
+            const res = await authFetch('/api/stickers/list?limit=300' + q);
             if (!res.ok) return;
             const data = await res.json();
             this.items = data.items || [];
+            this.emotions = data.emotions || [];
+            this.renderFilters();
             this.render();
             if (this.hint) {
                 this.hint.textContent = this.items.length
@@ -1640,6 +1646,24 @@ class StickerPanel {
                     : '表情包库是空的';
             }
         } catch (e) { /* 忽略 */ }
+    }
+    // 情绪桶按钮：后端把 171 个自由情绪词归成了十来个桶，这一排才排得下
+    renderFilters() {
+        if (!this.filters) return;
+        if (!this.emotions.length) {
+            this.filters.innerHTML = '';
+            return;
+        }
+        const chip = (label, active, value) =>
+            `<button class="sticker-chip${active ? ' active' : ''}" data-e="${this._e(value)}">${this._e(label)}</button>`;
+        this.filters.innerHTML = chip('全部', !this.emotion, '') +
+            this.emotions.map(e => chip(e, this.emotion === e, e)).join('');
+        this.filters.querySelectorAll('.sticker-chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.emotion = btn.dataset.e || '';
+                this.load();
+            });
+        });
     }
     render() {
         if (!this.grid) return;
