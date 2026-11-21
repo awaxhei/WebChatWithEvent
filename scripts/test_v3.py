@@ -113,6 +113,27 @@ def test_locations():
         check("默认地点已写入", len(names) >= 5, str(names[:3]))
         check("默认当前地点存在", db.get_current_location(conv) in names)
 
+        # 开局：各回各的房间（异地开场，只能先发消息）
+        from config import DEFAULT_YUXIA_LOCATION, DEFAULT_PLAYER_LOCATION
+        check("尤夏开局在自己的房间",
+              db.get_current_location(conv) == DEFAULT_YUXIA_LOCATION,
+              db.get_current_location(conv))
+        check("玩家开局在自己的房间",
+              db.get_player_location(conv) == DEFAULT_PLAYER_LOCATION,
+              db.get_player_location(conv))
+        check("开局两人不在一起",
+              db.get_current_location(conv) != db.get_player_location(conv))
+        locations.ensure_defaults(db, conv)
+        check("重复初始化不会把人挪走",
+              db.get_current_location(conv) == DEFAULT_YUXIA_LOCATION
+              and db.get_player_location(conv) == DEFAULT_PLAYER_LOCATION,
+              f"{db.get_current_location(conv)} / {db.get_player_location(conv)}")
+        db.set_current_location(conv, "厨房")
+        db.set_player_location(conv, "厨房")
+        locations.ensure_defaults(db, conv)
+        check("已有地点的会话不会被改成房间",
+              db.get_current_location(conv) == "厨房" and db.get_player_location(conv) == "厨房")
+
         name, created = locations.resolve(db, conv, "大学教室")
         check("已存在地点不重复创建", (name, created) == ("大学教室", False))
 

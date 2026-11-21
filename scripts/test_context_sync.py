@@ -288,9 +288,11 @@ def main():
     # ── 11) 玩家在界面上换场景：一个字都没说，她也得知道人走了
     convS = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, convS)
+    # 开局是各在各的房间（异地开场），这里先摆到同一个房间再测"换场景"
+    locations.switch_both(app_db, convS, "公寓客厅")
     app_db.add_message(convS, "user", "先在这儿坐会儿", channel="chat")
-    check("新会话两人在同一地点",
-          app_db.get_current_location(convS) == app_db.get_player_location(convS),
+    check("先摆到同一个房间（后面测换场景用）",
+          app_db.get_current_location(convS) == app_db.get_player_location(convS) == "公寓客厅",
           f"{app_db.get_current_location(convS)}/{app_db.get_player_location(convS)}")
 
     # 换成桩：换场景会顺手预热环境描写/情境叙述，别真去打 API
@@ -368,6 +370,8 @@ def main():
     # ── 12) 分处两地时，两边的场景描写必须各自独立（不能拿另一边的顶替）
     convX = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, convX)
+    # 开局是各在各的房间，这里把尤夏摆到客厅、玩家挪到厨房来对比
+    locations.switch(app_db, convX, "公寓客厅")
     llmX = CaptureLLM()          # chat_sync 返回失败 → 环境描写走 fallback，按地点生成
     chat_mod.deepseek = llmX
     try:

@@ -17,6 +17,7 @@ os.makedirs(tmp, exist_ok=True)
 database.DB_PATH = os.path.join(tmp, "chat.db")
 
 from app import app                          # noqa: E402
+from config import DEFAULT_LOCATIONS          # noqa: E402
 from core.auth import generate_token          # noqa: E402
 import core.locations as locations            # noqa: E402
 import core.scenes as scenes                  # noqa: E402
@@ -58,8 +59,8 @@ def main():
 
     conv = db.create_conversation(1)
     locations.ensure_defaults(db, conv)
-    check("默认地点已初始化", len(locations.list_names(db, conv)) == 11,
-          str(len(locations.list_names(db, conv))))
+    check("默认地点已初始化", len(locations.list_names(db, conv)) == len(DEFAULT_LOCATIONS),
+          f"{len(locations.list_names(db, conv))} vs {len(DEFAULT_LOCATIONS)}")
 
     # 1) 玩家主动前往不存在的地点
     r = c.post(f"/api/move/{conv}", json={"who": "player", "location": "旧车站月台"})

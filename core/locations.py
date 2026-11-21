@@ -8,7 +8,10 @@
 """
 import re
 
-from config import DEFAULT_LOCATIONS, LOCATION_CAP
+from config import (
+    DEFAULT_LOCATIONS, LOCATION_CAP,
+    DEFAULT_YUXIA_LOCATION, DEFAULT_PLAYER_LOCATION,
+)
 
 MAX_LOCATIONS_PER_CONV = LOCATION_CAP
 MAX_NAME_LEN = 20
@@ -29,17 +32,21 @@ def normalize(candidate):
 
 
 def ensure_defaults(db, conv_id):
-    """首次访问该会话时写入默认地点，并把玩家放到尤夏身边"""
+    """首次访问该会话时写入默认地点，把两人放进各自的房间"""
     names = db.get_location_names(conv_id)
     if not names:
         for name in DEFAULT_LOCATIONS:
             db.add_location(conv_id, name)
         names = db.get_location_names(conv_id)
     if not db.get_current_location(conv_id):
-        db.set_current_location(conv_id, names[0] if names else DEFAULT_LOCATIONS[0])
-    # 玩家默认和尤夏在同一个地方，否则新会话一开始就变成"异地"
+        start = DEFAULT_YUXIA_LOCATION if DEFAULT_YUXIA_LOCATION in names else (
+            names[0] if names else DEFAULT_LOCATIONS[0])
+        db.set_current_location(conv_id, start)
+    # 开局各在各的房间：一个是"还没照面"的冷水式开场，也顺便让手机通道先用起来
     if not db.get_player_location(conv_id):
-        db.set_player_location(conv_id, db.get_current_location(conv_id))
+        start = DEFAULT_PLAYER_LOCATION if DEFAULT_PLAYER_LOCATION in names else \
+            db.get_current_location(conv_id)
+        db.set_player_location(conv_id, start)
     return names
 
 

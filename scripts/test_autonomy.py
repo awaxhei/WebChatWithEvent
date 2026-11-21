@@ -46,9 +46,15 @@ class StubLLM:
         return self.payload
 
 
-def fresh():
+def fresh(co_located=True):
+    """建一个会话；默认让两人同处一室（这些用例测的是"在一起时"的自主行动）
+
+    开局改成各在各的房间之后，这里显式同处一地，别让用例的前提依赖配置。
+    """
     conv = db.create_conversation(1)
     locations.ensure_defaults(db, conv)
+    if co_located:
+        locations.switch_both(db, conv, "公寓客厅")
     db.add_message(conv, "user", "你刚才想说什么？", channel="chat")
     db.set_last_user_at(conv, time.time())
     return conv
