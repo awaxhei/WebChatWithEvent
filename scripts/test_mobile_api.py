@@ -89,10 +89,15 @@ def main():
     app.config["TESTING"] = True
     client = app.test_client()
 
-    user = app_db.get_user("awaxhei")["id"]
-    # 用用户名密码登录，拿 token（App 的登录方式）
-    r = client.post("/api/auth/login", json={"username": "awaxhei",
-                                             "password": "awaXhei@1900196100",
+    # 登录密码不写在源码里（仓库会公开）：临时造一个测试账号，密码随机生成
+    import hashlib
+    import secrets as _secrets
+    test_user = "mobile_test_" + _secrets.token_hex(3)
+    test_pass = _secrets.token_urlsafe(12)
+    app_db.sync_accounts({test_user: hashlib.sha256(test_pass.encode()).hexdigest()})
+    user = app_db.get_user(test_user)["id"]
+    r = client.post("/api/auth/login", json={"username": test_user,
+                                             "password": test_pass,
                                              "remember": True})
     login = r.get_json() or {}
     check("登录成功", r.status_code == 200 and login.get("success") is True, str(login))

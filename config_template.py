@@ -3,6 +3,7 @@ AI 情感助手 - 提示词配置文件
 直接编辑此文件即可修改 AI 的行为
 """
 
+import json
 import os
 import hashlib
 import secrets
@@ -41,18 +42,49 @@ DEEPSEEK_REASONING_EFFORT = "high"
 
 # ============================================================
 # 账号系统
-# 使用 run_once() 快速生成密码哈希：
-#   python -c "import hashlib; print(hashlib.sha256('your_password'.encode()).hexdigest())"
-# 将生成的哈希值填入下方 PRESET_ACCOUNTS
+#
+# **源码里只放哈希，不放明文密码**（这个仓库会公开）。
+# 换密码时重新算一个哈希，把下面那串替换掉即可：
+#   python -c "import hashlib; print(hashlib.sha256('你的新密码'.encode()).hexdigest())"
+#
+# 想完全不把账号写进仓库，可以用环境变量（JSON：{"用户名": "<sha256>"}）：
+#   set YUXIA_ACCOUNTS={"alice": "3f2a..."}
+# 或者放在项目根的 accounts.json 里（已在 .gitignore，不会被提交）。
 # ============================================================
 PRESET_ACCOUNTS = {
     # 用户名: SHA-256(密码)
-    "awaxhei": hashlib.sha256("awaXhei@1900196100".encode()).hexdigest(),
-    "user2": hashlib.sha256("KcWG2jiC".encode()).hexdigest(),
+    "awaxhei": "b5f2afddc9512d036f638341c4f22baedfdf752670361f80c1ef862f30226b6e",
 }
 
-# JWT 签名密钥
-JWT_SECRET_KEY = "webcheck-ollama-secret-key"
+
+def _accounts_from_env_or_file():
+    """环境变量 / accounts.json 覆盖 PRESET_ACCOUNTS（有就优先用）"""
+    raw = os.environ.get("YUXIA_ACCOUNTS", "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and data:
+                return {str(k): str(v) for k, v in data.items()}
+        except Exception:
+            pass
+    path = os.path.join(ROOT, "accounts.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                return {str(k): str(v) for k, v in data.items()}
+        except Exception:
+            pass
+    return None
+
+
+_external_accounts = _accounts_from_env_or_file()
+if _external_accounts:
+    PRESET_ACCOUNTS = _external_accounts
+
+# JWT 签名密钥（部署到公网时换成自己的随机串，或用环境变量覆盖）
+JWT_SECRET_KEY = os.environ.get("YUXIA_JWT_SECRET") or "webcheck-ollama-secret-key"
 JWT_EXPIRE_DAYS = 30
 
 # ============================================================
