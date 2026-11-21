@@ -104,6 +104,16 @@ def main():
     check("指代青梅的「他」被改成「她」", "他" not in fixed.replace("其他", ""), fixed)
     check("正常词（其他）不被误伤", "其他" in fixed, fixed)
 
+    # 描写现在要求 60~130 字，模型偶尔写超：要在句读处截断，不能留半句话
+    long_text = "尤夏抬眼。" * 60
+    clipped = cw._clean(long_text)
+    check("超长描写被截到上限内", len(clipped) <= cw.MAX_DESC_CHARS, str(len(clipped)))
+    check("截断停在句号后面", clipped.endswith("。"), clipped[-12:])
+    check("短描写原样保留", cw._clip("尤夏抬眼看他。") == "尤夏抬眼看他。",
+          cw._clip("尤夏抬眼看他。"))
+    check("没有句读时也能截断", len(cw._clip("啊" * 500)) == cw.MAX_DESC_CHARS,
+          str(len(cw._clip("啊" * 500))))
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

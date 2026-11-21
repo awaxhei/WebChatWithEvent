@@ -18,6 +18,23 @@ _STRIP_PREFIXES = (
     "尤夏：", "【描写】", "【动作】",
 )
 
+# 描写上限：提示词要求 60~130 字，模型偶尔写超，硬切会把句子劈成两半
+MAX_DESC_CHARS = 200
+# 截断时优先停在这些标点后面（句号在前）
+_CLIP_MARKS = ("。", "！", "？", "；", "…", "，", "、")
+
+
+def _clip(text, limit=MAX_DESC_CHARS):
+    """超长时在最近的句读处截断，别留下半句话"""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    for mark in _CLIP_MARKS:
+        cut = head.rfind(mark)
+        if cut >= limit * 0.6:
+            return head[:cut + 1]
+    return head
+
 
 def _clean(text):
     if not text:
@@ -29,7 +46,7 @@ def _clean(text):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
     text = text.strip('"“”「」『』 ')
-    return pronoun.fix(text[:160])
+    return pronoun.fix(_clip(text))
 
 
 def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
