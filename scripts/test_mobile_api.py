@@ -94,7 +94,11 @@ def main():
     import secrets as _secrets
     test_user = "mobile_test_" + _secrets.token_hex(3)
     test_pass = _secrets.token_urlsafe(12)
-    app_db.sync_accounts({test_user: hashlib.sha256(test_pass.encode()).hexdigest()})
+    other_name = "other_test_" + _secrets.token_hex(3)
+    app_db.sync_accounts({
+        test_user: hashlib.sha256(test_pass.encode()).hexdigest(),
+        other_name: hashlib.sha256(b"x").hexdigest(),
+    })
     user = app_db.get_user(test_user)["id"]
     r = client.post("/api/auth/login", json={"username": test_user,
                                              "password": test_pass,
@@ -127,11 +131,11 @@ def main():
     check("批量删除也要鉴权 (401)", r.status_code == 401, str(r.status_code))
 
     # 混进别人的会话：自己的删掉，别人的跳过
-    foreign = app_db.create_conversation(app_db.get_user("user2")["id"])
+    foreign = app_db.create_conversation(app_db.get_user(other_name)["id"])
     mine = mobile.post("/api/history/new", json={}).get_json()["id"]
     res = mobile.post("/api/history/delete", json={"ids": [mine, foreign]}).get_json() or {}
     check("别人的会话被跳过", res.get("skipped") == 1 and res.get("deleted") == 1, str(res))
-    check("别人的会话没被删掉", app_db.conversation_belongs_to(foreign, app_db.get_user("user2")["id"]))
+    check("别人的会话没被删掉", app_db.conversation_belongs_to(foreign, app_db.get_user(other_name)["id"]))
     app_db.delete_conversation(foreign)
     mobile.post("/api/history/delete", json={"ids": [ids[3]]})
 
@@ -229,7 +233,7 @@ def main():
         check("通知接口需要登录 (401)", r.status_code == 401, str(r.status_code))
 
         # 越权：别的用户读不到
-        other = app_db.create_conversation(app_db.get_user("user2")["id"])
+        other = app_db.create_conversation(app_db.get_user(other_name)["id"])
         r = mobile.get(f"/api/notify/pending?conversation_id={other}&since_id=0")
         check("别人的会话读不到 (404)", r.status_code == 404, str(r.status_code))
     finally:

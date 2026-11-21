@@ -53,7 +53,9 @@ DEEPSEEK_REASONING_EFFORT = "high"
 # ============================================================
 PRESET_ACCOUNTS = {
     # 用户名: SHA-256(密码)
-    "awaxhei": "b5f2afddc9512d036f638341c4f22baedfdf752670361f80c1ef862f30226b6e",
+    # **留空**：这个文件会进公开仓库，所以不写任何账号。
+    # 自己的账号用 `python scripts/set_password.py <用户名>` 写进 accounts.json（已 gitignore），
+    # 或者用环境变量 YUXIA_ACCOUNTS 注入。
 }
 
 

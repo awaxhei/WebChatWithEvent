@@ -57,8 +57,13 @@ def main():
     app.config["TESTING"] = True
 
     # 预置数据：两个用户各一个会话（用于越权测试）
+    # 第二个账号当场造：测试不该依赖源码里的"演示账号"
+    import hashlib
+    import secrets as _secrets
+    other_name = "other_" + _secrets.token_hex(3)
+    app_db.sync_accounts({other_name: hashlib.sha256(b"x").hexdigest()})
     user1 = app_db.get_user("awaxhei")["id"]
-    user2 = app_db.get_user("user2")["id"]
+    user2 = app_db.get_user(other_name)["id"]
     conv1 = app_db.create_conversation(user1)
     app_db.add_message(conv1, "user", "归属人1的消息")
     conv2 = app_db.create_conversation(user2)

@@ -1,10 +1,15 @@
+# 本地配置（含 API Key、账号哈希），绝不提交
 config.py
+
+# Python 缓存
 __pycache__/
 *.pyc
 .vscode/
-data/
 .testtmp/
 .dsh-webview/
+
+# 聊天数据（SQLite）——里面是你的聊天记录
+data/
 
 # 安卓构建产物（scripts/build_apk.ps1 生成）
 static/download/*.apk
@@ -18,9 +23,12 @@ android/.idea/
 *.jks
 *.keystore
 
-# APK ����ʱ�� scripts/build_apk.ps1 ����
+# APK 打包时复制进去的后端副本 / 提示词
 android/app/src/main/python/
 android/app/src/main/assets/yuxia_prompt.txt
 
-# ������Ǳ����زģ������
+# 表情包是本地素材，不进仓库
 static/stickers/
+
+# 本地账号表（用 scripts/set_password.py 生成，绝不要提交）
+accounts.json
