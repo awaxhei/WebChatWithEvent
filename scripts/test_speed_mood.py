@@ -147,10 +147,18 @@ def main():
         chat_mod.deepseek = real
 
     # ── 5) 颜文字规则：只在手机消息里
+    # 只检查"这条设定还在不在"，不锁具体措辞——人设是散文，措辞会改
     prompt = open(os.path.join(ROOT, "yuxia_prompt.txt"), encoding="utf-8").read()
-    check("提示词写明当面不带颜文字", "当面说话一律不带颜文字" in prompt)
-    check("提示词写明手机照用", "只在手机消息里用" in prompt)
-    check("提示词给了心情字段", "**心情**" in prompt and "平静" in prompt)
+    kaomoji_sec = prompt.split("## 手机、颜文字、表情包")[-1].split("## ")[0] \
+        if "## 手机、颜文字、表情包" in prompt else prompt
+    check("提示词写明当面不带颜文字",
+          "当面" in kaomoji_sec and "颜文字" in kaomoji_sec, kaomoji_sec[:120])
+    check("提示词写明手机照用",
+          "手机" in kaomoji_sec and ("ᗜ" in kaomoji_sec or "(ᗜ" in kaomoji_sec),
+          kaomoji_sec[:120])
+    check("提示词给了心情字段",
+          "心情" in prompt and all(m in prompt for m in
+                                   ("平静", "开心", "认真", "害羞", "放松", "无语", "惊讶", "不爽")))
 
     print()
     if FAILED:
