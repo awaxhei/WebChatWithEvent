@@ -149,6 +149,13 @@ CASES = [
     ("生活-迷路", "你怎么还没到家", "chat"),
     ("生活-饿着", "你中午吃了什么", "chat"),
     ("生活-教她", "看着我做，水开了再下面", "chat"),
+    # 可爱专项：这些场景里她"不嘴硬""用记忆当情话""身体先于语言"都该露出来
+    ("可爱-要抱", "过来，抱一下", "chat"),
+    ("可爱-喂饭", "张嘴，这口给你", "chat"),
+    ("可爱-怕黑", "停电了，你别乱走", "chat"),
+    ("可爱-看到猫", "楼下有只小猫，特别小", "chat"),
+    ("可爱-被惦记", "记得我上次说想吃的那家店吗", "chat"),
+    ("可爱-被搓头", "（揉乱你的头发）", "chat"),
 ]
 
 stats = {"cases": 0, "violations": [], "scores": [], "samples": [],
@@ -236,7 +243,12 @@ def main():
         done_channel = next((e.get("channel") for e in evs if e.get("type") == "done"), "chat")
 
         msgs = [m for m in app_db.get_messages(conv) if m["role"] == "assistant"]
-        last = (msgs[n_before:] or msgs)[-1]
+        new_rows = msgs[n_before:]
+        if not new_rows:
+            # 这一轮没落库：不能退回上一条，否则会拿上一轮的话重复评分
+            stats["violations"].append(f"[{name}] 这一轮没有落库")
+            continue
+        last = new_rows[-1]
         # 以**实际落库的通道**为准：她在当面也可能发一条手机消息（落 phone 通道、
         # 前端显示在手机面板里），那种行本来就是纯文本，不能当成"当面不是 JSON"
         done_channel = last.get("channel") or done_channel
@@ -264,9 +276,7 @@ def main():
             stats["violations"].append(f"[{name}] 空回复")
             continue
         # 一轮可能落好几条（她把话拆成两三条短 JSON），口癖那条不一定是最后一条
-        turn_text = " ".join(
-            strip_prefix(unwrap(m["content"])) for m in msgs[n_before:]
-        ) if msgs[n_before:] else shown
+        turn_text = " ".join(strip_prefix(unwrap(m["content"])) for m in new_rows) or shown
 
         # ── 结构规则 ──
         if done_channel == "chat":
