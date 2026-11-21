@@ -155,6 +155,21 @@ object Api {
         }
     }
 
+    /** 批量删除：一次请求删掉多个会话 */
+    fun deleteConversations(ctx: Context, ids: List<String>) {
+        val body = JSONObject().put("ids", JSONArray(ids)).toString()
+        val req = builder(ctx, "/api/history/delete")
+            .post(body.toRequestBody(JSON_MEDIA))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val raw = resp.body?.string().orEmpty()
+                val msg = runCatching { JSONObject(raw).optString("error") }.getOrNull().orEmpty()
+                throw ApiException(resp.code, msg.ifBlank { "HTTP ${resp.code}" })
+            }
+        }
+    }
+
     // ── 手机通道 ─────────────────────────────────────
 
     fun phone(ctx: Context, conv: String): JSONObject {

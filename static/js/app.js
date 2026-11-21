@@ -1517,11 +1517,160 @@ class EventPanel {
 }
 
 class HistoryManager {
-    constructor(chatManager) { this.chatManager = chatManager; this.listEl = document.getElementById('historyList'); this.btnNewChat = document.getElementById('btnNewChat'); this._bindEvents(); }
-    _bindEvents() { this.btnNewChat.addEventListener('click', () => { this.chatManager.newConversation(); this.loadHistory(); }); this.listEl.addEventListener('click', (e) => { const item = e.target.closest('.history-item'); if (!item) return; const convId = item.dataset.id; if (e.target.closest('.btn-delete')) { e.stopPropagation(); this.deleteConversation(convId); return; } this._setActive(convId); this.chatManager.loadConversation(convId); }); }
-    async loadHistory() { try { const res = await authFetch('/api/history'); const conversations = await res.json(); this._render(conversations); } catch (e) { this.listEl.innerHTML = ''; } }
-    _render(conversations) { if (!conversations || conversations.length === 0) { this.listEl.innerHTML = ''; return; } this.listEl.innerHTML = conversations.map((c, i) => `<li class="history-item ${c.id === this.chatManager.currentConvId ? 'active' : ''}" data-id="${c.id}" style="animation-delay: ${i * 0.04}s"><span class="conv-title">${this._e(c.title)}</span><span class="conv-date">${this._fd(c.updated_at)}</span><button class="btn-delete" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></li>`).join(''); }
-    async deleteConversation(convId) { if (!confirm('Delete this conversation?')) return; try { await authFetch(`/api/history/${convId}`, { method: 'DELETE' }); if (convId === this.chatManager.currentConvId) this.chatManager.newConversation(); this.loadHistory(); } catch (e) { alert('Delete failed'); } }
+    constructor(chatManager) {
+        this.chatManager = chatManager;
+        this.listEl = document.getElementById('historyList');
+        this.btnNewChat = document.getElementById('btnNewChat');
+        this.btnBulkMode = document.getElementById('btnBulkMode');
+        this.bulkBar = document.getElementById('bulkBar');
+        this.bulkAll = document.getElementById('bulkAll');
+        this.bulkCount = document.getElementById('bulkCount');
+        this.btnBulkDelete = document.getElementById('btnBulkDelete');
+        this.btnBulkCancel = document.getElementById('btnBulkCancel');
+        this.conversations = [];
+        this.selectMode = false;
+        this.selected = new Set();
+        this._bindEvents();
+    }
+    _bindEvents() {
+        this.btnNewChat.addEventListener('click', () => {
+            this._exitSelect();
+            this.chatManager.newConversation();
+            this.loadHistory();
+        });
+        this.listEl.addEventListener('click', (e) => {
+            const item = e.target.closest('.history-item');
+            if (!item) return;
+            const convId = item.dataset.id;
+            if (this.selectMode) {
+                e.preventDefault();
+                this._toggleOne(convId);
+                return;
+            }
+            if (e.target.closest('.btn-delete')) {
+                e.stopPropagation();
+                this.deleteConversation(convId);
+                return;
+            }
+            this._setActive(convId);
+            this.chatManager.loadConversation(convId);
+        });
+        if (this.btnBulkMode) this.btnBulkMode.addEventListener('click', () => this._toggleSelectMode());
+        if (this.bulkAll) this.bulkAll.addEventListener('change', () => this._toggleAll(this.bulkAll.checked));
+        if (this.btnBulkDelete) this.btnBulkDelete.addEventListener('click', () => this.deleteSelected());
+        if (this.btnBulkCancel) this.btnBulkCancel.addEventListener('click', () => this._exitSelect());
+    }
+    async loadHistory() {
+        try {
+            const res = await authFetch('/api/history');
+            this.conversations = await res.json();
+            this._render(this.conversations);
+        } catch (e) { this.listEl.innerHTML = ''; }
+    }
+    _render(conversations) {
+        if (!conversations || conversations.length === 0) {
+            this.listEl.innerHTML = '';
+            this._updateBulkUI();
+            return;
+        }
+        // 选中的会话可能已经被删掉：只保留还存在的
+        const alive = new Set(conversations.map((c) => c.id));
+        this.selected = new Set([...this.selected].filter((id) => alive.has(id)));
+        this.listEl.innerHTML = conversations.map((c, i) => {
+            const picked = this.selected.has(c.id);
+            return `<li class="history-item ${c.id === this.chatManager.currentConvId ? 'active' : ''}` +
+                   `${picked ? ' selected' : ''}${this.selectMode ? ' selecting' : ''}" ` +
+                   `data-id="${c.id}" style="animation-delay: ${i * 0.04}s">` +
+                   (this.selectMode ? `<span class="conv-check">${picked ? '✓' : ''}</span>` : '') +
+                   `<span class="conv-title">${this._e(c.title)}</span>` +
+                   `<span class="conv-date">${this._fd(c.updated_at)}</span>` +
+                   (this.selectMode ? '' :
+                       `<button class="btn-delete" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" ` +
+                       `fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/>` +
+                       `<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>` +
+                       `</svg></button>`) +
+                   `</li>`;
+        }).join('');
+        this._updateBulkUI();
+    }
+    _toggleSelectMode() {
+        this.selectMode ? this._exitSelect() : this._enterSelect();
+    }
+    _enterSelect() {
+        this.selectMode = true;
+        this.selected.clear();
+        if (this.bulkBar) this.bulkBar.style.display = 'flex';
+        if (this.btnBulkMode) this.btnBulkMode.classList.add('active');
+        this._render(this.conversations);
+    }
+    _exitSelect() {
+        if (!this.selectMode) return;
+        this.selectMode = false;
+        this.selected.clear();
+        if (this.bulkBar) this.bulkBar.style.display = 'none';
+        if (this.btnBulkMode) this.btnBulkMode.classList.remove('active');
+        this._render(this.conversations);
+    }
+    _toggleOne(convId) {
+        if (this.selected.has(convId)) this.selected.delete(convId);
+        else this.selected.add(convId);
+        // 只改这一行的样式，不整表重画（重画会让连点多行时的引用失效，也闪一下）
+        this._syncSelection();
+        this._updateBulkUI();
+    }
+    _toggleAll(on) {
+        this.selected = on ? new Set(this.conversations.map((c) => c.id)) : new Set();
+        this._syncSelection();
+        this._updateBulkUI();
+    }
+    _syncSelection() {
+        this.listEl.querySelectorAll('.history-item').forEach((item) => {
+            const picked = this.selected.has(item.dataset.id);
+            item.classList.toggle('selected', picked);
+            const check = item.querySelector('.conv-check');
+            if (check) check.textContent = picked ? '✓' : '';
+        });
+    }
+    _updateBulkUI() {
+        const n = this.selected.size;
+        if (this.bulkCount) this.bulkCount.textContent = `已选 ${n} 项`;
+        if (this.btnBulkDelete) this.btnBulkDelete.disabled = n === 0;
+        if (this.bulkAll) {
+            this.bulkAll.checked = n > 0 && n === this.conversations.length;
+            this.bulkAll.indeterminate = n > 0 && n < this.conversations.length;
+        }
+    }
+    async deleteSelected() {
+        const ids = [...this.selected];
+        if (!ids.length) return;
+        if (!confirm(`删除选中的 ${ids.length} 个对话？删除后无法恢复。`)) return;
+        this._updateBulkUI();
+        if (this.btnBulkDelete) this.btnBulkDelete.disabled = true;
+        try {
+            const res = await authFetch('/api/history/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            // 删掉的是当前正在聊的那个 → 开一个新对话
+            if (ids.includes(this.chatManager.currentConvId)) this.chatManager.newConversation();
+            this.selected.clear();
+            await this.loadHistory();
+        } catch (e) {
+            alert('批量删除失败：' + (e.message || e));
+        }
+        this._updateBulkUI();
+    }
+    async deleteConversation(convId) {
+        if (!confirm('删除这个对话？删除后无法恢复。')) return;
+        try {
+            await authFetch(`/api/history/${convId}`, { method: 'DELETE' });
+            if (convId === this.chatManager.currentConvId) this.chatManager.newConversation();
+            this.loadHistory();
+        } catch (e) { alert('删除失败'); }
+    }
     _setActive(convId) { this.listEl.querySelectorAll('.history-item').forEach((item) => item.classList.toggle('active', item.dataset.id === convId)); }
     _fd(dateStr) { if (!dateStr) return ''; const d = new Date(dateStr), now = new Date(), diff = now - d; if (diff < 60000) return 'now'; if (diff < 3600000) return Math.floor(diff / 60000) + 'm'; if (diff < 86400000) return Math.floor(diff / 3600000) + 'h'; return `${d.getMonth() + 1}/${d.getDate()}`; }
     _e(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

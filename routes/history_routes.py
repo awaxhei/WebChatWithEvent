@@ -59,6 +59,30 @@ def delete_conversation(conv_id):
     return jsonify({"success": True})
 
 
+MAX_BULK_DELETE = 200
+
+
+@history_bp.route("/api/history/delete", methods=["POST"])
+@require_auth
+def delete_conversations():
+    """批量删除会话：只删自己的，别人的跳过并报数"""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "没有要删除的会话"}), 400
+    ids = [str(i) for i in ids if str(i).strip()][:MAX_BULK_DELETE]
+
+    deleted, skipped = [], []
+    for conv_id in ids:
+        if ensure_conversation_owner(db, conv_id, request.user_id):
+            skipped.append(conv_id)       # 不是自己的 / 不存在
+            continue
+        db.delete_conversation(conv_id)
+        deleted.append(conv_id)
+    return jsonify({"success": True, "deleted": len(deleted),
+                    "deleted_ids": deleted, "skipped": len(skipped)})
+
+
 @history_bp.route("/api/history/new", methods=["POST"])
 @require_auth
 def new_conversation():

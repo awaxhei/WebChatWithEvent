@@ -107,6 +107,29 @@ def main():
     r = app.test_client().get("/api/history")
     check("无凭证被拒 (401)", r.status_code == 401, str(r.status_code))
 
+    # ── 批量删除会话（App 和网页都用这个接口）
+    ids = [mobile.post("/api/history/new", json={}).get_json()["id"] for _ in range(4)]
+    r = mobile.post("/api/history/delete", json={"ids": ids[:3]})
+    res = r.get_json() or {}
+    check("批量删除返回删除条数", r.status_code == 200 and res.get("deleted") == 3, str(res))
+    left = [c["id"] for c in mobile.get("/api/history").get_json()]
+    check("删掉的会话不见了", all(i not in left for i in ids[:3]), str(left))
+    check("没选中的会话还在", ids[3] in left, str(left))
+
+    r = mobile.post("/api/history/delete", json={"ids": []})
+    check("空列表被拒 (400)", r.status_code == 400, str(r.status_code))
+    r = app.test_client().post("/api/history/delete", json={"ids": [ids[3]]})
+    check("批量删除也要鉴权 (401)", r.status_code == 401, str(r.status_code))
+
+    # 混进别人的会话：自己的删掉，别人的跳过
+    foreign = app_db.create_conversation(app_db.get_user("user2")["id"])
+    mine = mobile.post("/api/history/new", json={}).get_json()["id"]
+    res = mobile.post("/api/history/delete", json={"ids": [mine, foreign]}).get_json() or {}
+    check("别人的会话被跳过", res.get("skipped") == 1 and res.get("deleted") == 1, str(res))
+    check("别人的会话没被删掉", app_db.conversation_belongs_to(foreign, app_db.get_user("user2")["id"]))
+    app_db.delete_conversation(foreign)
+    mobile.post("/api/history/delete", json={"ids": [ids[3]]})
+
     # ── 一键导入：多张一起传
     png1, png2, png3 = make_png(1), make_png(2), make_png(3)
     r = mobile.post("/api/stickers/upload", content_type="multipart/form-data", data={

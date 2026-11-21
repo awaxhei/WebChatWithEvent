@@ -1,6 +1,7 @@
 package com.yuxia.chat
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +19,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -64,6 +67,7 @@ fun AppRoot(vm: ChatViewModel) {
             onRefresh = { vm.loadConversations() },
             onApiKey = vm::openApiKeyScreen,
             onDelete = vm::deleteConversation,
+            onDeleteMany = vm::deleteConversations,
         )
         Screen.Chat -> ChatScreen(vm)
     }
@@ -188,7 +192,7 @@ fun ApiKeyScreen(state: UiState, onSave: (String) -> Unit, onSkip: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ConversationsScreen(
     state: UiState,
@@ -197,28 +201,66 @@ fun ConversationsScreen(
     onRefresh: () -> Unit,
     onApiKey: () -> Unit,
     onDelete: (String) -> Unit,
+    onDeleteMany: (List<String>) -> Unit,
 ) {
     var pendingDelete by remember { mutableStateOf<ConvBrief?>(null) }
+    var pendingBulk by remember { mutableStateOf(false) }
+    var selecting by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf(setOf<String>()) }
+
+    fun exitSelect() {
+        selecting = false
+        picked = emptySet()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("和尤夏的故事") },
-                actions = {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                title = {
+                    Text(if (selecting) "已选 ${picked.size} 项" else "和尤夏的故事")
+                },
+                navigationIcon = {
+                    if (selecting) {
+                        IconButton(onClick = { exitSelect() }) {
+                            Icon(Icons.Filled.Close, contentDescription = "取消")
+                        }
                     }
-                    IconButton(onClick = onApiKey) {
-                        Icon(Icons.Filled.Settings, contentDescription = "API Key")
+                },
+                actions = {
+                    if (selecting) {
+                        TextButton(onClick = { picked = state.convs.map { it.id }.toSet() }) {
+                            Text("全选")
+                        }
+                        IconButton(
+                            onClick = { if (picked.isNotEmpty()) pendingBulk = true },
+                            enabled = picked.isNotEmpty(),
+                        ) {
+                            Icon(
+                                Icons.Filled.DeleteOutline,
+                                contentDescription = "删除所选",
+                                tint = if (picked.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
+                                       else MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = onRefresh) {
+                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        }
+                        IconButton(onClick = onApiKey) {
+                            Icon(Icons.Filled.Settings, contentDescription = "API Key")
+                        }
                     }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onNew,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("新对话") },
-            )
+            if (!selecting) {
+                ExtendedFloatingActionButton(
+                    onClick = onNew,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("新对话") },
+                )
+            }
         },
     ) { padding ->
         if (state.convs.isEmpty()) {
@@ -234,21 +276,51 @@ fun ConversationsScreen(
                 contentPadding = PaddingValues(bottom = 96.dp),
             ) {
                 items(state.convs) { conv ->
+                    val checked = conv.id in picked
                     ListItem(
                         headlineContent = { Text(conv.title) },
                         supportingContent = {
                             Text(conv.updatedAt, style = MaterialTheme.typography.labelSmall)
                         },
-                        trailingContent = {
-                            IconButton(onClick = { pendingDelete = conv }) {
-                                Icon(
-                                    Icons.Filled.DeleteOutline,
-                                    contentDescription = "删除",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        leadingContent = if (selecting) {
+                            {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        picked = if (checked) picked - conv.id else picked + conv.id
+                                    },
                                 )
                             }
+                        } else null,
+                        trailingContent = if (selecting) {
+                            null
+                        } else {
+                            {
+                                IconButton(onClick = { pendingDelete = conv }) {
+                                    Icon(
+                                        Icons.Filled.DeleteOutline,
+                                        contentDescription = "删除",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         },
-                        modifier = Modifier.clickable { onOpen(conv.id) },
+                        // 长按进入多选；多选态下点一下就是勾选
+                        modifier = Modifier.combinedClickable(
+                            onClick = {
+                                if (selecting) {
+                                    picked = if (checked) picked - conv.id else picked + conv.id
+                                } else {
+                                    onOpen(conv.id)
+                                }
+                            },
+                            onLongClick = {
+                                if (!selecting) {
+                                    selecting = true
+                                    picked = setOf(conv.id)
+                                }
+                            },
+                        ),
                     )
                     HorizontalDivider()
                 }
@@ -269,6 +341,25 @@ fun ConversationsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
+    }
+
+    if (pendingBulk) {
+        AlertDialog(
+            onDismissRequest = { pendingBulk = false },
+            title = { Text("批量删除") },
+            text = { Text("删除选中的 ${picked.size} 个对话？里面的全部消息、事件和记忆都会一起删掉，不能恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val ids = picked.toList()
+                    pendingBulk = false
+                    exitSelect()
+                    onDeleteMany(ids)
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBulk = false }) { Text("取消") }
             },
         )
     }

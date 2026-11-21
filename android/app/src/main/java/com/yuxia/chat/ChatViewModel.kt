@@ -336,16 +336,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteConversation(id: String) {
+        deleteConversations(listOf(id))
+    }
+
+    /** 批量删除：删完回到列表；当前正在聊的那个也在里面就清空会话 */
+    fun deleteConversations(ids: List<String>) {
+        if (ids.isEmpty()) return
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { Api.deleteConversation(app, id) }
-                if (state.convId == id) {
+                withContext(Dispatchers.IO) { Api.deleteConversations(app, ids) }
+                if (state.convId in ids) {
                     Prefs.setConvId(app, "")
                     state = state.copy(
                         convId = "", entries = emptyList(), phoneEntries = emptyList(),
                         events = emptyList(), eventsLoaded = false,
                     )
                 }
+                state = state.copy(toast = "已删除 ${ids.size} 个对话")
                 loadConversations(goToList = true)
             } catch (e: Exception) {
                 state = state.copy(toast = e.message ?: "删除失败")
