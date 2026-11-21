@@ -104,6 +104,30 @@ def main():
     check("超上限后不再动作", autonomy.maybe_act(db, conv5, llm5, 600, "x", idle=False) is None)
     check("超上限时不再调用模型（省额度）", llm5.calls == 0, f"calls={llm5.calls}")
 
+    # 5b) 计数不能算重：她自主说一句，既落一条消息又记一条流水，只能算一次
+    conv5b = fresh()
+    llm5b = StubLLM('{"action": "speak", "text": "嗯。", "location": ""}')
+    autonomy.maybe_act(db, conv5b, llm5b, 600, "x", idle=False)
+    check("自主说一句只算一次输出", autonomy._assistant_streak(db, conv5b) == 1,
+          f"streak={autonomy._assistant_streak(db, conv5b)}（消息 + 流水被算了两遍）")
+
+    # 5c) 上限按时间窗算：歇够了能重新开口，不会被永久冻结
+    conv5c = fresh()
+    for i in range(1 + autonomy.AUTONOMY_MAX_CONSECUTIVE):
+        db.add_message(conv5c, "assistant", f"第{i}句", channel="chat")
+    check("刚超上限时被挡住",
+          autonomy._assistant_streak(db, conv5c) >= 1 + autonomy.AUTONOMY_MAX_CONSECUTIVE,
+          f"streak={autonomy._assistant_streak(db, conv5c)}")
+    real_time = autonomy.time.time
+    try:
+        # 把时钟往后拨 11 分钟：假装这些输出都已经超出时间窗
+        autonomy.time.time = lambda: real_time() + autonomy.AUTONOMY_STREAK_WINDOW_SECONDS + 60
+        check("过了时间窗之后计数归零（可以再开口）",
+              autonomy._assistant_streak(db, conv5c) == 0,
+              f"streak={autonomy._assistant_streak(db, conv5c)}")
+    finally:
+        autonomy.time.time = real_time
+
     # 6) 闲置最小间隔：刚说过话 → 不问
     conv6 = fresh()
     llm6 = StubLLM('{"action": "speak", "text": "嗯", "location": ""}')

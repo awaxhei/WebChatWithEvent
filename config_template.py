@@ -388,6 +388,9 @@ AUTONOMY_ALLOW_NEW_LOCATION = True
 LOCATION_CAP = 40
 # 连续自主输出的上限：她最多可以连着说几句而玩家一直没开口（防止自言自语刷屏）
 AUTONOMY_MAX_CONSECUTIVE = 12
+# 上面这个"连说几句"上限按最近多少秒算：超了就歇一会儿，歇够了能再开口。
+# 以前是"玩家不开口就一直累加"，旁观一整局的话她会永久沉默。
+AUTONOMY_STREAK_WINDOW_SECONDS = 600
 # 闲置自主行动的最小间隔（秒）：只是防刷，不是概率；是否行动由她自己判断
 AUTONOMY_MIN_INTERVAL_SECONDS = 8
 # 她动手做事（act）会占掉的故事时间（分钟）：不然五次行动全挤在同一分钟

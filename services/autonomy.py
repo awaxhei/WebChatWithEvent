@@ -24,6 +24,7 @@ import services.world_context as world_context
 from config import (
     AUTONOMY_ENABLED, AUTONOMY_PROMPT, AUTONOMY_ALLOW_NEW_LOCATION,
     AUTONOMY_MAX_CONSECUTIVE, AUTONOMY_MIN_INTERVAL_SECONDS,
+    AUTONOMY_STREAK_WINDOW_SECONDS,
     AUTONOMY_ACT_MINUTES, AUTONOMY_ACT_WINDOW_MINUTES, AUTONOMY_ACT_PER_WINDOW,
     AUTONOMY_SPEAK_MINUTES, AUTONOMY_AFTER_ACT_GRACE_SECONDS,
     AUTONOMY_WAIT_FIRST_SECONDS, AUTONOMY_WAIT_GROWTH,
@@ -149,20 +150,47 @@ def _recent_self_texts(db, conv_id, limit=6):
 # 触发限制：只防刷屏，是否行动由模型判断
 # ──────────────────────────────────────────────
 
+def _row_epoch(row):
+    """消息行的 created_at 是本地时间文本，换成时间戳好比较"""
+    raw = (row.get("created_at") or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return time.mktime(time.strptime(raw, fmt))
+        except (ValueError, TypeError):
+            continue
+    return 0.0
+
+
 def _assistant_streak(db, conv_id):
-    """统计"最后一条用户消息之后"尤夏一共输出了几次（含回复、自主发言、动手）"""
+    """最近这段时间里她连着输出了几次（玩家一开口就重新开始算）
+
+    只数"真输出"：
+    - 当面对白 / 手机消息（她自主说出来的也算在这里）
+    - act / move / lead：这三种不落消息行，只在自主流水里，所以只数流水
+
+    以前两边都数，自主说一句会被算两次，12 条的上限实际六条就触发了。
+    另外以前是"玩家不开口就一直累加"：旁观一整局（一句话不说），她说到十几次
+    就永久沉默——现在改成只数最近 AUTONOMY_STREAK_WINDOW_SECONDS 分钟，
+    歇够了能重新开口。
+    """
+    last_user_at = float(db.get_last_user_at(conv_id) or 0)
+    # created_at 只有秒级精度，所以 cutoff 也取整到秒：否则"刚写的消息"
+    # 会因为 14:21:44 < 14:21:44.7 而被漏掉
+    cutoff = max(int(last_user_at), int(time.time() - AUTONOMY_STREAK_WINDOW_SECONDS))
+
     streak = 0
-    for msg in reversed(db.get_messages(conv_id)):
+    for msg in db.get_messages(conv_id):
         if msg["role"] == "user":
-            break
-        if (msg.get("channel") or "chat") in ("chat", "phone"):
+            continue
+        if (msg.get("channel") or "chat") not in ("chat", "phone"):
+            continue
+        if _row_epoch(msg) >= cutoff:
             streak += 1
-    last_user_at = db.get_last_user_at(conv_id)
     try:
         for entry in db.get_autonomy_tail(conv_id):
-            # 用 >=：Windows 上 time.time() 精度约 15ms，
-            # 刚发完消息就动手时两个时间戳可能完全相等
-            if float(entry.get("at") or 0) >= last_user_at:
+            if entry.get("action") not in ("act", "move", "lead"):
+                continue
+            if float(entry.get("at") or 0) >= cutoff:
                 streak += 1
     except Exception:
         pass

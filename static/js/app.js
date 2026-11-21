@@ -1805,7 +1805,14 @@ class EmotionAssistant {
         const cm = this.chatManager;
         if (!cm || !cm.currentConvId || cm.isProcessing) return;
         if (cm.paused) return;
-        if (document.hidden) return;
+        // 页面在后台也继续问，只是放慢到三倍间隔。
+        // 以前这里直接 return：切到别的标签页再回来，会发现她一动不动地站了很久。
+        if (document.hidden) {
+            this._hiddenTicks = (this._hiddenTicks || 0) + 1;
+            if (this._hiddenTicks % 3 !== 0) return;
+        } else {
+            this._hiddenTicks = 0;
+        }
         try {
             const res = await authFetch(`/api/idle/${cm.currentConvId}`, { method: 'POST' });
             if (!res.ok) return;
