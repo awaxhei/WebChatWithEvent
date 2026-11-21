@@ -292,6 +292,17 @@ class ChatDB:
             row = conn.execute("SELECT COUNT(*) as cnt FROM messages WHERE conversation_id=? AND role='user'", (conv_id,)).fetchone()
         return row["cnt"] if row else 0
 
+    def get_total_message_count(self, conv_id):
+        """所有消息（含她的旁白、自主行动）：用来判断"情境摘要"该不该重写
+
+        只数玩家消息会误判：玩家可能很久才说一句，中间她已经自言自语好几轮，
+        摘要却还停在开头那几句上（试玩里出现过"你刚才叫了尤夏的名字"这种陈年摘要）。
+        """
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM messages WHERE conversation_id=?",
+                               (conv_id,)).fetchone()
+        return int(row["c"]) if row else 0
+
     # ----- 环境叙述 -----
     def add_atmosphere(self, conv_id, content):
         with self._get_conn() as conn:

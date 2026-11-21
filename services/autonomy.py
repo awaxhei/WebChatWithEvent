@@ -181,6 +181,9 @@ def _autonomy_after_last_user(db, conv_id):
 
 _QUESTION_TAIL = re.compile(r"[?？]|吗|呢|吧|好不好|行不行")
 
+# 玩家刚说过话的这几秒里，她不要再插一句（正式回复正在生成/刚生成）
+_RECENT_USER_SECONDS = 6
+
 
 def _asked_question(db, conv_id):
     """她最后一句是不是在问玩家（问了就值得多等一会）"""
@@ -357,6 +360,12 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
         return None
 
     decision = _parse(raw)
+
+    # 模型返回时玩家可能刚说过话：这一轮已经有她的正式回复了，别再插一句，
+    # 否则屏幕上会出现"她一语成谶地回答了两遍"（试玩里出现过双回复）
+    if idle and time.time() - db.get_last_user_at(conv_id) < _RECENT_USER_SECONDS:
+        return None
+
     if not decision or decision["action"] == "none":
         return None
 

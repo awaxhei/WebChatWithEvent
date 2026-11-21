@@ -108,6 +108,23 @@ def main():
     acted6 = autonomy.maybe_act(db, conv6, llm6, 600, "x", idle=True)
     check("超过最小间隔后由模型判断", bool(acted6) and llm6.calls == 1, str(acted6))
 
+    # 6b) 竞态：进判断时够久，模型返回时玩家刚说过话 → 不要再插一句
+    conv6b = fresh()
+    db.set_last_user_at(conv6b, time.time() - autonomy.AUTONOMY_MIN_INTERVAL_SECONDS - 5)
+
+    class ChattyLLM(StubLLM):
+        """模型调用期间玩家说了话（模拟 /api/idle 与 /api/chat 撞车）"""
+
+        def chat_sync(self, messages, *a, **kw):
+            self.calls += 1
+            db.set_last_user_at(conv6b, time.time())
+            return self.payload
+
+    llm6b = ChattyLLM('{"action": "speak", "text": "你刚才叫尤夏了", "location": ""}')
+    check("模型返回时玩家刚说话就不插话",
+          autonomy.maybe_act(db, conv6b, llm6b, 600, "x", idle=True) is None,
+          "她不该重复回答同一句")
+
     # 7) 她能读到随机事件（提示词里带最近事件）
     conv7 = fresh()
     db.add_event(conv7, "random", "水槽水管爆开", "旧水管突然爆开，水漫了一地", "active",

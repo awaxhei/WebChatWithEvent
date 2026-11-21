@@ -89,6 +89,22 @@ def main():
     check("旧接口 get_events 仍返回最早 N 条",
           app_db.get_events(conv, limit=5)[0]["title"] == "旧事件0")
 
+    # ── 1b) 情境摘要的"轮次"要按全部消息算，否则会一直停在开头
+    #      （实测：玩家只发了 3 句，她已经自言自语十几条，摘要却还是第 1 轮的
+    #        "她刚叫了你的名字"，于是她真去回那句根本没发生的话）
+    conv_b = app_db.create_conversation(user)
+    app_db.add_message(conv_b, "user", "早上好尤夏", channel="chat")
+    for i in range(6):
+        app_db.add_message(conv_b, "assistant", f"她的第{i}句", channel="chat")
+        app_db.add_message(conv_b, "assistant", f"旁白{i}", channel="state")
+    check("全部消息数按所有角色统计", app_db.get_total_message_count(conv_b) == 13,
+          str(app_db.get_total_message_count(conv_b)))
+    check("玩家消息数只数 user", app_db.get_message_count(conv_b) == 1,
+          str(app_db.get_message_count(conv_b)))
+    check("两者不同（摘要必须用前者）",
+          app_db.get_total_message_count(conv_b) > app_db.get_message_count(conv_b) + 3,
+          f"{app_db.get_total_message_count(conv_b)} vs {app_db.get_message_count(conv_b)}")
+
     # ── 2) 两条通道合并进上下文
     conv2 = app_db.create_conversation(user)
     app_db.add_message(conv2, "user", "当面说的话", channel="chat")

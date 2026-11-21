@@ -536,8 +536,11 @@ def chat():
     _mark("记忆写入")
 
     # 自然情境（上层 LLM 撰写 + 缓存）
+    # 用**全部消息数**当轮次：只数玩家消息会把摘要拖得很旧（玩家半天不说话时，
+    # 摘要还停在开头那句「她叫了你的名字」，她就会当成刚发生的事）
     brief = context_writer.compose(db, conv_id, now_minutes, yuxia_loc, player_loc,
-                                   deepseek, api_key=api_key, turn=msg_count,
+                                   deepseek, api_key=api_key,
+                                   turn=db.get_total_message_count(conv_id),
                                    force=moved or bool(keyword_jump))
     _mark("自然情境撰写")
 
@@ -962,11 +965,12 @@ def idle(conv_id):
 
     api_key = request_api_key()
     now = time_keeper.init_clock(db, conv_id)
-    brief, _turn = db.get_context_brief(conv_id)
-    if not brief:
-        brief = context_writer.compose(
-            db, conv_id, now, locations.get_current(db, conv_id),
-            db.get_player_location(conv_id), deepseek, api_key=api_key, turn=0)
+    # 之前这里只在"完全没有摘要"时才撰写，等于永不刷新：她自主说话时读到的
+    # 可能还是几十轮前那句"她刚叫了你的名字"。现在统一走 compose（带缓存 + 后台刷新）
+    brief = context_writer.compose(
+        db, conv_id, now, locations.get_current(db, conv_id),
+        db.get_player_location(conv_id), deepseek, api_key=api_key,
+        turn=db.get_total_message_count(conv_id))
 
     try:
         msg_count = db.get_message_count(conv_id)
