@@ -191,10 +191,13 @@ def main():
     check("一条人也没建出来", len(app_db.get_npcs(conv_h)) == 0,
           str([n["name"] for n in app_db.get_npcs(conv_h)]))
 
-    # ── 5b) 模型给了"在跟第三人说话"但没给称呼 → 按地点取名
+    # ── 5b) 模型给了"在跟第三人说话"却没给称呼 → 不编人（以前会兜底叫「路人」）
     made, _ = resolve(app_db, conv_h, "街上", "给我来个煎饼",
                       '{"addressed": true, "who": ""}')
-    check("who 为空时按地点取名", bool(made) and made["name"] == "路人", str(made))
+    check("who 为空时不编造路人", made is None, str(made))
+    check("名册里没有「路人」",
+          not [n for n in app_db.get_npcs(conv_h) if n["name"] == "路人"],
+          str([n["name"] for n in app_db.get_npcs(conv_h)]))
 
     # ── 5c) 历史误建的口头禅 NPC 会被退场
     stale = app_db.add_npc(conv_h, "hey", "hey", "街上", "")
@@ -215,10 +218,9 @@ def main():
         got, _ = resolve(app_db, conv_r, "煎饼摊", "随便说点什么吧",
                          json.dumps({"addressed": True, "who": bogus}, ensure_ascii=False))
         names = [n["name"] for n in app_db.get_npcs(conv_r, location="煎饼摊")]
-        check(f"who=「{bogus}」不会建出同名 NPC",
-              bool(got) and bogus not in names, str(names))
+        check(f"who=「{bogus}」不会建出 NPC", got is None and not names, str(names))
     names = [n["name"] for n in app_db.get_npcs(conv_r, location="煎饼摊")]
-    check("保留称呼都按地点改成了默认身份", names == ["摊主"], str(names))
+    check("代词和口头禅都不会变成 NPC", not names, str(names))
 
     # 库里残留的同名 NPC 会被退场
     conv_r2 = app_db.create_conversation(user)
@@ -231,8 +233,58 @@ def main():
           bool(row2) and row2["status"] == "gone",
           str(dict(row2) if row2 else None))
     spawned = npc.spawn_named(app_db, conv_r2, "街上", "青梅")
-    check("spawn_named 也不会建出「青梅」",
-          bool(spawned) and spawned["name"] != "青梅", str(spawned))
+    check("spawn_named 也不会建出「青梅」", spawned is None, str(spawned))
+
+    # ── 5e) 私人空间里没有第三人（尤夏的房间、青梅的房间、公寓玄关……）
+    conv_home = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_home)
+    locations.switch_both(app_db, conv_home, "青梅的房间")
+    home_stub = Decide('{"addressed": true, "who": "老板"}')
+    got_home = npc.resolve_addressed(app_db, conv_home, "青梅的房间", "老板，来个煎饼",
+                                     home_stub)
+    check("私人空间里不会冒出 NPC", got_home is None, str(got_home))
+    check("私人空间不花判别 token", home_stub.calls == 0, str(home_stub.calls))
+    check("私人空间没建出任何人", not app_db.get_npcs(conv_home),
+          str(app_db.get_npcs(conv_home)))
+    check("私人空间也不提示现场有谁",
+          npc.present_block(app_db, conv_home, "青梅的房间") == "")
+
+    # ── 5f) 手机里没有 NPC：人不在同一地点，只能发消息
+    conv_phone = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_phone)
+    locations.switch(app_db, conv_phone, "公寓玄关")          # 她在玄关
+    app_db.set_player_location(conv_phone, "青梅的房间")       # 你在自己房间
+    # 库里已经站着一个（历史数据）：也不该在手机里开口
+    ghost = app_db.add_npc(conv_phone, "路人", "路人", "青梅的房间", "")
+    phone_stub = StubLLM()
+    phone_stub.verdict = '{"addressed": true, "who": "路人"}'
+    chat_mod.deepseek = phone_stub
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv_phone, "message": "你在干嘛"})
+        events = sse(r)
+        kinds = [e.get("type") for e in events]
+        check("手机里不出现 npc 事件", "npc" not in kinds, str(kinds))
+        check("手机里还是有她的回复", "done" in kinds, str(kinds))
+        check("手机里她不知道「现场还有」谁",
+              "现场还有" not in phone_stub.stream_prompt, phone_stub.stream_prompt[-200:])
+        check("手机里那条旧 NPC 没有说话",
+              not [m for m in app_db.get_messages(conv_phone) if m["channel"] == "npc"],
+              str([m["channel"] for m in app_db.get_messages(conv_phone)]))
+        check("手机里也没多出新 NPC", len(app_db.get_npcs(conv_phone)) == 1,
+              str([n["name"] for n in app_db.get_npcs(conv_phone)]))
+    finally:
+        chat_mod.deepseek = real
+    app_db.set_npc_status(ghost, "gone")
+
+    # ── 5g) 当面 + 公共场合仍然可以有第三人
+    conv_street = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_street)
+    locations.switch_both(app_db, conv_street, "街上")
+    street_stub = Decide('{"addressed": true, "who": "卖红薯的"}')
+    got_street = npc.resolve_addressed(app_db, conv_street, "街上", "老板，红薯怎么卖",
+                                       street_stub)
+    check("公共场合仍然会生成 NPC",
+          bool(got_street) and got_street["name"] == "卖红薯的", str(got_street))
 
     # ── 6) 手动创建 / 退场
     r = c.post(f"/api/npcs/{conv}", json={"name": "煎饼摊老板娘", "role": "老板娘",

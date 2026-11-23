@@ -40,8 +40,23 @@ PER_LOCATION_CAP = 3
 # 那样就会建出一个叫「尤夏」的 NPC，之后每句都会被它接走。
 RESERVED_NAMES = {
     "你", "您", "我", "她", "他", "它", "你们", "我们", "大家", "对方", "自己",
-    "尤夏", "青梅", "主人", "路人甲", "路人乙",
+    "尤夏", "青梅", "主人", "路人", "路人甲", "路人乙",
 }
+
+# 「家里不站人」：这些地方是两个人待着的地方，不会有陌生人在场搭话。
+# 以前判别的兜底会按地点编一个「路人」，于是青梅的房间里站了个路人，
+# 打手机的时候他还会插一句嘴。私人空间现在完全不参与 NPC。
+_PRIVATE_KEYWORDS = (
+    "房间", "卧室", "床", "浴室", "卫生间", "洗手间", "厕所", "厨房",
+    "客厅", "玄关", "阳台", "宿舍", "家里", "家中", "屋内", "室内",
+)
+
+
+def is_private(location):
+    """这个地点是不是私人空间（只有你们两个人，不会有第三人）"""
+    loc = location or ""
+    return any(k in loc for k in _PRIVATE_KEYWORDS)
+
 # 只用于清理历史数据：把以前被正则误当成称呼建出来的口头禅 NPC 退场。
 # 它不参与任何判断，新 NPC 的名字完全由模型给。
 _EN_INTERJECTIONS = {
@@ -100,6 +115,8 @@ def find_addressed(db, conv_id, location, message):
     要不要新增角色交给 detect_addressed 的模型判断。
     """
     if not NPC_ENABLED or not message:
+        return None
+    if is_private(location):
         return None
     try:
         present = db.get_npcs(conv_id, location=location)
@@ -175,11 +192,10 @@ def _prune(db, conv_id, location):
 def _create(db, conv_id, location, name):
     """按称呼建一个 NPC；同名/同身份已存在就直接复用"""
     name = (name or "").strip()[:12]
-    if not name:
+    # 没有称呼、或者称呼根本不是人（代词、口头禅、路人）→ 不建，
+    # 也不再按地点编一个出来（「路人」就是这么冒出来的）
+    if not name or _is_bogus_name(name):
         return None
-    if name in RESERVED_NAMES:
-        # 这不是第三人（是玩家、她本人或代词）→ 按地点取个默认身份
-        name = _default_name(location)
     role = _role_of(name)
     try:
         present = db.get_npcs(conv_id, location=location)
@@ -198,28 +214,20 @@ def _create(db, conv_id, location, name):
     return db.get_npc(npc_id)
 
 
-def _default_name(location):
-    """判别结果只说了"在对第三人说话"却没给称呼时，按地点猜一个"""
-    loc = location or ""
-    if any(k in loc for k in ("摊", "市场", "集市")):
-        return "摊主"
-    if any(k in loc for k in ("店", "铺", "馆", "吧", "超市", "商场")):
-        return "店员"
-    if any(k in loc for k in ("站", "场", "厅", "银行", "医院", "学校")):
-        return "工作人员"
-    return "路人"
-
-
 def spawn_named(db, conv_id, location, name):
-    """按判别结果给出的称呼生成（称呼可能写在句子中间）"""
-    if not NPC_ENABLED:
+    """按判别结果给出的称呼生成（称呼可能写在句子中间）
+
+    没有称呼就不编人：以前这里会兜底成「路人」，
+    于是只要模型误判一次，房间里就多一个叫「路人」的人站着不走。
+    """
+    if not NPC_ENABLED or is_private(location):
         return None
-    return _create(db, conv_id, location, name or _default_name(location))
+    return _create(db, conv_id, location, name)
 
 
 def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
     """让 NPC 回一两句话；失败返回空串（不打断主流程）"""
-    if not NPC_ENABLED or not npc:
+    if not NPC_ENABLED or not npc or is_private(npc.get("location")):
         return ""
     system = (
         NPC_PROMPT
@@ -325,10 +333,13 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
     """玩家这句话是对谁说的：「先找回现场的」→「再让模型判断要不要新增」。
 
     判断完全由模型做，这里只负责把结论落到名册上：
-    - 句子里提到现场某人的名字 / 上一轮就是他在说话 → 直接找他（不花 token）
-    - 否则问一次模型；模型说"在跟第三人说话"才建人（who 为空则按地点取名）
+    - 私人空间里只有你们两个人 → 一律不计（尤夏房间里不该站着路人）
+    - 句子里提到现场某人的名字 → 直接找他（不花 token）
+    - 否则问一次模型；模型说"在跟第三人说话"**并且给出了称呼**才建人
     """
     if not NPC_ENABLED or not message:
+        return None
+    if is_private(location):
         return None
     found = find_addressed(db, conv_id, location, message)
     if found:
@@ -338,17 +349,20 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
     decision = detect_addressed(db, conv_id, location, message, deepseek, api_key=api_key)
     if not decision or not decision.get("addressed"):
         return None
-    who = decision.get("who") or ""
+    who = (decision.get("who") or "").strip()
     if who:
         existing = db.find_npc(conv_id, who, location)
         if existing:
             return existing
+    else:
+        # 说"在对第三人说话"却没给称呼：不替他编一个（「路人」就是这么来的）
+        return None
     return spawn_named(db, conv_id, location, who)
 
 
 def present_block(db, conv_id, location):
     """给尤夏的世界块用：现场还有谁"""
-    if not NPC_ENABLED:
+    if not NPC_ENABLED or is_private(location):
         return ""
     try:
         present = db.get_npcs(conv_id, location=location)

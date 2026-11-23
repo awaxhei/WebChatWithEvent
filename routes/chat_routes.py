@@ -430,9 +430,13 @@ def _scene_payload(conv_id, api_key):
         view["mood_face"] = MOOD_FACES[MOOD_DEFAULT]
         view["speed"] = AUTONOMY_SPEED_DEFAULT
     # 现场有谁（NPC），前端可以显示"在场：老板"
+    # 只在两个人当面相处的公共场合列出来：手机里、私人空间里都不会有第三人
     try:
-        locs = {view.get("location"), view.get("player_location")}
-        view["npcs"] = [n for n in db.get_npcs(conv_id) if n.get("location") in locs]
+        loc = view.get("location")
+        if view.get("co_located") and not npc.is_private(loc):
+            view["npcs"] = [n for n in db.get_npcs(conv_id) if n.get("location") == loc]
+        else:
+            view["npcs"] = []
     except Exception:
         view["npcs"] = []
     return view
@@ -523,8 +527,12 @@ def chat():
     # 现场有没有玩家正在搭话的 NPC：
     # 「在跟谁说话」只交给模型判断（不再用正则猜句首称呼——以前 "hey?" 会凭空
     # 冒出一个叫 hey 的 NPC）。这里先找回现场的，认不出来就问一次小模型。
+    #
+    # 但只有「当面 + 公共场合」才可能有第三人：
+    # 手机里只有你们两个人，角色房间、公寓玄关这类私人空间也不该站着陌生人。
+    npc_ok = channel == CHAT_CHANNEL and not npc.is_private(player_loc)
     addressed_npc = None
-    if not sticker_row:
+    if not sticker_row and npc_ok:
         addressed_npc = npc.resolve_addressed(db, conv_id, player_loc, user_message,
                                               deepseek, api_key=api_key)
 
@@ -607,8 +615,8 @@ def chat():
     scene_here = world_context.scene_line(db, conv_id, yuxia_loc, now_minutes)
     # 她自己的动作用第二人称单独给，不能混进「最近发生的事」里
     self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
-    # 现场还有谁（煎饼摊老板这类）
-    npcs_here = npc.present_block(db, conv_id, player_loc)
+    # 现场还有谁（煎饼摊老板这类）：手机里不列人
+    npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
     state_block = "" if asleep else state_engine.block(db, conv_id)
     blocks = "\n\n".join(b for b in (world, place, scene_here, self_acts, npcs_here,
