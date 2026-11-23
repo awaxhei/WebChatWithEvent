@@ -12,8 +12,8 @@ android {
         applicationId = "com.yuxia.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 36
-        versionName = "5.4"
+        versionCode = 37
+        versionName = "5.5"
 
         // 只打手机和模拟器需要的 ABI（每个 ABI 都要塞一份 CPython，越少越好）
         // Python 3.12 只支持 64 位，所以不带 armeabi-v7a（Android 8+ 手机基本都是 arm64）

@@ -43,6 +43,15 @@ RESERVED_NAMES = {
     "尤夏", "青梅", "主人", "路人", "路人甲", "路人乙",
 }
 
+# 玩家叫尤夏用的亲昵称呼。判别模型看到「小可爱」这种词，会以为现场真有个叫
+# 小可爱的人——试玩里就因此凭空多出一个叫「小可爱」的 NPC，回了一句
+# 「嗯？叫我干嘛」。这些词永远只可能是她。
+_SWEET_NAMES = {
+    "小可爱", "小美女", "小美人", "小漂亮", "宝贝", "亲爱的", "老婆", "媳妇",
+    "宝宝", "小猫", "猫猫", "小猫咪", "小猫猫", "笨蛋", "傻瓜", "小笨蛋",
+    "小傻瓜", "小东西", "小坏蛋", "小不点", "小尤夏", "夏夏",
+}
+
 # 「家里不站人」：这些地方是两个人待着的地方，不会有陌生人在场搭话。
 # 以前判别的兜底会按地点编一个「路人」，于是青梅的房间里站了个路人，
 # 打手机的时候他还会插一句嘴。私人空间现在完全不参与 NPC。
@@ -68,11 +77,11 @@ _EN_INTERJECTIONS = {
 
 
 def _is_bogus_name(name):
-    """不是"第三人"的名字：口头禅（hey/hi）或者 你/我/尤夏/青梅 这类"""
+    """不是"第三人"的名字：口头禅（hey/hi）、你/我/尤夏这类代词，或叫她的昵称"""
     n = (name or "").strip()
     if not n:
         return False
-    if n in RESERVED_NAMES:
+    if n in RESERVED_NAMES or n in _SWEET_NAMES:
         return True
     return n.isascii() and n.lower() in _EN_INTERJECTIONS
 
@@ -116,13 +125,11 @@ def find_addressed(db, conv_id, location, message):
     """
     if not NPC_ENABLED or not message:
         return None
-    if is_private(location):
-        return None
     try:
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         return None
-    # 先把以前正则误建的口头禅 NPC 退场（历史数据清理）
+    # 先把误建的 NPC 退场（口头禅、代词、叫她的昵称）：不管当时在哪儿建出来的
     kept = []
     for npc in present:
         if _is_bogus_name(npc.get("name")):
@@ -133,6 +140,8 @@ def find_addressed(db, conv_id, location, message):
             continue
         kept.append(npc)
     present = kept
+    if is_private(location):
+        return None
     # 句子里提到了现场某个人的名字 / 身份 → 就是在跟他说
     for npc in present:
         if _hit(message, npc.get("name")):
@@ -339,23 +348,28 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
     """
     if not NPC_ENABLED or not message:
         return None
-    if is_private(location):
-        return None
+    # 先走一遍「找回现场的」，它顺手把误建的 NPC 退场（昵称、口头禅、代词）
     found = find_addressed(db, conv_id, location, message)
     if found:
         return found
-    if deepseek is None:
+    if deepseek is None or is_private(location):
         return None
     decision = detect_addressed(db, conv_id, location, message, deepseek, api_key=api_key)
     if not decision or not decision.get("addressed"):
         return None
     who = (decision.get("who") or "").strip()
-    if who:
-        existing = db.find_npc(conv_id, who, location)
-        if existing:
-            return existing
-    else:
+    if not who:
         # 说"在对第三人说话"却没给称呼：不替他编一个（「路人」就是这么来的）
+        return None
+    existing = db.find_npc(conv_id, who, location)
+    if existing:
+        return existing
+    # 称呼是她的昵称（「小可爱」「宝贝」）：这是在对她说话，不是第三人
+    if _is_bogus_name(who):
+        return None
+    # 这句话里已经点了她的名字，又没对上现场的谁 → 当成在跟她说话。
+    # 判别模型看过上下文，但「嘿嘿尤夏小美女」这种还是会被它当成在叫别人。
+    if "尤夏" in message:
         return None
     return spawn_named(db, conv_id, location, who)
 

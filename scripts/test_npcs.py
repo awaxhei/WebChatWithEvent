@@ -286,6 +286,45 @@ def main():
     check("公共场合仍然会生成 NPC",
           bool(got_street) and got_street["name"] == "卖红薯的", str(got_street))
 
+    # ── 5h) 玩家叫尤夏的昵称，不该变成 NPC（试玩里冒出过一个「小可爱」）
+    conv_sweet = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_sweet)
+    locations.switch_both(app_db, conv_sweet, "食堂")
+    for word, message in (("小可爱", "小可爱"), ("小美女", "嘿嘿尤夏小美女"),
+                          ("宝贝", "宝贝，张嘴"), ("老婆", "老婆我回来了")):
+        sweet = Decide(json.dumps({"addressed": True, "who": word}, ensure_ascii=False))
+        got_sweet = npc.resolve_addressed(app_db, conv_sweet, "食堂", message, sweet)
+        names = [n["name"] for n in app_db.get_npcs(conv_sweet)]
+        check(f"「{message}」不会建出叫「{word}」的 NPC", got_sweet is None and not names,
+              str(names))
+    sweet_stub = Decide('{"addressed": true, "who": "小可爱"}')
+    check("昵称判别不会真的花掉一次创建",
+          npc.resolve_addressed(app_db, conv_sweet, "食堂", "小可爱", sweet_stub) is None)
+
+    # 点了她的名字、又叫了别的称呼 → 当成在跟她说话，不建人
+    named = Decide('{"addressed": true, "who": "学姐"}')
+    check("句子里点了尤夏就不再建第三人",
+          npc.resolve_addressed(app_db, conv_sweet, "食堂", "尤夏，学姐那边在排队吗",
+                                named) is None)
+    # 但现场真有第三人的时候，点名找他还是可以的
+    other_stub = Decide('{"addressed": true, "who": "打饭阿姨"}')
+    got_other = npc.resolve_addressed(app_db, conv_sweet, "食堂", "阿姨，来一份番茄炒蛋",
+                                      other_stub)
+    check("公共场合叫到别人仍然会生成", bool(got_other) and got_other["name"] == "打饭阿姨",
+          str(got_other))
+
+    # 库里残留的昵称 NPC 会被退场
+    stale_sweet = app_db.add_npc(conv_sweet, "小可爱2", "小可爱2", "食堂", "")
+    conn_sweet = app_db.add_npc(conv_sweet, "小美女", "小美女", "食堂", "")
+    npc.find_addressed(app_db, conv_sweet, "食堂", "嗯")
+    row_gone = app_db.get_npc(conn_sweet)
+    check("库里残留的「小美女」会被退场",
+          bool(row_gone) and row_gone["status"] == "gone",
+          str(dict(row_gone) if row_gone else None))
+    check("正常残留下来的还在",
+          bool(app_db.get_npc(stale_sweet)) and app_db.get_npc(stale_sweet)["status"] == "active",
+          str(dict(app_db.get_npc(stale_sweet))))
+
     # ── 6) 手动创建 / 退场
     r = c.post(f"/api/npcs/{conv}", json={"name": "煎饼摊老板娘", "role": "老板娘",
                                           "location": "煎饼摊"})
