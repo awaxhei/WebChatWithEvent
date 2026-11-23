@@ -192,6 +192,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         if (role == "user") meEntry(content)
                         else Entry.Her(Model.stripSpeaker(content), phone = true))
                     "state" -> lastState = content
+                    "action" -> entries.add(Entry.Action(content))
                     "npc" -> {
                         val npc = runCatching { JSONObject(content) }.getOrNull()
                         entries.add(
@@ -448,6 +449,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         streamRaw = ""
         viewModelScope.launch { withContext(Dispatchers.IO) { noteSeen() } }
         loadEvents()
+        // 世界侧是另一个流：她的动作与神态、随机事件、事件面板都在里面。
+        // 网页一直在跑这个流，App 以前根本没接，所以手机上永远看不到动作描写。
+        viewModelScope.launch {
+            try {
+                Api.streamAtmosphere(app, conv, lastMsgCount) { ev ->
+                    viewModelScope.launch(Dispatchers.Main) { applyEvent(ev, false) }
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** 故事推进模式：不发"我"的气泡，只提示一句，然后让她接着演 */
@@ -481,9 +492,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 Entry.Npc(ev.optString("name").ifBlank { "路人" }, ev.optString("content"))
             )
             "world_narration" -> appendEntry(phone, Entry.Narration(ev.optString("content")))
+            // 她的「动作」：这一轮她自己写下的动作，按发生顺序落在时间线上
+            "yuxia_action" -> {
+                val text = ev.optString("content")
+                if (text.isNotBlank()) appendEntry(false, Entry.Action(text))
+            }
             "yuxia_state" -> {
                 val text = ev.optString("content")
                 if (text.isNotBlank()) appendEntry(phone, Entry.StateDesc(text))
+            }
+            "scene_discovered" -> {
+                val where = ev.optString("location")
+                if (where.isNotBlank()) {
+                    appendEntry(false, Entry.Narration(
+                        (if (ev.optBoolean("created")) "发现新场景：" else "进入场景：") + where))
+                }
+            }
+            "story_summary" -> {
+                val summary = ev.optString("content")
+                if (summary.isNotBlank()) state = state.copy(storySummary = summary)
             }
             "autonomy" -> handleAutonomy(ev)
             "event_update" -> {

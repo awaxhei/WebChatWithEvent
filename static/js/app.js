@@ -643,6 +643,8 @@ class ChatManager {
                             this.storyTime = data.content;
                             if (window.emotionAssistant && window.emotionAssistant.eventPanel)
                                 window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                        } else if (data.type === 'yuxia_action') {
+                            if (data.content) this._addYuxiaAction(data.content);
                         } else if (data.type === 'scene_changed' && data.scene) {
                             this.applyScene(data.scene);
                         } else if (data.type === 'done') {
@@ -808,6 +810,8 @@ class ChatManager {
                             this._addNpcBubble(data.name, data.content);
                         } else if (data.type === 'yuxia_state') {
                             this._renderYuxiaState(data.content);
+                        } else if (data.type === 'yuxia_action') {
+                            this._addYuxiaAction(data.content);
                         } else if (data.type === 'scene_discovered') {
                             this._addWorldNarration(
                                 (data.created ? '发现新场景：' : '进入场景：') + data.location,
@@ -1048,6 +1052,8 @@ class ChatManager {
                     const ch = msg.channel || 'chat';
                     if (ch === 'state') {
                         this._renderYuxiaState(msg.content);   // 只保留最后一条神态描写
+                    } else if (ch === 'action') {
+                        this._addYuxiaAction(msg.content);     // 动作逐条按位置显示
                     } else if (ch === 'npc') {
                         let name = '路人', text = msg.content;
                         try {
@@ -1138,6 +1144,19 @@ class ChatManager {
     }
 
     _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+    /** 她的动作：居中的斜体旁白，逐条保留（和「她说的」分开，读起来像描写） */
+    _addYuxiaAction(text) {
+        if (!text) return;
+        const row = document.createElement('div');
+        row.className = 'message-row yuxia-action-row';
+        const box = document.createElement('div');
+        box.className = 'yuxia-action';
+        box.textContent = text;
+        row.appendChild(box);
+        this.messagesContainer.appendChild(row);
+        AnimationEngine.scrollToBottom(this.messagesContainer);
+    }
 
     _renderYuxiaState(text) {
         if (!text) return;

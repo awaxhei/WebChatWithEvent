@@ -874,6 +874,16 @@ html, body {
     animation: fadeIn 0.4s ease-out;
 }
 
+/* 她的动作：居中斜体，逐条保留，读起来像描写而不是台词 */
+.yuxia-action-row { justify-content: center; padding: 2px 24px; }
+.yuxia-action {
+    max-width: 78%;
+    font-size: 12px; line-height: 1.7; color: #94a3b8;
+    font-style: italic; letter-spacing: 0.3px;
+    text-align: center;
+    animation: fadeIn 0.4s ease-out;
+}
+
 /* ============================================================
    v4：手机面板入口 + v7：暂停自动推进
    放在标题栏右上角（不落在聊天内容上，避免遮挡消息）

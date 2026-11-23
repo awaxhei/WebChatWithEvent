@@ -49,6 +49,9 @@ sealed interface Entry {
     /** 两人的动作神态描写 */
     data class StateDesc(val text: String) : Entry
 
+    /** 她这一轮自己做的动作（模型给的「动作」字段），逐条按时间显示 */
+    data class Action(val text: String) : Entry
+
     /** 现场 NPC 说的话 */
     data class Npc(val name: String, val text: String) : Entry
 }

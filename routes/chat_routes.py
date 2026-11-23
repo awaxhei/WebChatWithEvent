@@ -669,7 +669,10 @@ def chat():
             yield _sse({"type": "chunk", "content": chunk})
 
         _mark("AI A 输出完成")
-        _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel)
+        actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel)
+        # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
+        for act in actions or []:
+            yield _sse({"type": "yuxia_action", "content": act})
         yield _sse({"type": "done", "conv_id": conv_id, "msg_count": msg_count,
                     "is_push_cmd": is_push_cmd, "channel": channel,
                     "co_located": co_located, "story_time": story_time})
@@ -678,10 +681,13 @@ def chat():
 
 
 def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL):
-    """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库"""
+    """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
+
+    返回这一轮写下的「动作」列表，调用方可以立刻推给前端。
+    """
     clean = (full or "").strip()
     if not clean:
-        return
+        return []
 
     objects = _extract_json_objects(clean)
     if not objects:
@@ -695,7 +701,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         parts = [_strip_speaker(p) for p in re.split(r"[\r\n]+", clean)]
         parts = [p for p in parts if p]
         if not parts:
-            return
+            return []
         is_error = parts[0].startswith(("API 错误", "错误:", "无法连接", "[生成失败"))
         for part in parts[:4]:
             if can_speak:
@@ -709,7 +715,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if not is_error:
             memory_engine.remember_assistant_message(
                 db, conv_id, " ".join(parts)[:200], now_minutes)
-        return
+        return []
 
     speech, stickers_used, phone_msgs, actions = [], [], [], []
     mood = ""
@@ -765,10 +771,11 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     for msg in phone_msgs:
         db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc)
 
-    # 她的动作：写进旁白通道（前端渲染成斜体旁白），不进对话框。
-    # 这样她可以"只做一个动作、不说话"，也满足"不是每次都要以对话回复"。
+    # 她的动作：写进独立的 action 通道（前端渲染成斜体旁白），不进对话框。
+    # 以前和「神态」共用 state 通道，而前端对 state 只保留最后一条，
+    # 于是动作写进库里却几乎看不到——尤其手机 App。
     for act in actions:
-        db.add_message(conv_id, "assistant", act, channel="state", scene=yuxia_loc)
+        db.add_message(conv_id, "assistant", act, channel="action", scene=yuxia_loc)
 
     readable = " ".join(speech + [f"（手机）{m}" for m in phone_msgs]).strip()
     if readable:
@@ -779,6 +786,8 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         db.set_last_yuxia_at(conv_id, time.time(), PHONE_CHANNEL)
     elif speech or stickers_used or actions:
         db.set_last_yuxia_at(conv_id, time.time(), CHAT_CHANNEL)
+
+    return actions
 
 
 # ──────────────────────────────────────────────

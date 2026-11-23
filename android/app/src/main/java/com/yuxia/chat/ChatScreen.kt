@@ -461,6 +461,18 @@ private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ 
             color = YuxiaColors.InkSoft,
         )
 
+        // 她的动作：居中的斜体旁白，和「她说的」分开，读起来像描写而不是台词
+        is Entry.Action -> Text(
+            entry.text,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+            fontStyle = FontStyle.Italic,
+            color = YuxiaColors.InkSoft,
+            textAlign = TextAlign.Center,
+        )
+
         is Entry.Npc -> NpcBubble(entry.name, entry.text)
     }
 }

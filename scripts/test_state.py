@@ -155,13 +155,16 @@ def main():
         conv2, '{"对白": "唔姆。还行。", "动作": "把外套往他那边挪了挪", "心情": "平静"}',
         True, "公寓客厅", 600, "chat")
     chat_rows = [m for m in app_db.get_messages(conv2) if m["channel"] == "chat"]
-    state_rows = [m for m in app_db.get_messages(conv2) if m["channel"] == "state"]
+    action_rows = [m for m in app_db.get_messages(conv2) if m["channel"] == "action"]
     check("两句对白落成两条消息", len(chat_rows) == 2, str([m["content"] for m in chat_rows]))
     check("每条都是独立 JSON", all(m["content"].startswith("{") for m in chat_rows),
           str([m["content"] for m in chat_rows]))
-    check("动作进旁白通道、不进对话框",
-          len(state_rows) == 1 and "外套" in state_rows[0]["content"],
-          str([m["content"] for m in state_rows]))
+    check("动作进独立的动作通道、不进对话框",
+          len(action_rows) == 1 and "外套" in action_rows[0]["content"],
+          str([m["content"] for m in action_rows]))
+    check("动作不再混进神态通道",
+          not [m for m in app_db.get_messages(conv2) if m["channel"] == "state"],
+          str([m["content"] for m in app_db.get_messages(conv2) if m["channel"] == "state"]))
     check("心情只挂在第一条上",
           "心情" in chat_rows[0]["content"] and "心情" not in chat_rows[1]["content"],
           str([m["content"] for m in chat_rows]))
@@ -174,10 +177,33 @@ def main():
                             True, "公寓客厅", 600, "chat")
     check("可以只做动作不回答",
           not [m for m in app_db.get_messages(conv3) if m["channel"] == "chat"]
-          and [m for m in app_db.get_messages(conv3) if m["channel"] == "state"],
+          and [m for m in app_db.get_messages(conv3) if m["channel"] == "action"],
           str([(m["channel"], m["content"]) for m in app_db.get_messages(conv3)]))
     check("动作那一轮也能改状态", app_db.get_yuxia_state(conv3) == "饥饿",
           app_db.get_yuxia_state(conv3))
+
+    # ── 4b) 动作要当场推给前端（手机 App 就靠这个事件显示旁白）
+    conv_act = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_act)
+    locations.switch_both(app_db, conv_act, "公寓客厅")
+    try:
+        act_llm = StubLLM(reply='{"对白": "嗯。", "动作": "把毯子往她那边拉了拉"}')
+        chat_mod.deepseek = act_llm
+        r = c.post("/api/chat", json={"conversation_id": conv_act, "message": "冷吗"})
+        evs = sse(r.data.decode("utf-8"))
+        acts = [e for e in evs if e.get("type") == "yuxia_action"]
+        check("动作在流里当场发出来", bool(acts) and "毯子" in acts[0].get("content", ""),
+              str([e for e in evs if e.get("type") == "yuxia_action"])[:160])
+        check("动作事件在 done 之前",
+              [e.get("type") for e in evs].index("yuxia_action")
+              < [e.get("type") for e in evs].index("done"),
+              str([e.get("type") for e in evs]))
+        hist = c.get(f"/api/history/{conv_act}").get_json() or {}
+        chips = [m for m in (hist.get("messages") or []) if m.get("channel") == "action"]
+        check("历史里动作单独一条（不跟神态混）",
+              len(chips) == 1 and "毯子" in chips[0]["content"], str(chips)[:160])
+    finally:
+        chat_mod.deepseek = real
 
     # ── 5) 随机事件可以改变她的状态（忙碌 / 感冒 / 发烧），并且会自然过期
     from services import event_engine
