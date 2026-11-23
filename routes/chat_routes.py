@@ -24,7 +24,7 @@ from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
     autonomy, character_writer, context_writer, memory_engine, npc, scene_watcher, time_keeper,
-    world_context,
+    world_context, state_engine,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
@@ -103,6 +103,25 @@ def _split_long(text, limit=24):
         out.append(buf)
     return out or [text]
 
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
+
+
+def _bubble_parts(text, limit=24, max_parts=5):
+    """一句回复拆成几个气泡：她的多个短句应该一条一条发，而不是挤在一起
+
+    - 先按句号/问号/感叹号切开（省略号不切，那是停顿）
+    - 单段还是太长（> limit）再按逗号硬拆
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    out = []
+    for part in (p.strip() for p in _SENT_SPLIT_RE.split(text)):
+        if not part:
+            continue
+        out.extend(_split_long(part, limit=limit))
+    return (out or [text])[:max_parts]
 
 def _strip_speaker(text):
     """去掉台词开头的「尤夏：」这类前缀（只剥一层，不动正文）"""
@@ -544,6 +563,18 @@ def chat():
                                    force=moved or bool(keyword_jump))
     _mark("自然情境撰写")
 
+    # 她此刻的状态（清醒 / 睡眠 / 迷糊 / 兴奋 / 饥饿 / 饱腹）：
+    # 先按时间规则落一次（到点就睡、天亮迷糊），再把当前状态写进提示词
+    state_engine.apply_rules(db, conv_id, now_minutes)
+    asleep = state_engine.is_asleep(db, conv_id)
+    woke_up = False
+    if asleep and user_message:
+        # 睡着时不会有反应；但被叫醒是例外——单独问一次小模型（只在睡着时花这次钱）
+        if state_engine.wake_attempt(deepseek, user_message, api_key=api_key):
+            state_engine.set_state(db, conv_id, "迷糊")
+            asleep = False
+            woke_up = True
+
     channel_rule = (
         "你们现在在同一个地方，可以当面说话。当面的对白要短、平、少。"
         if can_speak else
@@ -563,7 +594,10 @@ def chat():
     self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
     # 现场还有谁（煎饼摊老板这类）
     npcs_here = npc.present_block(db, conv_id, player_loc)
-    blocks = "\n\n".join(b for b in (world, place, scene_here, self_acts, npcs_here) if b)
+    # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
+    state_block = "" if asleep else state_engine.block(db, conv_id)
+    blocks = "\n\n".join(b for b in (world, place, scene_here, self_acts, npcs_here,
+                                     state_block) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
@@ -579,6 +613,20 @@ def chat():
         if moved:
             yield _sse({"type": "scene_changed",
                         "scene": _scene_payload(conv_id, api_key)})
+
+        # 她睡着了：不调模型、不回复，只留一句旁白（这是设定：睡眠时没有反应）
+        if asleep:
+            note = "尤夏睡得很沉，没有反应。"
+            db.add_message(conv_id, "assistant", note, channel="state", scene=yuxia_loc)
+            yield _sse({"type": "state", "content": note})
+            yield _sse({"type": "done", "conv_id": conv_id, "msg_count": msg_count,
+                        "channel": channel, "co_located": co_located,
+                        "story_time": story_time, "sleeping": True})
+            return
+
+        if woke_up:
+            yield _sse({"type": "state",
+                        "content": "尤夏迷迷糊糊地睁开眼，还没完全醒。"})
 
         # 先说 NPC 的话：她得等人家回完，再接话才自然
         if addressed_npc:
@@ -640,16 +688,20 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
                 db, conv_id, " ".join(parts)[:200], now_minutes)
         return
 
-    speech, stickers_used, phone_msgs = [], [], []
+    speech, stickers_used, phone_msgs, actions = [], [], [], []
     mood = ""
     for obj in objects:
         if obj.get("对白") and can_speak:
-            # 一条对白超过 24 字就按句号拆开：她要的是短句，模型偶尔会写长
-            speech.extend(_split_long(_strip_speaker(str(obj["对白"]))))
+            # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆
+            speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
+        if obj.get("动作"):
+            # 她可以用动作代替说话：动作走旁白通道，不进对话框
+            actions.extend(_bubble_parts(_strip_speaker(str(obj["动作"]))))
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
-            phone_msgs.extend(_split_long(_strip_speaker(str(obj["消息"])), limit=40))
+            phone_msgs.extend(_bubble_parts(_strip_speaker(str(obj["消息"])), limit=40))
+        state_engine.apply_reply(db, conv_id, obj)
         if not mood and obj.get("心情"):
             mood = str(obj["心情"]).strip()[:8]
 
@@ -690,6 +742,11 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     for msg in phone_msgs:
         db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc)
 
+    # 她的动作：写进旁白通道（前端渲染成斜体旁白），不进对话框。
+    # 这样她可以"只做一个动作、不说话"，也满足"不是每次都要以对话回复"。
+    for act in actions:
+        db.add_message(conv_id, "assistant", act, channel="state", scene=yuxia_loc)
+
     readable = " ".join(speech + [f"（手机）{m}" for m in phone_msgs]).strip()
     if readable:
         memory_engine.remember_assistant_message(db, conv_id, readable, now_minutes)
@@ -697,7 +754,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     # 记下她这次说话的通道与时刻：手机消息要给玩家更多时间，别转头就开始干活
     if phone_msgs:
         db.set_last_yuxia_at(conv_id, time.time(), PHONE_CHANNEL)
-    elif speech or stickers_used:
+    elif speech or stickers_used or actions:
         db.set_last_yuxia_at(conv_id, time.time(), CHAT_CHANNEL)
 
 

@@ -366,7 +366,7 @@ private fun SceneStrip(s: UiState) {
                     s.sceneDesc,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 4,
                 )
             }
         } else {
@@ -376,14 +376,14 @@ private fun SceneStrip(s: UiState) {
                 "你在${s.playerLocation}：" + s.sceneDesc.ifBlank { "（正在读取…）" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = 4,
             )
             Spacer(Modifier.height(3.dp))
             Text(
                 "尤夏在${s.location}：" + s.yuxiaDesc.ifBlank { "（正在读取…）" },
                 style = MaterialTheme.typography.bodySmall,
                 color = YuxiaColors.InkFaint,
-                maxLines = 2,
+                maxLines = 4,
             )
         }
     }

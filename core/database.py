@@ -180,6 +180,9 @@ class ChatDB:
                 ("yuxia_mood", "TEXT DEFAULT ''"),
                 # v8：玩家可调的行动速度 1..5（乘在等待期上，上限 20 秒）
                 ("speed", "INTEGER DEFAULT 3"),
+                # v9：她此刻的状态（清醒 / 睡眠 / 迷糊 / 兴奋 / 饥饿 / 饱腹）
+                # 睡眠时她不会有反应；不同状态说话风格不同
+                ("yuxia_state", "TEXT DEFAULT ''"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -712,6 +715,16 @@ class ChatDB:
         return int(value or default)
 
     # ----- v7：她最后一次说话（用于"先等玩家，等不及了才行动"） -----
+    # ----- v9：她的状态（清醒 / 睡眠 / 迷糊 / 兴奋 / 饥饿 / 饱腹）-----
+    def set_yuxia_state(self, conv_id, state):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET yuxia_state=? WHERE id=?", (state, conv_id))
+
+    def get_yuxia_state(self, conv_id, default=""):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT yuxia_state FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+        return ((row["yuxia_state"] or default) if row else default)
     def set_last_yuxia_at(self, conv_id, ts, channel="chat"):
         with self._get_conn() as conn:
             conn.execute("UPDATE conversations SET last_yuxia_at=?, last_yuxia_channel=? WHERE id=?",
