@@ -10,6 +10,7 @@
 """
 import json
 import os
+import random
 import re
 import time
 
@@ -106,6 +107,19 @@ def _split_long(text, limit=24):
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
 
+
+# 睡着时被打扰：极小的一点反应（不装死，也不醒）
+_SLEEP_NOTES = (
+    "尤夏在被子里动了动，没有睁眼。",
+    "被子往上拉了拉，她把自己埋得更深。",
+    "尤夏含糊地哼了一声，像是听见了，又不像。",
+    "她把脸埋进枕头里，呼吸没有乱。",
+)
+
+
+def _sleep_note():
+    """睡眠中的极小反应：一句旁白，不产生对话气泡"""
+    return random.choice(_SLEEP_NOTES)
 
 def _bubble_parts(text, limit=24, max_parts=5):
     """一句回复拆成几个气泡：她的多个短句应该一条一条发，而不是挤在一起
@@ -614,9 +628,9 @@ def chat():
             yield _sse({"type": "scene_changed",
                         "scene": _scene_payload(conv_id, api_key)})
 
-        # 她睡着了：不调模型、不回复，只留一句旁白（这是设定：睡眠时没有反应）
+        # 她睡着了：不调对话模型，但给一个极小的反应（翻身、哼一声），不装死
         if asleep:
-            note = "尤夏睡得很沉，没有反应。"
+            note = _sleep_note()
             db.add_message(conv_id, "assistant", note, channel="state", scene=yuxia_loc)
             yield _sse({"type": "state", "content": note})
             yield _sse({"type": "done", "conv_id": conv_id, "msg_count": msg_count,

@@ -117,8 +117,14 @@ def main():
         check("睡着时标记 sleeping", done.get("sleeping") is True, str(done)[:120])
         check("睡着时不调用对话模型（省额度）", llm.streamed == 0, str(llm.streamed))
         states = [m for m in app_db.get_messages(conv) if m["channel"] == "state"]
-        check("只留一句旁白", len(states) == 1 and "没有反应" in states[0]["content"],
+        # 睡着也要有极小反应：一句旁白，但绝不产生对话气泡
+        check("睡着时留一句极小反应的旁白",
+              len(states) == 1 and states[0]["content"] in chat_mod._SLEEP_NOTES,
               str([m["content"] for m in states]))
+        chat_rows = [m for m in app_db.get_messages(conv)
+                     if m["channel"] in ("chat", "phone") and m["role"] == "assistant"]
+        check("睡着时不产生对话气泡", not chat_rows,
+              str([(m["channel"], m["content"]) for m in chat_rows]))
         check("睡着时状态没被改掉", app_db.get_yuxia_state(conv) == "睡眠")
 
         # ── 3) 被叫醒 → 迷糊 + 正常回复
