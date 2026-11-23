@@ -1,8 +1,6 @@
 package com.yuxia.chat
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -74,34 +72,16 @@ private val Light = lightColorScheme(
     scrim = Color(0x336B5F72),
 )
 
-// 深色模式给一套同色系的低对比版本：夜里不刺眼，但仍是粉紫调
-private val Dark = darkColorScheme(
-    primary = Color(0xFFC7B8E4),
-    onPrimary = Color(0xFF2F2740),
-    primaryContainer = Color(0xFF463A5E),
-    onPrimaryContainer = Color(0xFFEDE6F7),
-    secondary = Color(0xFFF3B7C6),
-    onSecondary = Color(0xFF4A2C35),
-    secondaryContainer = Color(0xFF5A3A45),
-    onSecondaryContainer = Color(0xFFFFE4EC),
-    tertiary = Color(0xFFB9E2D3),
-    background = Color(0xFF1A1720),
-    onBackground = Color(0xFFEDE7EE),
-    surface = Color(0xFF221E28),
-    onSurface = Color(0xFFEDE7EE),
-    surfaceVariant = Color(0xFF2E2833),
-    onSurfaceVariant = Color(0xFFBFB5C4),
-    outline = Color(0xFF554C5C),
-    outlineVariant = Color(0xFF3A3340),
-    error = Color(0xFFE8A0A9),
-    inverseSurface = Color(0xFFEDE7EE),
-    inverseOnSurface = Color(0xFF2A2430),
-)
-
+// 这个应用只有一套配色：浅粉底 + 灰紫字。
+//
+// 之前按系统深色模式切了一套深色 scheme，但页面里的底色、气泡、卡片是直接写死的浅色，
+// 只有 Material 组件跟着深色走，于是深色手机上会出现一块块全黑的地方。
+// 与其把几十处写死的浅色都改成可切换的，不如认定「这就是浅色 app」：
+// 系统开深色也不跟随，整屏始终是同一套颜色。
 @Composable
 fun YuxiaTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) Dark else Light,
+        colorScheme = Light,
         content = content,
     )
 }

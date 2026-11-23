@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 淡粉白：和 Compose 主题里的 YuxiaColors.Background 保持一致 -->
+    <!-- 淡粉白：和 Compose 主题里的 YuxiaColors.Background 保持一致。
+         整套界面固定浅色，系统开深色模式也不跟随——否则只有系统控件变黑，页面还是浅的。 -->
     <style name="Theme.Yuxia" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">#FFF8FA</item>
         <item name="android:navigationBarColor">#FFF8FA</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">#FFF8FA</item>
+        <!-- 系统给浅色栏加的对比遮罩会让底栏发灰，这里关掉 -->
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <!-- 不允许系统「强制深色」把这套浅色界面反色 -->
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:colorEdgeEffect">#F2A3B8</item>
     </style>
 </resources>
