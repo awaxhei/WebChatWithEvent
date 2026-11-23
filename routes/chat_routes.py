@@ -619,8 +619,10 @@ def chat():
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
     state_block = "" if asleep else state_engine.block(db, conv_id)
-    blocks = "\n\n".join(b for b in (world, place, scene_here, self_acts, npcs_here,
-                                     state_block) if b)
+    # 她自己的动作放在最后（紧挨着格式提醒）：模型对末尾最敏感，
+    # 不然它会把刚做完的动作忘掉，一会儿被子一会儿椅子。
+    blocks = "\n\n".join(b for b in (world, place, scene_here, npcs_here,
+                                     state_block, self_acts) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"

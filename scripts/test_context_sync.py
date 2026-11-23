@@ -233,8 +233,10 @@ def main():
     app_db.push_autonomy(conv6, {"action": "act", "text": "尤夏把灶台擦了一遍",
                                  "at": 1.0, "at_minutes": 426})
     acts_block = world_context.self_actions_block(app_db, conv6, 430)
-    check("自己的动作用「你刚才做了」单独给", "你刚才做了" in acts_block and "尤夏" not in acts_block,
-          acts_block)
+    check("自己的动作单独给成「你刚才做的动作」",
+          "你刚才做的动作" in acts_block and "尤夏" not in acts_block, acts_block)
+    check("动作接着说的要求也写进去了",
+          "不要换成另一个名词" in acts_block, acts_block)
 
     # ── 8) 对话提示词里带上「你刚才做了」
     llm2 = CaptureLLM()
@@ -244,10 +246,14 @@ def main():
         body = r.data.decode("utf-8")   # 必须消费流，生成器才会真正跑起来
         check("聊天接口正常返回（第二人称场景）", r.status_code == 200 and '"type": "done"' in body,
               str(r.status_code))
-        check("提示词含「你刚才做了」", "你刚才做了" in llm2.system_prompt,
-              llm2.system_prompt[:400])
+        prompt = llm2.system_prompt
+        check("提示词含「你刚才做的动作」", "你刚才做的动作" in prompt, prompt[:400])
         check("提示词里她自己的动作不再是第三人称",
-              "尤夏把灶台擦了一遍" not in llm2.system_prompt)
+              "尤夏把灶台擦了一遍" not in prompt)
+        # 动作块放在提示词最后（紧挨格式提醒）：放中间模型会忘掉，出现被子椅子打架
+        tail = prompt[prompt.find("你刚才做的动作"):] if "你刚才做的动作" in prompt else ""
+        check("动作块在提示词末尾", bool(tail) and "【格式】" in tail,
+              tail[-160:] or prompt[-160:])
     finally:
         chat_mod.deepseek = real
 

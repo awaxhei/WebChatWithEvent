@@ -540,7 +540,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 applyScene(ev.optJSONObject("scene"))
             }
             "act" -> if (ev.optBoolean("visible", true) && ev.optString("content").isNotBlank()) {
-                appendEntry(false, Entry.Narration(ev.optString("content")))
+                // 这是她自己动手做的事，不是「世界」发生的事：用动作旁白显示
+                appendEntry(false, Entry.Action(ev.optString("content")))
             }
             else -> {
                 val text = ev.optString("content")
