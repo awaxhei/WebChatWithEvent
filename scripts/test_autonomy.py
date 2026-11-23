@@ -376,6 +376,32 @@ def main():
           and db.get_player_location(conv24) == "厨房",
           f"{db.get_current_location(conv24)} / {db.get_player_location(conv24)}")
 
+    # 25) /api/idle 的返回里必须写清"她自己换到哪儿了"
+    #     手机端就是靠 location 显示「尤夏去了X」的；以前这条字段没人校验，
+    #     Android 那边也没写分支，结果她挪了地方屏幕上什么都不显示
+    from core.auth import generate_token
+    conv25 = fresh()
+    client = app.test_client()
+    client.set_cookie("auth_token", generate_token(db.get_user("awaxhei")["id"]))
+    real_maybe_act = autonomy.maybe_act
+    try:
+        for action, label in (("move", "尤夏去了厨房"), ("lead", "尤夏拉着你去了厨房")):
+            autonomy.maybe_act = lambda *a, _act=action, **kw: {
+                "action": _act, "text": "", "location": "厨房",
+                "channel": "", "visible": True}
+            payload = client.post(f"/api/idle/{conv25}").get_json() or {}
+            check(f"idle 的 {action} 带上目标地点",
+                  payload.get("action") == action and payload.get("location") == "厨房",
+                  str(payload))
+            check(f"idle 的 {action} 带上场景（前端好直接换）",
+                  isinstance(payload.get("scene"), dict), str(payload.get("scene")))
+            # 前端拼出来的提示语（与 App/网页一致）
+            text = (f"尤夏去了{payload.get('location')}" if action == "move"
+                    else f"尤夏拉着你去了{payload.get('location')}")
+            check(f"{action} 能拼出「{label}」", text == label, text)
+    finally:
+        autonomy.maybe_act = real_maybe_act
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

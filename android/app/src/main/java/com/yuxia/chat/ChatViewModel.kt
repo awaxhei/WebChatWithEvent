@@ -504,7 +504,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun handleAutonomy(ev: JSONObject) {
         when (ev.optString("action")) {
             "move" -> {
-                appendEntry(false, Entry.Narration("尤夏走开了"))
+                // 服务端已经把"尤夏去了X"写好了，用它的；没有再退回泛泛的一句
+                appendEntry(false, Entry.Narration(ev.optString("content").ifBlank { "尤夏走开了" }))
                 applyScene(ev.optJSONObject("scene"))
             }
             "lead" -> {
@@ -655,7 +656,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val action = res.optString("action")
                 val scene = res.optJSONObject("scene")
                 if (scene != null) applyScene(scene)
+                val where = res.optString("location").trim()
                 when (action) {
+                    // 她自己换地方：以前这里没有分支，只有顶部的场景名悄悄变了，
+                    // 屏幕上什么都没发生——看着就像"她根本没动"
+                    "move" -> appendEntry(
+                        false,
+                        Entry.Narration(if (where.isNotEmpty()) "尤夏去了$where" else "尤夏走开了"),
+                    )
+                    "lead" -> appendEntry(
+                        false,
+                        Entry.Narration(if (where.isNotEmpty()) "尤夏拉着你去了$where" else "尤夏拉着你走了"),
+                    )
                     "act" -> if (res.optBoolean("visible", true) && res.optString("text").isNotBlank()) {
                         appendEntry(false, Entry.Narration(res.optString("text")))
                     }

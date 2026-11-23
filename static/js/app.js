@@ -1971,7 +1971,7 @@ class EmotionAssistant {
                 return;
             }
             if (data.action === 'move') {
-                cm._addWorldNarration('尤夏走开了', 'low');
+                cm._addWorldNarration(data.location ? '尤夏去了' + data.location : '尤夏走开了', 'low');
                 if (data.scene) cm.applyScene(data.scene);
             } else if (data.action === 'lead') {
                 cm._addWorldNarration(`尤夏拉着你去了${data.location || '别处'}`, 'low');
