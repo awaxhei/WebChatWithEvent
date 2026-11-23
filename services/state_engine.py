@@ -14,7 +14,7 @@
 """
 from config import DEEPSEEK_THINKING
 
-STATES = ("清醒", "睡眠", "迷糊", "兴奋", "饥饿", "饱腹")
+STATES = ("清醒", "睡眠", "迷糊", "兴奋", "饥饿", "饱腹", "忙碌", "感冒", "发烧")
 
 # 每个状态给模型的"怎么说话"（只在她醒着时注入提示词）
 STYLE = {
@@ -26,7 +26,13 @@ STYLE = {
     "饥饿": "饿着的时候注意力会被吃的勾走：先想到吃的，再回答问题，句子更短。"
             "「饿了」这件事可以说，但不要撒娇。",
     "饱腹": "刚吃饱，人懒下来：动作慢、话更少、更软，容易想躺着。",
-    "睡眠": "睡着了，没有反应。",
+    "睡眠": "睡着了（只有极小的反应，不会说话）。",
+    "忙碌": "手上正忙着一件事：回答会更短、更急，注意力被手上的事占着，"
+            "偶尔会说「等一下」「马上」。不会因为忙就不理人，但不铺开聊。",
+    "感冒": "有点感冒：鼻子不通、声音闷，人懒懒的，句子更短；"
+            "会提到自己不舒服，但不诉苦、不撒娇，也不要人照顾。",
+    "发烧": "在发烧：脑子糊涂、反应更慢，说话有点断，会怕冷；"
+            "被关心时会嘴硬（「没事」），但身体反应是瞒不住的。",
 }
 
 # 夜里到这个点她就睡了（分钟）
@@ -58,14 +64,36 @@ def get(db, conv_id):
     return state or "清醒"
 
 
-def set_state(db, conv_id, state):
+# 由事件造成的状态会自然过去：忙完就闲下来，感冒发烧睡一觉就好
+# 单位是故事分钟；到点自动回到「清醒」
+STALE_AFTER = {"忙碌": 90, "感冒": 360, "发烧": 480}
+
+
+def set_state(db, conv_id, state, now_minutes=None):
     state = normalize(state)
     if not state:
         return ""
     try:
         db.set_yuxia_state(conv_id, state)
+        if now_minutes is not None:
+            db.set_yuxia_state_at(conv_id, int(now_minutes))
     except Exception:
         pass
+    return state
+
+
+def expire(db, conv_id, now_minutes):
+    """事件带来的状态会过期：忙完、病好，自动回「清醒」"""
+    state = get(db, conv_id)
+    ttl = STALE_AFTER.get(state)
+    if not ttl:
+        return state
+    try:
+        at = db.get_yuxia_state_at(conv_id)
+    except Exception:
+        return state
+    if at and now_minutes - at >= ttl:
+        return set_state(db, conv_id, "清醒", now_minutes)
     return state
 
 
@@ -74,6 +102,8 @@ def apply_rules(db, conv_id, now_minutes):
     state = get(db, conv_id)
     want = rules_state(now_minutes)
     # 只有夜里强行进睡眠（免得她半夜还精神抖擞）；天亮的迷糊只从睡眠里醒来时给
+    if state in ("感冒", "发烧", "忙碌"):
+        return state          # 生病/忙碌时不按时间强行改成睡着
     if want == "睡眠" and state != "睡眠":
         return set_state(db, conv_id, "睡眠")
     if state == "睡眠" and want != "睡眠":

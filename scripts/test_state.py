@@ -179,6 +179,41 @@ def main():
     check("动作那一轮也能改状态", app_db.get_yuxia_state(conv3) == "饥饿",
           app_db.get_yuxia_state(conv3))
 
+    # ── 5) 随机事件可以改变她的状态（忙碌 / 感冒 / 发烧），并且会自然过期
+    from services import event_engine
+    conv4 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv4)
+    app_db.set_yuxia_state(conv4, "清醒")
+
+    event_engine._apply_event_state(app_db, conv4, "感冒", 600)
+    check("事件能把状态改成感冒", app_db.get_yuxia_state(conv4) == "感冒",
+          app_db.get_yuxia_state(conv4))
+    check("状态记录了进入时间", app_db.get_yuxia_state_at(conv4) == 600,
+          str(app_db.get_yuxia_state_at(conv4)))
+    event_engine._apply_event_state(app_db, conv4, "量子态", 600)
+    check("事件给非法状态时不改", app_db.get_yuxia_state(conv4) == "感冒")
+    event_engine._apply_event_state(app_db, conv4, "", 600)
+    check("事件没写状态时不改", app_db.get_yuxia_state(conv4) == "感冒")
+
+    # 夜里规则不该把生病的人强行改成睡着
+    check("生病时不被夜里规则改成睡眠",
+          st.apply_rules(app_db, conv4, 23 * 60 + 30) == "感冒",
+          app_db.get_yuxia_state(conv4))
+
+    # 感冒 6 小时、忙碌 90 分钟后自然恢复
+    check("感冒没好之前不会过期",
+          st.expire(app_db, conv4, 600 + 300) == "感冒", st.expire(app_db, conv4, 600 + 300))
+    check("感冒过了 6 小时自动好",
+          st.expire(app_db, conv4, 600 + 361) == "清醒", st.expire(app_db, conv4, 600 + 361))
+    event_engine._apply_event_state(app_db, conv4, "忙碌", 2000)
+    check("忙碌 90 分钟后自动闲下来",
+          st.expire(app_db, conv4, 2000 + 91) == "清醒", st.expire(app_db, conv4, 2000 + 91))
+
+    event_engine._apply_event_state(app_db, conv4, "发烧", 3000)
+    check("事件能把状态改成发烧", app_db.get_yuxia_state(conv4) == "发烧",
+          app_db.get_yuxia_state(conv4))
+    check("发烧有自己的说话风格", st.STYLE.get("发烧") not in (None, ""), st.STYLE.get("发烧"))
+
     print()
     if FAILED:
         print(f"{len(FAILED)} 项失败: {FAILED}")

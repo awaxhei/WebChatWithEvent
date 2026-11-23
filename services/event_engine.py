@@ -104,6 +104,14 @@ def should_run_event_summary(conv_id, db: ChatDB, is_push_cmd, msg_count, recent
 # 偶然事件生成器
 # ──────────────────────────────────────────────
 
+def _apply_event_state(db, conv_id, state, now_minutes):
+    """事件顺带改她的状态：只有白名单里的状态才认，别的当没写"""
+    from services import state_engine
+    state = state_engine.normalize(state)
+    if not state:
+        return ""
+    return state_engine.set_state(db, conv_id, state, now_minutes=now_minutes)
+
 def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
                       now_minutes=0, api_key=None):
     from config import RANDOM_EVENT_SYSTEM_PROMPT
@@ -140,6 +148,8 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
             db.add_event(conv_id, "random", random_event.get("title", "偶然事件"),
                          random_event.get("description", ""), "active",
                          story_time=story_time, tier=tier)
+            # 有些事件会连带改变她的状态（忙起来 / 淋雨感冒 / 发烧）
+            _apply_event_state(db, conv_id, random_event.get("state"), now_minutes)
             return random_event
         return None
     except Exception as e:

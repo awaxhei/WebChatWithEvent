@@ -579,6 +579,7 @@ def chat():
 
     # 她此刻的状态（清醒 / 睡眠 / 迷糊 / 兴奋 / 饥饿 / 饱腹）：
     # 先按时间规则落一次（到点就睡、天亮迷糊），再把当前状态写进提示词
+    state_engine.expire(db, conv_id, now_minutes)
     state_engine.apply_rules(db, conv_id, now_minutes)
     asleep = state_engine.is_asleep(db, conv_id)
     woke_up = False
@@ -1036,6 +1037,9 @@ def idle(conv_id):
 
     api_key = request_api_key()
     now = time_keeper.init_clock(db, conv_id)
+    # 事件带来的状态（忙碌/感冒/发烧）会自然过期；到点睡、天亮迷糊也在这里对齐
+    state_engine.expire(db, conv_id, now)
+    state_engine.apply_rules(db, conv_id, now)
     # 之前这里只在"完全没有摘要"时才撰写，等于永不刷新：她自主说话时读到的
     # 可能还是几十轮前那句"她刚叫了你的名字"。现在统一走 compose（带缓存 + 后台刷新）
     brief = context_writer.compose(
