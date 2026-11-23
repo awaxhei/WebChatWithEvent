@@ -62,12 +62,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -335,7 +338,7 @@ private fun SceneStrip(s: UiState) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+            .background(YuxiaColors.SurfaceSoft)
             .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -379,7 +382,7 @@ private fun SceneStrip(s: UiState) {
             Text(
                 "尤夏在${s.location}：" + s.yuxiaDesc.ifBlank { "（正在读取…）" },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                color = YuxiaColors.InkFaint,
                 maxLines = 2,
             )
         }
@@ -395,9 +398,9 @@ private fun MoodAvatar(face: String, grouped: Boolean = false) {
     // 固定 38x38 的格子：气泡才能排成一列，不会因为颜文字宽度不同而左右错开
     Surface(
         modifier = Modifier.size(38.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+        color = YuxiaColors.SurfaceSoft,
+        shape = RoundedCornerShape(13.dp),
+        border = BorderStroke(1.dp, YuxiaColors.Line),
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (!grouped) {
@@ -405,7 +408,7 @@ private fun MoodAvatar(face: String, grouped: Boolean = false) {
                     face.ifBlank { "(ᗜ ‸ ᗜ)" },
                     fontSize = 9.sp,
                     maxLines = 1,
-                    color = Color(0xFFA0AEC0),
+                    color = YuxiaColors.InkFaint,
                 )
             }
         }
@@ -455,7 +458,7 @@ private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ 
                 .padding(horizontal = 10.dp, vertical = 2.dp),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
             fontStyle = FontStyle.Italic,
-            color = Color(0xFF6B7280),
+            color = YuxiaColors.InkSoft,
         )
 
         is Entry.Npc -> NpcBubble(entry.name, entry.text)
@@ -472,22 +475,22 @@ private fun WorldNarration(text: String) {
         Text(
             "— 世界 —",
             style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 2.sp, fontSize = 10.sp),
-            color = Color(0xFFA0AEC0),
+            color = YuxiaColors.InkFaint,
         )
         Spacer(Modifier.height(3.dp))
         Box(
             Modifier
                 .widthIn(max = 420.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Color(0x0AF59E0B))
-                .dashedBorder(Color(0x33F59E0B), 14.dp)
+                .background(YuxiaColors.Butter.copy(alpha = 0.18f))
+                .dashedBorder(YuxiaColors.Butter, 14.dp)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text(
                 text,
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                 fontStyle = FontStyle.Italic,
-                color = Color(0xFF6B7280),
+                color = YuxiaColors.InkSoft,
                 textAlign = TextAlign.Center,
             )
         }
@@ -502,21 +505,21 @@ private fun NpcBubble(name: String, text: String) {
             Text(
                 name,
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                color = Color(0xFF94A3B8),
+                color = YuxiaColors.InkFaint,
             )
             Spacer(Modifier.height(2.dp))
             Box(
                 Modifier
                     .widthIn(max = 280.dp)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(Color(0x1F94A3B8))
-                    .dashedBorder(Color(0x7394A3B8), 18.dp)
+                    .background(YuxiaColors.SurfaceTint)
+                    .dashedBorder(YuxiaColors.LineStrong, 18.dp)
                     .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 Text(
                     text,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                    color = Color(0xFF4A5568),
+                    color = YuxiaColors.Ink,
                 )
             }
         }
@@ -538,35 +541,37 @@ private fun Modifier.dashedBorder(color: Color, corner: Dp): Modifier = drawBehi
 
 @Composable
 private fun Bubble(text: String, mine: Boolean, dim: Boolean = false) {
-    // 和网页一致：气泡圆角 18，靠说话人的那一角收成 6；我的是实心靛紫，她的是浅底 + 细边
+    // 气泡：圆角 20，靠说话人的那一角收成 6。
+    // 我这边是柔樱粉实心 + 深一点的字；她那边是白底 + 极浅描边，靠颜色轻、不靠阴影重
     val shape = RoundedCornerShape(
-        topStart = 18.dp, topEnd = 18.dp,
-        bottomStart = if (mine) 18.dp else 6.dp,
-        bottomEnd = if (mine) 6.dp else 18.dp,
+        topStart = 20.dp, topEnd = 20.dp,
+        bottomStart = if (mine) 20.dp else 6.dp,
+        bottomEnd = if (mine) 6.dp else 20.dp,
     )
-    val shadowColor = if (mine) Color(0x4D6366F1) else Color(0x0F000000)
+    val shadowColor = if (mine) YuxiaColors.Sakura.copy(alpha = 0.40f) else YuxiaColors.Shadow
     Box(
         Modifier
-            .shadow(4.dp, shape, ambientColor = shadowColor, spotColor = shadowColor)
+            .shadow(if (mine) 5.dp else 2.dp, shape, ambientColor = shadowColor, spotColor = shadowColor)
             .clip(shape)
             .background(
                 when {
-                    mine -> Color(0xFF6366F1)
-                    dim -> Color(0xFFF7FAFC)
-                    else -> Color(0xFFF7FAFC)
+                    mine -> YuxiaColors.SakuraSoft
+                    dim -> YuxiaColors.SurfaceTint
+                    else -> YuxiaColors.Surface
                 }
             )
-            .then(
-                if (mine) Modifier else Modifier.dashedBorder(Color.Transparent, 18.dp)
+            .border(
+                if (mine) 0.dp else 1.dp,
+                if (mine) Color.Transparent else YuxiaColors.Line,
+                shape,
             )
-            .border(if (mine) 0.dp else 1.dp, if (mine) Color.Transparent else Color(0xFFE2E8F0), shape)
             .widthIn(max = 292.dp)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp, vertical = 11.dp),
     ) {
         Text(
             text,
             style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 24.sp),
-            color = if (mine) Color.White else Color(0xFF2D3748),
+            color = if (mine) Color(0xFF6B4451) else YuxiaColors.Ink,
         )
     }
 }
@@ -608,48 +613,81 @@ private fun InputBar(
     onStickers: () -> Unit,
     onPhone: () -> Unit,
 ) {
-    Surface(tonalElevation = 2.dp) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onStickers) {
-                Icon(Icons.Filled.EmojiEmotions, contentDescription = "表情包")
-            }
-            // 故事推进模式：不扮演玩家说话，只推一把剧情
-            IconButton(onClick = onTogglePush) {
-                Icon(
-                    Icons.Filled.AutoAwesome,
-                    contentDescription = "故事推进模式",
-                    tint = if (pushMode) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        when {
-                            pushMode -> "推进剧情…（留空＝轻戳一下）"
-                            coLocated -> "跟尤夏说点什么…"
-                            else -> "不在同一个地方，发消息给她…"
-                        }
+    Surface(color = YuxiaColors.Surface, shadowElevation = 8.dp) {
+        Column {
+            // 一条极浅的分隔线，把输入区和内容分开，不用硬阴影压
+            Box(Modifier.fillMaxWidth().height(1.dp).background(YuxiaColors.Line))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onStickers) {
+                    Icon(
+                        Icons.Filled.EmojiEmotions,
+                        contentDescription = "表情包",
+                        tint = YuxiaColors.Lavender,
                     )
-                },
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(),
-                keyboardActions = KeyboardActions(onSend = { if (!busy) onSend() }),
-            )
-            IconButton(onClick = onPhone) {
-                Icon(Icons.Filled.PhoneIphone, contentDescription = "手机通道")
-            }
-            IconButton(onClick = onSend, enabled = !busy) {
-                Icon(Icons.Filled.Send, contentDescription = "发送")
+                }
+                // 故事推进模式：不扮演玩家说话，只推一把剧情
+                IconButton(onClick = onTogglePush) {
+                    Icon(
+                        Icons.Filled.AutoAwesome,
+                        contentDescription = "故事推进模式",
+                        tint = if (pushMode) YuxiaColors.Sakura else YuxiaColors.InkFaint,
+                    )
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = {
+                        Text(
+                            when {
+                                pushMode -> "推进剧情…（留空＝轻戳一下）"
+                                coLocated -> "跟尤夏说点什么…"
+                                else -> "不在同一个地方，发消息给她…"
+                            },
+                            color = YuxiaColors.InkFaint,
+                        )
+                    },
+                    maxLines = 4,
+                    shape = RoundedCornerShape(22.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = YuxiaColors.SurfaceSoft,
+                        unfocusedContainerColor = YuxiaColors.SurfaceSoft,
+                        focusedBorderColor = YuxiaColors.Sakura,
+                        unfocusedBorderColor = YuxiaColors.Line,
+                        focusedTextColor = YuxiaColors.Ink,
+                        unfocusedTextColor = YuxiaColors.Ink,
+                        cursorColor = YuxiaColors.Sakura,
+                    ),
+                    keyboardOptions = KeyboardOptions(),
+                    keyboardActions = KeyboardActions(onSend = { if (!busy) onSend() }),
+                )
+                IconButton(onClick = onPhone) {
+                    Icon(
+                        Icons.Filled.PhoneIphone,
+                        contentDescription = "手机通道",
+                        tint = YuxiaColors.InkSoft,
+                    )
+                }
+                // 发送键做成一颗粉色圆扣
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = !busy,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = YuxiaColors.Sakura,
+                        contentColor = Color.White,
+                        disabledContainerColor = YuxiaColors.SurfaceSoft,
+                        disabledContentColor = YuxiaColors.InkFaint,
+                    ),
+                ) {
+                    Icon(Icons.Filled.Send, contentDescription = "发送", modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(4.dp))
             }
         }
     }
@@ -707,19 +745,35 @@ private fun PhoneSheet(state: UiState, onClose: () -> Unit, onSend: (String) -> 
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("发消息…") },
+                    placeholder = { Text("发消息…", color = YuxiaColors.InkFaint) },
                     maxLines = 3,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = YuxiaColors.SurfaceSoft,
+                        unfocusedContainerColor = YuxiaColors.SurfaceSoft,
+                        focusedBorderColor = YuxiaColors.Sakura,
+                        unfocusedBorderColor = YuxiaColors.Line,
+                        focusedTextColor = YuxiaColors.Ink,
+                        unfocusedTextColor = YuxiaColors.Ink,
+                        cursorColor = YuxiaColors.Sakura,
+                    ),
                 )
                 Spacer(Modifier.width(6.dp))
-                IconButton(
+                FilledIconButton(
                     onClick = {
                         val body = text
                         text = ""
                         if (body.isNotBlank()) onSend(body)
                     },
                     enabled = text.isNotBlank(),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = YuxiaColors.Sakura,
+                        contentColor = Color.White,
+                        disabledContainerColor = YuxiaColors.SurfaceSoft,
+                        disabledContentColor = YuxiaColors.InkFaint,
+                    ),
                 ) {
-                    Icon(Icons.Filled.Send, contentDescription = "发送")
+                    Icon(Icons.Filled.Send, contentDescription = "发送", modifier = Modifier.size(18.dp))
                 }
             }
             Spacer(Modifier.height(10.dp))

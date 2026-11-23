@@ -45,12 +45,12 @@ import androidx.compose.ui.unit.sp
 
 /** 事件类型对应的小圆点颜色（和网页右侧面板的图标配色一致） */
 private fun typeColor(type: String): Color = when (type) {
-    "milestone" -> Color(0xFF6366F1)
-    "scene_change" -> Color(0xFF6B7280)
-    "emotional_shift" -> Color(0xFFEC4899)
-    "time_advance" -> Color(0xFF6B7280)
-    "random" -> Color(0xFFF59E0B)
-    else -> Color(0xFFA0AEC0)
+    "milestone" -> YuxiaColors.Lavender
+    "scene_change" -> YuxiaColors.InkFaint
+    "emotional_shift" -> YuxiaColors.Sakura
+    "time_advance" -> YuxiaColors.InkFaint
+    "random" -> YuxiaColors.Peach
+    else -> YuxiaColors.LineStrong
 }
 
 private val TYPE_LABEL = mapOf(

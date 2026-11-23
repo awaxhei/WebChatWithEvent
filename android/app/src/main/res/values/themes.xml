@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 淡粉白：和 Compose 主题里的 YuxiaColors.Background 保持一致 -->
     <style name="Theme.Yuxia" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#F6F5FB</item>
-        <item name="android:navigationBarColor">#F6F5FB</item>
+        <item name="android:statusBarColor">#FFF8FA</item>
+        <item name="android:navigationBarColor">#FFF8FA</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowBackground">#F6F5FB</item>
+        <item name="android:windowBackground">#FFF8FA</item>
     </style>
 </resources>
