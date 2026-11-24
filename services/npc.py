@@ -43,15 +43,6 @@ RESERVED_NAMES = {
     "尤夏", "青梅", "主人", "路人", "路人甲", "路人乙",
 }
 
-# 玩家叫尤夏用的亲昵称呼。判别模型看到「小可爱」这种词，会以为现场真有个叫
-# 小可爱的人——试玩里就因此凭空多出一个叫「小可爱」的 NPC，回了一句
-# 「嗯？叫我干嘛」。这些词永远只可能是她。
-_SWEET_NAMES = {
-    "小可爱", "小美女", "小美人", "小漂亮", "宝贝", "亲爱的", "老婆", "媳妇",
-    "宝宝", "小猫", "猫猫", "小猫咪", "小猫猫", "笨蛋", "傻瓜", "小笨蛋",
-    "小傻瓜", "小东西", "小坏蛋", "小不点", "小尤夏", "夏夏",
-}
-
 # 「家里不站人」：这些地方是两个人待着的地方，不会有陌生人在场搭话。
 # 以前判别的兜底会按地点编一个「路人」，于是青梅的房间里站了个路人，
 # 打手机的时候他还会插一句嘴。私人空间现在完全不参与 NPC。
@@ -81,7 +72,7 @@ def _is_bogus_name(name):
     n = (name or "").strip()
     if not n:
         return False
-    if n in RESERVED_NAMES or n in _SWEET_NAMES:
+    if n in RESERVED_NAMES:
         return True
     return n.isascii() and n.lower() in _EN_INTERJECTIONS
 
@@ -268,12 +259,43 @@ def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
     return text
 
 
-def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
-    """让模型判断"这句话是不是在跟第三人说话、叫的是谁"。
+# 判别时给模型看多少条最近的对话。以前只给 4 条：她上一句怎么应你的都看不见，
+# 于是「小可爱」被当成现场真有个人。现在给足一整段，昵称、内梗、刚才点到的人都看得出来。
+DETECT_CONTEXT_ROWS = 14
 
-    这是**唯一**的判断入口：不再有任何正则去猜"句首称呼"。
-    关掉思考、限制 120 token，尽量不拖慢首字。
-    返回 {"addressed": bool, "who": str} 或 None。
+
+def _detect_recent(db, conv_id, limit=None):
+    """把最近的对话排成判别模型能读的样子（含她的动作与第三人）"""
+    try:
+        rows = [m for m in db.get_messages(conv_id)
+                if (m.get("channel") or "chat") in ("chat", "phone", "npc", "action")
+                ][-(limit or DETECT_CONTEXT_ROWS):]
+    except Exception:
+        return "（还没有对话）"
+    lines = []
+    for m in rows:
+        channel = m.get("channel") or "chat"
+        if channel == "npc":
+            try:
+                data = json.loads(m["content"])
+                lines.append(f"{data.get('name', '路人')}（第三人）：{data.get('text', '')}")
+            except Exception:
+                continue
+        elif channel == "action":
+            lines.append(f"（尤夏的动作）{m['content']}")
+        else:
+            speaker = "青梅" if m["role"] == "user" else "尤夏"
+            lines.append(f"{speaker}（{'手机' if channel == 'phone' else '当面'}）：{m['content']}")
+    return "\n".join(lines) or "（还没有对话）"
+
+
+def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
+    """让模型判断"这句话是不是在跟第三人说话、叫的是谁、依据是什么"。
+
+    这是**唯一**的判断入口，没有任何词表：不猜「哪些称呼一定是在叫她」，
+    而是把够长的上下文和现场情况一起给模型，并要求它**引一句依据**。
+    引不出依据就当没这回事——凭空造出一个 NPC 比漏判更伤。
+    返回 {"addressed": bool, "who": str, "why": str} 或 None。
     """
     if not NPC_LLM_DETECT or not message:
         return None
@@ -282,29 +304,19 @@ def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
     except Exception:
         present = []
     names = "、".join(n.get("name") or "" for n in present) or "（现场暂时没有第三人）"
-
-    # 把最近几句给模型看，它才知道"是在叫新的人"还是"接着上一位说"
     try:
-        rows = [m for m in db.get_messages(conv_id)
-                if (m.get("channel") or "chat") in ("chat", "phone", "npc")][-4:]
+        player_loc = db.get_player_location(conv_id)
     except Exception:
-        rows = []
-    lines = []
-    for m in rows:
-        channel = m.get("channel") or "chat"
-        if channel == "npc":
-            try:
-                data = json.loads(m["content"])
-                lines.append(f"{data.get('name', '路人')}：{data.get('text', '')}")
-            except Exception:
-                continue
-        else:
-            speaker = "青梅" if m["role"] == "user" else "尤夏"
-            lines.append(f"{speaker}（{'手机' if channel == 'phone' else '当面'}）：{m['content']}")
-    recent = "\n".join(lines) or "（还没有对话）"
+        player_loc = ""
+    co_located = bool(location) and location == player_loc
+    place = (f"{location}（你和青梅{'在一起' if co_located else '不在一起'}）"
+             if location else "（不明）")
+
+    recent = _detect_recent(db, conv_id)
 
     system = (NPC_DETECT_PROMPT
               .replace("{present}", names)
+              .replace("{place}", place)
               .replace("{recent}", recent))
     try:
         raw = deepseek.chat_sync(
@@ -335,7 +347,8 @@ def detect_addressed(db, conv_id, location, message, deepseek, api_key=None):
         return None
     addressed = bool(data.get("addressed"))
     who = str(data.get("who") or "").strip()[:12]
-    return {"addressed": addressed, "who": who}
+    why = str(data.get("why") or "").strip()[:60]
+    return {"addressed": addressed, "who": who, "why": why}
 
 
 def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=None):
@@ -355,16 +368,22 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
     if deepseek is None or is_private(location):
         return None
     decision = detect_addressed(db, conv_id, location, message, deepseek, api_key=api_key)
-    if not decision or not decision.get("addressed"):
+    if not decision:
         return None
     who = (decision.get("who") or "").strip()
+
+    if not decision.get("addressed"):
+        return None
+
+    # 说"在对第三人说话"却引不出依据：当作没听见，不凭空造人
+    if len((decision.get("why") or "").strip()) < 2:
+        return None
     if not who:
-        # 说"在对第三人说话"却没给称呼：不替他编一个（「路人」就是这么来的）
+        # 有依据但没给称呼：同样不替他编一个（「路人」就是这么来的）
         return None
     existing = db.find_npc(conv_id, who, location)
     if existing:
         return existing
-    # 称呼是她的昵称（「小可爱」「宝贝」）：这是在对她说话，不是第三人
     if _is_bogus_name(who):
         return None
     # 这句话里已经点了她的名字，又没对上现场的谁 → 当成在跟她说话。

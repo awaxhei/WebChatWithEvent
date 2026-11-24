@@ -42,10 +42,10 @@ def check(name, cond, extra=""):
 
 
 class Decide:
-    """只回答"是不是在对第三人说话"的桩"""
+    """只回答"是不是在对第三人说话"的桩（addressed=true 时补一句依据）"""
 
     def __init__(self, verdict='{"addressed": false, "who": ""}'):
-        self.verdict = verdict
+        self.verdict = _with_why(verdict)
         self.calls = 0
         self.system_prompt = ""
         self.kwargs = {}
@@ -78,9 +78,25 @@ class StubLLM(Decide):
         yield '{"对白": "……嗯。"}'
 
 
-def resolve(db, conv, location, message, verdict):
-    """跑一次"谁是这句话的对象"，返回 (npc, 判别桩)"""
+def _with_why(verdict, why="老板，来个煎饼"):
+    """判别返回里补一句依据：真实的模型必须给 why，否则不会被采纳"""
+    try:
+        data = json.loads(verdict)
+    except Exception:
+        return verdict
+    data.setdefault("why", why if data.get("addressed") else "")
+    return json.dumps(data, ensure_ascii=False)
+
+
+def resolve(db, conv, location, message, verdict, why="老板，来个煎饼"):
+    """跑一次"谁是这句话的对象"，返回 (npc, 判别桩)
+
+    真实的判别会给出 why（依据原话）；测试里默认给一句，需要时显式传空。
+    """
     stub = Decide(verdict)
+    if "why" not in verdict and why is not None:
+        stub.verdict = json.dumps(
+            {**json.loads(verdict), "why": why}, ensure_ascii=False)
     return npc.resolve_addressed(db, conv, location, message, stub), stub
 
 
@@ -257,7 +273,7 @@ def main():
     # 库里已经站着一个（历史数据）：也不该在手机里开口
     ghost = app_db.add_npc(conv_phone, "路人", "路人", "青梅的房间", "")
     phone_stub = StubLLM()
-    phone_stub.verdict = '{"addressed": true, "who": "路人"}'
+    phone_stub.verdict = _with_why('{"addressed": true, "who": "路人"}')
     chat_mod.deepseek = phone_stub
     try:
         r = c.post("/api/chat", json={"conversation_id": conv_phone, "message": "你在干嘛"})
@@ -286,23 +302,47 @@ def main():
     check("公共场合仍然会生成 NPC",
           bool(got_street) and got_street["name"] == "卖红薯的", str(got_street))
 
-    # ── 5h) 玩家叫尤夏的昵称，不该变成 NPC（试玩里冒出过一个「小可爱」）
+    # ── 5h) 昵称靠上下文判断，不靠词表：模型读完对话说"这是在叫她"就不建人
     conv_sweet = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv_sweet)
     locations.switch_both(app_db, conv_sweet, "食堂")
     for word, message in (("小可爱", "小可爱"), ("小美女", "嘿嘿尤夏小美女"),
                           ("宝贝", "宝贝，张嘴"), ("老婆", "老婆我回来了")):
-        sweet = Decide(json.dumps({"addressed": True, "who": word}, ensure_ascii=False))
+        # 模型看了上下文，判成"在叫她"——这就是它该做的事，不需要黑名单
+        sweet = Decide(json.dumps({"addressed": False, "who": word, "why": ""},
+                                  ensure_ascii=False))
         got_sweet = npc.resolve_addressed(app_db, conv_sweet, "食堂", message, sweet)
         names = [n["name"] for n in app_db.get_npcs(conv_sweet)]
-        check(f"「{message}」不会建出叫「{word}」的 NPC", got_sweet is None and not names,
+        check(f"「{message}」被判成在叫她，不建人", got_sweet is None and not names,
               str(names))
-    sweet_stub = Decide('{"addressed": true, "who": "小可爱"}')
-    check("昵称判别不会真的花掉一次创建",
-          npc.resolve_addressed(app_db, conv_sweet, "食堂", "小可爱", sweet_stub) is None)
+
+    # 说"在对第三人说话"却引不出依据 → 不建（宁可不建，也不凭空造人）
+    no_evidence = Decide(json.dumps({"addressed": True, "who": "小可爱", "why": ""},
+                                    ensure_ascii=False))
+    check("引不出依据就不建人",
+          npc.resolve_addressed(app_db, conv_sweet, "食堂", "小可爱", no_evidence) is None)
+    check("这种误判也不会留下 NPC", not app_db.get_npcs(conv_sweet),
+          str([n["name"] for n in app_db.get_npcs(conv_sweet)]))
+
+    # 判别拿到的是够长的上下文（她上一句怎么应的都看得见），不是 4 条
+    conv_ctx = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_ctx)
+    locations.switch_both(app_db, conv_ctx, "食堂")
+    for i in range(6):
+        app_db.add_message(conv_ctx, "user", f"旧话{i}", channel="chat")
+        app_db.add_message(conv_ctx, "assistant",
+                           json.dumps({"对白": f"回应{i}"}, ensure_ascii=False), channel="chat")
+    ctx_stub = Decide(json.dumps({"addressed": False, "who": "", "why": ""}, ensure_ascii=False))
+    npc.detect_addressed(app_db, conv_ctx, "食堂", "食堂在哪", ctx_stub)
+    check("判别的上下文超过 4 条", "旧话0" in ctx_stub.system_prompt, ctx_stub.system_prompt[-400:])
+    check("判别的上下文带着她自己的回应", "回应0" in ctx_stub.system_prompt)
+    check("判别知道此刻在哪、两人在不在同一处",
+          "食堂" in ctx_stub.system_prompt and "在一起" in ctx_stub.system_prompt,
+          ctx_stub.system_prompt[:300])
+    check("判别要求给出依据（why）", '"why"' in ctx_stub.system_prompt, ctx_stub.system_prompt[:200])
 
     # 点了她的名字、又叫了别的称呼 → 当成在跟她说话，不建人
-    named = Decide('{"addressed": true, "who": "学姐"}')
+    named = Decide('{"addressed": true, "who": "学姐", "why": "学姐那边"}')
     check("句子里点了尤夏就不再建第三人",
           npc.resolve_addressed(app_db, conv_sweet, "食堂", "尤夏，学姐那边在排队吗",
                                 named) is None)
@@ -313,17 +353,20 @@ def main():
     check("公共场合叫到别人仍然会生成", bool(got_other) and got_other["name"] == "打饭阿姨",
           str(got_other))
 
-    # 库里残留的昵称 NPC 会被退场
-    stale_sweet = app_db.add_npc(conv_sweet, "小可爱2", "小可爱2", "食堂", "")
-    conn_sweet = app_db.add_npc(conv_sweet, "小美女", "小美女", "食堂", "")
+    # 清理只认"结构上不可能是人"的名字（代词、口头禅、路人），不再认昵称词表：
+    # 昵称是模型读上下文判断的事，写死词表永远写不全。
+    keep_sweet = app_db.add_npc(conv_sweet, "小美女", "小美女", "食堂", "")
+    conn_pronoun = app_db.add_npc(conv_sweet, "尤夏", "尤夏", "食堂", "")
     npc.find_addressed(app_db, conv_sweet, "食堂", "嗯")
-    row_gone = app_db.get_npc(conn_sweet)
-    check("库里残留的「小美女」会被退场",
-          bool(row_gone) and row_gone["status"] == "gone",
-          str(dict(row_gone) if row_gone else None))
-    check("正常残留下来的还在",
-          bool(app_db.get_npc(stale_sweet)) and app_db.get_npc(stale_sweet)["status"] == "active",
-          str(dict(app_db.get_npc(stale_sweet))))
+    row_keep = app_db.get_npc(keep_sweet)
+    row_pronoun = app_db.get_npc(conn_pronoun)
+    check("昵称类名字不再被词表误杀（交给模型判断）",
+          bool(row_keep) and row_keep["status"] == "active",
+          str(dict(row_keep) if row_keep else None))
+    check("结构上不可能是人的名字仍然会被退场",
+          bool(row_pronoun) and row_pronoun["status"] == "gone",
+          str(dict(row_pronoun) if row_pronoun else None))
+    app_db.set_npc_status(keep_sweet, "gone")
 
     # ── 6) 手动创建 / 退场
     r = c.post(f"/api/npcs/{conv}", json={"name": "煎饼摊老板娘", "role": "老板娘",
@@ -384,7 +427,7 @@ def main():
     locations.ensure_defaults(app_db, conv7)
     locations.switch_both(app_db, conv7, "煎饼摊")
     detect_stub = StubLLM()
-    detect_stub.verdict = '{"addressed": true, "who": "卖煎饼的"}'
+    detect_stub.verdict = _with_why('{"addressed": true, "who": "卖煎饼的"}')
 
     class ReplyAfterDetect(StubLLM):
         """判别返回 JSON，NPC 回话返回台词"""
@@ -395,7 +438,7 @@ def main():
             return "加蛋两块。"
 
     detect_stub = ReplyAfterDetect()
-    detect_stub.verdict = '{"addressed": true, "who": "卖煎饼的"}'
+    detect_stub.verdict = _with_why('{"addressed": true, "who": "卖煎饼的"}')
     chat_mod.deepseek = detect_stub
     try:
         r = c.post("/api/chat", json={"conversation_id": conv7, "message": "给我来个煎饼，多加辣"})
