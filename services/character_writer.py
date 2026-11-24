@@ -80,9 +80,38 @@ def player_action(db, conv_id):
     return (hit.group(1).strip()[:40] if hit else "")
 
 
+def _turn_has_action(db, conv_id):
+    """她这一轮是不是已经给过动作了（动作在 action 通道，排在对话之后）"""
+    try:
+        rows = [m for m in db.get_messages(conv_id)
+                if (m.get("channel") or "chat") in ("chat", "phone", "action")][-8:]
+    except Exception:
+        return False
+    last_talk = -1
+    for i, m in enumerate(rows):
+        if (m.get("channel") or "chat") in ("chat", "phone"):
+            last_talk = i
+    return any((m.get("channel") == "action") for m in rows[last_talk + 1:])
+
+
+def _recent_state_texts(db, conv_id, limit=2):
+    """上一轮写过的那几句神态：给她当反面清单，别重复同一个动作"""
+    try:
+        rows = [m for m in db.get_messages(conv_id) if m.get("channel") == "state"][-limit:]
+    except Exception:
+        return []
+    return [m.get("content") or "" for m in rows if m.get("content")]
+
+
 def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
-    """生成一句"她此刻的动作"；失败返回空串（顺带返回要更新的道具状态）"""
+    """生成一句"她此刻的动作"；失败返回空串（顺带返回要更新的道具状态）
+
+    她这一轮已经自己给过「动作」时直接跳过：同一轮里动作和神态各写一遍，
+    就是以前那种「动作太多、两层重复」的来源。
+    """
     if not CHARACTER_DESC_ENABLED:
+        return ""
+    if _turn_has_action(db, conv_id):
         return ""
 
     # 只看对话通道：上一次的 state 描写不再回灌，否则"他"这种错会一直自我强化
@@ -133,11 +162,18 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
     except Exception:
         props_line = ""
 
+    previous = _recent_state_texts(db, conv_id)
+    prev_line = ""
+    if previous:
+        prev_line = ("\n\n刚写过的描写（换一个动作，不要重复，包括耳朵和尾巴的小动作）：\n"
+                     + "\n".join(f"- {p}" for p in previous))
+
     user_msg = (
         f"{context_brief}\n"
         f"{where}{time_line}"
         f"{world}"
         + (f"\n\n{props_line}" if props_line else "")
+        + f"{prev_line}"
         + f"\n\n最近的对话：\n{recent_text or '（还没有对话）'}\n\n"
         "请写一句尤夏此刻的动作描写。"
     )

@@ -103,41 +103,83 @@ def main():
     check("非法状态不认", app_db.get_yuxia_state(conv) == "兴奋")
     app_db.set_yuxia_state(conv, "清醒")
 
-    # ── 2) 睡眠时没有反应（不调对话模型）
+    # ── 2) 到点睡着：只由世界说一句「尤夏睡着了」，不再拦她的回复
     # 把故事时钟拨到深夜：否则 07:00 的"天亮迷糊"规则会立刻把她叫醒
     app_db.set_story_minutes(conv, 23 * 60 + 30)
-    app_db.set_yuxia_state(conv, "睡眠")
+    app_db.set_yuxia_state(conv, "清醒")
     real = chat_mod.deepseek
     try:
-        llm = StubLLM(wake=False)
+        llm = StubLLM(reply='{"对白": "……嗯。"}')
         chat_mod.deepseek = llm
-        r = c.post("/api/chat", json={"conversation_id": conv, "message": "我回来了"})
+        r = c.post("/api/chat", json={"conversation_id": conv, "message": "还没睡？"})
         evs = sse(r.data.decode("utf-8"))
         done = next((e for e in evs if e.get("type") == "done"), {})
-        check("睡着时标记 sleeping", done.get("sleeping") is True, str(done)[:120])
-        check("睡着时不调用对话模型（省额度）", llm.streamed == 0, str(llm.streamed))
+        check("睡着不再标记 sleeping、也不早退", done.get("sleeping") is not True, str(done)[:120])
+        check("睡着时仍然回话", llm.streamed == 1, str(llm.streamed))
         states = [m for m in app_db.get_messages(conv) if m["channel"] == "state"]
-        # 睡着也要有极小反应：一句旁白，但绝不产生对话气泡
-        check("睡着时留一句极小反应的旁白",
-              len(states) == 1 and states[0]["content"] in chat_mod._SLEEP_NOTES,
+        check("睡着这件事由世界说一句",
+              any("睡着了" in (m["content"] or "") for m in states),
               str([m["content"] for m in states]))
-        chat_rows = [m for m in app_db.get_messages(conv)
-                     if m["channel"] in ("chat", "phone") and m["role"] == "assistant"]
-        check("睡着时不产生对话气泡", not chat_rows,
-              str([(m["channel"], m["content"]) for m in chat_rows]))
-        check("睡着时状态没被改掉", app_db.get_yuxia_state(conv) == "睡眠")
-
-        # ── 3) 被叫醒 → 迷糊 + 正常回复
-        llm2 = StubLLM(reply='{"对白": "唔姆。……早。"}', wake=True)
-        chat_mod.deepseek = llm2
-        r = c.post("/api/chat", json={"conversation_id": conv, "message": "尤夏？"})
-        evs = sse(r.data.decode("utf-8"))
-        check("叫醒时走了正常回复", llm2.streamed == 1, str(llm2.streamed))
-        check("叫醒后状态变迷糊", app_db.get_yuxia_state(conv) == "迷糊",
+        check("世界那句在流里也发了",
+              any(e.get("type") == "yuxia_state" and "睡着了" in (e.get("content") or "")
+                  for e in evs),
+              str([e for e in evs if e.get("type") == "yuxia_state"])[:160])
+        check("答完话状态是迷糊（被叫醒）", app_db.get_yuxia_state(conv) == "迷糊",
               app_db.get_yuxia_state(conv))
-        check("打了一声招呼说还没醒",
-              any(e.get("type") == "state" and "迷糊" in (e.get("content") or "") for e in evs),
-              str([e for e in evs if e.get("type") == "state"])[:120])
+        check("醒来也有一句提示",
+              any("迷糊" in (e.get("content") or "") for e in evs
+                  if e.get("type") == "yuxia_state"), str(evs)[:160])
+
+        # ── 2b) 夜里连着聊：「睡着了」只说一次，不会被规则反复按回床上
+        app_db.set_yuxia_state(conv, "睡眠")
+        for q in ("还是冷", "把你的被子给我一点", "再聊两句"):
+            chat_mod.deepseek = llm
+            r2 = c.post("/api/chat", json={"conversation_id": conv, "message": q})
+            r2.data.decode("utf-8")
+        sleep_notes = [m for m in app_db.get_messages(conv)
+                       if m["channel"] == "state" and "睡着了" in (m["content"] or "")]
+        check("夜里连着聊，「睡着了」只出现一次", len(sleep_notes) == 1,
+              str([m["content"] for m in sleep_notes]))
+
+        # ── 3) 再问一句：不受睡眠状态影响，继续正常回
+        app_db.set_yuxia_state(conv, "睡眠")
+        llm2 = StubLLM(reply='{"对白": "唔姆。……怕打雷。"}')
+        chat_mod.deepseek = llm2
+        r = c.post("/api/chat", json={"conversation_id": conv, "message": "你最怕什么"})
+        r.data.decode("utf-8")
+        check("睡着时被问到也会回答", llm2.streamed == 1, str(llm2.streamed))
+        check("回完状态是迷糊", app_db.get_yuxia_state(conv) == "迷糊",
+              app_db.get_yuxia_state(conv))
+    finally:
+        chat_mod.deepseek = real
+
+    # ── 3b) 模型一个字都不给时会再要一次（试玩里出现过空回复）
+    conv_empty = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_empty)
+    locations.switch_both(app_db, conv_empty, "公寓客厅")
+
+    class SilentLLM(StubLLM):
+        def __init__(self):
+            super().__init__()
+            self.rounds = 0
+
+        def chat_stream(self, messages, system_prompt="", **kw):
+            self.rounds += 1
+            if self.rounds == 1:
+                yield ""
+            else:
+                yield '{"对白": "……嗯。"}'
+
+    silent = SilentLLM()
+    chat_mod.deepseek = silent
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv_empty, "message": "问你个事"})
+        r.data.decode("utf-8")
+        check("空回复会再问一次", silent.rounds == 2, str(silent.rounds))
+        rows = [m for m in app_db.get_messages(conv_empty)
+                if m["channel"] == "chat" and m["role"] == "assistant"]
+        check("补回来的那句话真的落库", bool(rows) and "嗯" in rows[0]["content"],
+              str([m["content"] for m in rows]))
     finally:
         chat_mod.deepseek = real
 

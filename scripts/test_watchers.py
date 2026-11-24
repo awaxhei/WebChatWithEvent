@@ -111,6 +111,34 @@ def main():
           "顺着写这个动作带出的结果" in cap2.last_system
           and "不要替她加别的动作" in cap2.last_system, cap2.last_system[-260:])
 
+    # 她这一轮已经给过动作 → 神态层直接跳过（不再两层各写一遍）
+    class CountingLLM(CaptureLLM):
+        def __init__(self):
+            super().__init__()
+            self.desc = "尤夏把杯子推回去。"
+            self.calls = 0
+
+        def chat_sync(self, messages, system_prompt="", **kw):
+            self.calls += 1
+            return super().chat_sync(messages, system_prompt, **kw)
+
+    db.add_message(conv, "user", "再说一句", channel="chat")
+    db.add_message(conv, "assistant", json.dumps({"对白": "嗯。"}, ensure_ascii=False),
+                   channel="chat")
+    db.add_message(conv, "assistant", "把毯子往她那边推了推", channel="action")
+    skip_llm = CountingLLM()
+    check("这一轮有动作时不写神态", cw.describe(db, conv, skip_llm, 638, "现在是傍晚") == "")
+    check("跳过的这次没有花模型", skip_llm.calls == 0, str(skip_llm.calls))
+
+    # 没有动作时才写，并且把上一轮写过的描写当反面清单
+    db.add_message(conv, "user", "还有呢", channel="chat")
+    db.add_message(conv, "assistant", "尤夏盯着她的侧脸看了一会儿。", channel="state")
+    last_llm = CountingLLM()
+    cw.describe(db, conv, last_llm, 639, "现在是傍晚")
+    check("上一轮的描写被喂回去避免重复",
+          "尤夏盯着她的侧脸看了一会儿" in last_llm.last_user, last_llm.last_user[-260:])
+    check("要求换一个动作", "不要重复" in last_llm.last_user, last_llm.last_user[-260:])
+
     # 模型不按 JSON 输出时，整段当旁白（不能因为格式丢掉描写）
     plain = CaptureLLM()
     plain.desc = "尤夏把脸埋进抱枕里，只露出耳朵。"

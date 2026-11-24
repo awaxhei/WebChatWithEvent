@@ -110,19 +110,9 @@ def _split_long(text, limit=24):
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
 
+# 一轮里最多几条动作旁白
+MAX_ACTIONS_PER_REPLY = 2
 
-# 睡着时被打扰：极小的一点反应（不装死，也不醒）
-_SLEEP_NOTES = (
-    "尤夏在被子里动了动，没有睁眼。",
-    "被子往上拉了拉，她把自己埋得更深。",
-    "尤夏含糊地哼了一声，像是听见了，又不像。",
-    "她把脸埋进枕头里，呼吸没有乱。",
-)
-
-
-def _sleep_note():
-    """睡眠中的极小反应：一句旁白，不产生对话气泡"""
-    return random.choice(_SLEEP_NOTES)
 
 def _bubble_parts(text, limit=24, max_parts=5):
     """一句回复拆成几个气泡：她的多个短句应该一条一条发，而不是挤在一起
@@ -643,17 +633,25 @@ def chat():
     _mark("自然情境撰写")
 
     # 她此刻的状态（清醒 / 睡眠 / 迷糊 / 兴奋 / 饥饿 / 饱腹）：
-    # 先按时间规则落一次（到点就睡、天亮迷糊），再把当前状态写进提示词
+    # 先按时间规则落一次（到点就睡、天亮迷糊），再把当前状态写进提示词。
+    #
+    # 「到点睡着」只由世界说一句「尤夏睡着了」，**不再拦她的回复**：
+    # 以前睡着就直接早退、不调对话模型，半夜跟她说「你最怕什么」完全没人应。
+    # 现在她睡过去之后，你开口她就迷迷糊糊醒过来，接着聊。
+    prev_state = ""
+    try:
+        prev_state = db.get_yuxia_state(conv_id)
+    except Exception:
+        pass
     state_engine.expire(db, conv_id, now_minutes)
     state_engine.apply_rules(db, conv_id, now_minutes)
-    asleep = state_engine.is_asleep(db, conv_id)
+    fell_asleep = state_engine.is_asleep(db, conv_id) and prev_state != "睡眠"
     woke_up = False
-    if asleep and user_message:
-        # 睡着时不会有反应；但被叫醒是例外——单独问一次小模型（只在睡着时花这次钱）
-        if state_engine.wake_attempt(deepseek, user_message, api_key=api_key):
-            state_engine.set_state(db, conv_id, "迷糊")
-            asleep = False
-            woke_up = True
+    if state_engine.is_asleep(db, conv_id):
+        # 直接醒过来：不再花一次小模型判别（她说到底是要回话的）。
+        # 记下醒来的时刻：夜里接下来 40 分钟不再判她睡着。
+        state_engine.set_state(db, conv_id, "迷糊", now_minutes)
+        woke_up = bool(user_message)
 
     channel_rule = (
         "你们现在在同一个地方，可以当面说话。当面是黏人的那一面：直白、会撒娇、"
@@ -661,7 +659,7 @@ def chat():
         if can_speak else
         "你们现在不在面对面交流，只能用「消息」联系，不要输出对白。"
         "手机里是活蹦乱跳又嘴硬的那一面：句子短、节奏快，可以连发两三条"
-        "（一条问、一条催、一条自己找补），语气词和颜文字都往外掉，"
+        "（一条问、一条催、一条自己找补），语气词（呀、嘛、叭、诶、啦、哦）和颜文字往外掉，"
         "被戳中了先嘴硬「才没有」，下一条又忍不住露出来。"
     )
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
@@ -676,8 +674,7 @@ def chat():
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 此地的实物（环境描写登记下来的）：让她提到杯子、毯子时是同一个
     props_here = props.block(db, conv_id, yuxia_loc)
-    # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
-    state_block = "" if asleep else state_engine.block(db, conv_id)
+    state_block = state_engine.block(db, conv_id)
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
     blocks = "\n\n".join(b for b in (world, place, scene_here, props_here,
@@ -698,18 +695,14 @@ def chat():
             yield _sse({"type": "scene_changed",
                         "scene": _scene_payload(conv_id, api_key)})
 
-        # 她睡着了：不调对话模型，但给一个极小的反应（翻身、哼一声），不装死
-        if asleep:
-            note = _sleep_note()
+        # 到点了：先让世界说一句她睡着了，再接她的回应
+        if fell_asleep:
+            note = "尤夏睡着了。"
             db.add_message(conv_id, "assistant", note, channel="state", scene=yuxia_loc)
-            yield _sse({"type": "state", "content": note})
-            yield _sse({"type": "done", "conv_id": conv_id, "msg_count": msg_count,
-                        "channel": channel, "co_located": co_located,
-                        "story_time": story_time, "sleeping": True})
-            return
+            yield _sse({"type": "yuxia_state", "content": note})
 
         if woke_up:
-            yield _sse({"type": "state",
+            yield _sse({"type": "yuxia_state",
                         "content": "尤夏迷迷糊糊地睁开眼，还没完全醒。"})
 
         # 先说 NPC 的话：她得等人家回完，再接话才自然
@@ -740,7 +733,23 @@ def chat():
             yield _sse({"type": "chunk", "content": chunk})
 
         _mark("AI A 输出完成")
+        # 注意要用「全部消息数」：get_message_count 只数玩家消息，不会变
+        wrote_before = db.get_total_message_count(conv_id)
         actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel)
+        if db.get_total_message_count(conv_id) == wrote_before:
+            # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
+            # 明确要一句最短的话或一个动作，别让玩家对着空气等
+            retry_messages = list(context_messages) + [{
+                "role": "user",
+                "content": "（你刚才什么也没输出。至少给一句最短的话，或者一个动作。）",
+            }]
+            retry_full = ""
+            for chunk in deepseek.chat_stream(retry_messages, system_prompt,
+                                              api_key_override=api_key):
+                retry_full += chunk
+                yield _sse({"type": "chunk", "content": chunk})
+            actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
+                                     now_minutes, channel) or actions
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
@@ -794,9 +803,11 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if obj.get("对白") and can_speak:
             # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆
             speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
-        if obj.get("动作"):
-            # 她可以用动作代替说话：动作走旁白通道，不进对话框
-            actions.extend(_bubble_parts(_strip_speaker(str(obj["动作"]))))
+        if obj.get("动作") and len(actions) < MAX_ACTIONS_PER_REPLY:
+            # 她可以用动作代替说话：动作走旁白通道，不进对话框。
+            # 一轮最多两条：动作堆多了会盖过对白。
+            actions.extend(_bubble_parts(_strip_speaker(str(obj["动作"])),
+                                         max_parts=MAX_ACTIONS_PER_REPLY - len(actions)))
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):

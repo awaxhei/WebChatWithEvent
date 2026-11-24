@@ -68,6 +68,10 @@ def get(db, conv_id):
 # 单位是故事分钟；到点自动回到「清醒」
 STALE_AFTER = {"忙碌": 90, "感冒": 360, "发烧": 480}
 
+# 刚醒过来的人不会被下一条时间规则立刻按回床上：
+# 以前她上一句还在说话，下一句又被判成「睡着了」，夜里永远聊不下去。
+WAKE_AWAKE_MINUTES = 40
+
 
 def set_state(db, conv_id, state, now_minutes=None):
     state = normalize(state)
@@ -104,6 +108,14 @@ def apply_rules(db, conv_id, now_minutes):
     # 只有夜里强行进睡眠（免得她半夜还精神抖擞）；天亮的迷糊只从睡眠里醒来时给
     if state in ("感冒", "发烧", "忙碌"):
         return state          # 生病/忙碌时不按时间强行改成睡着
+    if state == "迷糊":
+        # 刚被她叫醒：留一段清醒期，别下一轮又「睡着了」
+        try:
+            at = db.get_yuxia_state_at(conv_id)
+        except Exception:
+            at = 0
+        if at and int(now_minutes) - int(at) <= WAKE_AWAKE_MINUTES:
+            return state
     if want == "睡眠" and state != "睡眠":
         return set_state(db, conv_id, "睡眠")
     if state == "睡眠" and want != "睡眠":
