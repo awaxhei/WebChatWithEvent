@@ -97,7 +97,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun saveApiKey(key: String) {
         val trimmed = key.trim()
         if (trimmed.isEmpty()) {
-            state = state.copy(error = "Key 不能为空")
+            state = state.copy(error = "API Key 不能为空")
             return
         }
         Prefs.setApiKey(app, trimmed)
@@ -107,7 +107,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val ok = runCatching { withContext(Dispatchers.IO) { Api.ping(app) } }.isSuccess
             state = state.copy(busy = false)
             if (ok) enterHome()
-            else state = state.copy(error = "本机服务没响应，稍后重试")
+            else state = state.copy(error = "本机服务无响应，请稍后重试")
         }
     }
 
@@ -136,7 +136,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     screen = if (goToList) Screen.Conversations else state.screen,
                 )
             } catch (e: Exception) {
-                state = state.copy(busy = false, error = e.message ?: "读取会话失败")
+                state = state.copy(busy = false, error = e.message ?: "读取会话列表失败")
             }
         }
     }
@@ -149,7 +149,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 state = state.copy(busy = false)
                 openConversation(id)
             } catch (e: Exception) {
-                state = state.copy(busy = false, error = e.message ?: "新建会话失败")
+                state = state.copy(busy = false, error = e.message ?: "创建会话失败")
             }
         }
     }
@@ -190,7 +190,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 state = state.copy(busy = false, unread = 0)
             } catch (e: Exception) {
-                state = state.copy(busy = false, error = e.message ?: "读取对话失败")
+                state = state.copy(busy = false, error = e.message ?: "读取会话记录失败")
             }
         }
     }
@@ -350,7 +350,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 loadEvents()
             } catch (e: Exception) {
-                state = state.copy(toast = e.message ?: "时间没拨动")
+                state = state.copy(toast = e.message ?: "时间未调整")
             }
         }
     }
@@ -372,7 +372,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         events = emptyList(), eventsLoaded = false,
                     )
                 }
-                state = state.copy(toast = "已删除 ${ids.size} 个对话")
+                state = state.copy(toast = "已删除 ${ids.size} 个会话")
                 loadConversations(goToList = true)
             } catch (e: Exception) {
                 state = state.copy(toast = e.message ?: "删除失败")
@@ -393,7 +393,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     Api.move(app, conv, if (together) "both" else "player", location)
                 }
                 applyScene(payload)
-                appendEntry(false, Entry.Narration(if (together) "你和尤夏一起走到了$location" else "你走到了$location"))
+                appendEntry(false, Entry.Narration(if (together) "你与尤夏一同前往$location" else "你前往$location"))
             } catch (e: Exception) {
                 state = state.copy(toast = e.message ?: "移动失败")
             }
@@ -551,11 +551,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         when (ev.optString("action")) {
             "move" -> {
                 // 服务端已经把"尤夏去了X"写好了，用它的；没有再退回泛泛的一句
-                appendEntry(false, Entry.Narration(ev.optString("content").ifBlank { "尤夏走开了" }))
+                appendEntry(false, Entry.Narration(ev.optString("content").ifBlank { "尤夏离开了" }))
                 applyScene(ev.optJSONObject("scene"))
             }
             "lead" -> {
-                appendEntry(false, Entry.Narration(ev.optString("content").ifBlank { "尤夏拉着你走了" }))
+                appendEntry(false, Entry.Narration(ev.optString("content").ifBlank { "尤夏带着你离开了" }))
                 applyScene(ev.optJSONObject("scene"))
             }
             "act" -> if (ev.optBoolean("visible", true) && ev.optString("content").isNotBlank()) {
@@ -675,7 +675,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val added = res.optInt("uploaded_count")
                 val dup = res.optInt("duplicates")
                 val tagged = res.optInt("tagged")
-                state = state.copy(toast = "导入 $added 张（重复 $dup，已打标 $tagged）")
+                state = state.copy(toast = "已导入 $added 张（重复 $dup，已标注 $tagged）")
                 loadStickersNow()
             } catch (e: Exception) {
                 state = state.copy(toast = "导入失败：${e.message}")
@@ -709,11 +709,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     // 屏幕上什么都没发生——看着就像"她根本没动"
                     "move" -> appendEntry(
                         false,
-                        Entry.Narration(if (where.isNotEmpty()) "尤夏去了$where" else "尤夏走开了"),
+                        Entry.Narration(if (where.isNotEmpty()) "尤夏前往$where" else "尤夏离开了"),
                     )
                     "lead" -> appendEntry(
                         false,
-                        Entry.Narration(if (where.isNotEmpty()) "尤夏拉着你去了$where" else "尤夏拉着你走了"),
+                        Entry.Narration(if (where.isNotEmpty()) "尤夏带着你前往$where" else "尤夏带着你离开了"),
                     )
                     "act" -> if (res.optBoolean("visible", true) && res.optString("text").isNotBlank()) {
                         appendEntry(false, Entry.Narration(res.optString("text")))

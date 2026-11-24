@@ -613,7 +613,7 @@ private fun TypingRow() {
         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(8.dp))
         Text(
-            "尤夏在想…",
+            "尤夏正在输入…",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -666,7 +666,7 @@ private fun InputBar(
                         Text(
                             when {
                                 pushMode -> "推进剧情…（留空＝轻戳一下）"
-                                coLocated -> "跟尤夏说点什么…"
+                                coLocated -> "输入消息…"
                                 else -> "不在同一个地方，发消息给她…"
                             },
                             color = YuxiaColors.InkFaint,
@@ -751,7 +751,7 @@ private fun PhoneSheet(state: UiState, onClose: () -> Unit, onSend: (String) -> 
                 if (state.phoneEntries.isEmpty()) {
                     item {
                         Text(
-                            "还没有手机消息",
+                            "暂无手机消息",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -868,13 +868,13 @@ private fun StickerSheet(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("正在导入…", style = MaterialTheme.typography.bodySmall)
+                    Text("正在导入", style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (state.stickers.isEmpty()) {
                 Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        "表情包库是空的\n点「相册导入」一次选多张图就会自动入库并打标",
+                        "表情包库为空。\n点击「相册导入」选择多张图片，将自动入库并标注。",
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

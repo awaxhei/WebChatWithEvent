@@ -101,12 +101,12 @@ fun BootScreen(state: UiState, onRetry: () -> Unit) {
                 CircularProgressIndicator(Modifier.size(28.dp))
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    "正在启动本机服务…" + if (seconds > 0) "（${seconds}s）" else "",
+                    "正在初始化本机服务…" + if (seconds > 0) "（${seconds} 秒）" else "",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "第一次启动要解压 Python 运行时，会慢一些；之后打开就快了",
+                    "首次启动需要解压运行环境，耗时相对较长；此后启动将明显加快。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -155,7 +155,7 @@ fun ApiKeyScreen(state: UiState, onSave: (String) -> Unit, onSkip: () -> Unit) {
         Text("尤夏", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "所有东西都跑在这台手机上：不用电脑、不用服务器。填一个 DeepSeek 的 API Key 就能开始。",
+            "全部服务均在本机运行，无需电脑或远程服务器。填入 DeepSeek API Key 即可开始。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -194,11 +194,11 @@ fun ApiKeyScreen(state: UiState, onSave: (String) -> Unit, onSkip: () -> Unit) {
         }
         if (state.apiKey.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) { Text("用原来的 Key，先回去") }
+            TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) { Text("沿用当前 API Key") }
         }
         Spacer(Modifier.height(14.dp))
         Text(
-            "Key 只存在这台手机的应用数据里（server 端不保存）；换 Key 在聊天页右上角 ⋯ 里。",
+            "API Key 仅保存在本机应用数据中，服务端不存储。如需更换，请在聊天页右上角 ⋯ 中操作。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -279,7 +279,7 @@ fun ConversationsScreen(
         if (state.convs.isEmpty()) {
             Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    if (state.busy) "正在读取…" else "还没有对话，点右下角开始一段",
+                    if (state.busy) "正在读取…" else "暂无会话。点击右下角新建会话。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -345,7 +345,7 @@ fun ConversationsScreen(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除对话") },
-            text = { Text("「${conv.title}」里的全部消息、事件和记忆都会一起删掉，不能恢复。") },
+            text = { Text("将删除「${conv.title}」中的全部消息、事件与记忆，且不可恢复。") },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(conv.id)
@@ -362,7 +362,7 @@ fun ConversationsScreen(
         AlertDialog(
             onDismissRequest = { pendingBulk = false },
             title = { Text("批量删除") },
-            text = { Text("删除选中的 ${picked.size} 个对话？里面的全部消息、事件和记忆都会一起删掉，不能恢复。") },
+            text = { Text("确认删除选中的 ${picked.size} 个会话？其中的全部消息、事件与记忆将一并删除，且不可恢复。") },
             confirmButton = {
                 TextButton(onClick = {
                     val ids = picked.toList()
