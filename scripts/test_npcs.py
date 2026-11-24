@@ -283,6 +283,9 @@ def main():
         check("手机里还是有她的回复", "done" in kinds, str(kinds))
         check("手机里她不知道「现场还有」谁",
               "现场还有" not in phone_stub.stream_prompt, phone_stub.stream_prompt[-200:])
+        check("手机通道要求活蹦乱跳、可以连发",
+              "活蹦乱跳" in phone_stub.stream_prompt and "连发" in phone_stub.stream_prompt,
+              phone_stub.stream_prompt[-260:])
         check("手机里那条旧 NPC 没有说话",
               not [m for m in app_db.get_messages(conv_phone) if m["channel"] == "npc"],
               str([m["channel"] for m in app_db.get_messages(conv_phone)]))
