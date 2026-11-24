@@ -185,6 +185,9 @@ class ChatDB:
                 ("yuxia_state", "TEXT DEFAULT ''"),
                 # 这个状态是第几分钟进入的：随机事件带来的状态（忙碌/感冒/发烧）按它算过期
                 ("yuxia_state_at", "INTEGER DEFAULT 0"),
+                # v10：故事检查点（把掉出窗口的旧对话压缩成一份档案）+ 已压缩到第几条消息
+                ("context_checkpoint", "TEXT DEFAULT ''"),
+                ("checkpoint_upto", "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {ddl}")
@@ -584,6 +587,20 @@ class ChatDB:
         with self._get_conn() as conn:
             conn.execute("UPDATE conversations SET context_brief=?, context_brief_turn=? WHERE id=?",
                          (brief, int(turn), conv_id))
+
+    # ----- v10：故事检查点（旧对话压缩） -----
+    def get_checkpoint(self, conv_id):
+        """返回 (检查点正文, 已覆盖到的消息 id)"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT context_checkpoint, checkpoint_upto FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        return ((row["context_checkpoint"] or ""), int(row["checkpoint_upto"] or 0)) if row else ("", 0)
+
+    def set_checkpoint(self, conv_id, text, upto_id):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET context_checkpoint=?, checkpoint_upto=? WHERE id=?",
+                         (text or "", int(upto_id or 0), conv_id))
 
     # ----- v4：消息通道（chat / phone） -----
     def add_message(self, conv_id, role, content, channel="chat", scene=""):

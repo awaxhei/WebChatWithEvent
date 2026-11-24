@@ -113,7 +113,7 @@ def main():
     app_db.add_message(conv2, "user", "手机里说的话", channel="phone")
     app_db.add_message(conv2, "assistant", "手机里回的话", channel="phone")
 
-    window = chat_mod._context_window(conv2, limit=10)
+    window = chat_mod._context_window(conv2)
     joined = json.dumps(window, ensure_ascii=False)
     check("上下文包含当面消息", "当面说的话" in joined and "当面回的话" in joined)
     check("上下文包含手机消息", "手机里说的话" in joined and "手机里回的话" in joined)

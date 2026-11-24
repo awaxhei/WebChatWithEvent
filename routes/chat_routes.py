@@ -20,12 +20,13 @@ import core.clock as clock
 import core.locations as locations
 import core.scenes as scenes
 import core.stickers as stickers
+import core.tokens as tokens
 from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
-    autonomy, character_writer, context_writer, memory_engine, npc, scene_watcher, time_keeper,
-    world_context, state_engine,
+    autonomy, character_writer, checkpoint, context_writer, memory_engine, npc,
+    scene_watcher, time_keeper, world_context, state_engine,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
@@ -36,6 +37,7 @@ from config import (
     STICKER_DIR, STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
     MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT,
     AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
+    CONTEXT_WINDOW_TOKENS,
 )
 
 chat_bp = Blueprint("chat", __name__)
@@ -285,21 +287,70 @@ def _as_context_content(row):
     return content
 
 
-def _context_window(conv_id, limit=10, with_images=True):
-    """当面 + 手机 + NPC 合成一条时间线。
+def _context_rows(conv_id, budget=None):
+    """按 token 预算选最近的一段对话，返回 (保留的行, 被挤出去的行)
+
+    以前是按条数（10 条）：中文一条长的就顶掉一整轮，而且可能从
+    "一句话被拆成的第三个气泡"中间切开，模型看到半句话就接不下去。
+
+    现在按 dsh / compaction 的思路：从最新的一轮往前累加 token，
+    够预算就停；**以玩家的一轮为最小单位**，不切断一轮里的多个气泡和动作行。
+    已经被检查点覆盖的消息（id <= checkpoint_upto）不再进窗口。
+    """
+    if budget is None:
+        budget = CONTEXT_WINDOW_TOKENS
+    try:
+        upto = db.get_checkpoint(conv_id)[1]
+    except Exception:
+        upto = 0
+    rows = [m for m in db.get_messages(conv_id)
+            if (m.get("channel") or "chat")
+            in (CHAT_CHANNEL, PHONE_CHANNEL, "npc", "action")
+            and int(m.get("id") or 0) > upto]
+    if not rows:
+        return [], []
+
+    # 分轮：玩家的一句话开一个新单位，她的多条气泡/动作/旁白都挂在同一轮上
+    units = []
+    for row in rows:
+        if row.get("role") == "user" or not units:
+            units.append([row])
+        else:
+            units[-1].append(row)
+
+    kept_units = []
+    used = 0
+    for unit in reversed(units):
+        cost = sum(tokens.estimate_message(r) for r in unit)
+        # 最新一轮无论多大都要留着，否则模型手里没有任何一句话
+        if kept_units and used + cost > budget:
+            break
+        kept_units.insert(0, unit)
+        used += cost
+
+    keep_count = len(kept_units)
+    kept = [row for unit in kept_units for row in unit]
+    dropped = [row for unit in units[:len(units) - keep_count] for row in unit]
+    return kept, dropped
+
+
+def _messages_from_rows(rows, with_images=True):
+    """把库里的行转成喂给模型的消息（表情包会把图片本身挂上去）"""
+    msgs = [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
+    if not with_images:
+        return msgs
+    return _attach_sticker_images(rows, msgs)
+
+
+def _context_window(conv_id, budget=None, with_images=True):
+    """当面 + 手机 + NPC + 动作 合成一条时间线。
 
     之前只取当前通道的历史：切到手机就忘了刚当面说过的话，切回当面又不记得
     手机里聊了什么，两边各说各的。
 
     表情包消息会把**图片本身**挂上去（不只是标签文字）：她真的能看见那张图。
     """
-    rows = [m for m in db.get_messages(conv_id)
-            if (m.get("channel") or "chat")
-            in (CHAT_CHANNEL, PHONE_CHANNEL, "npc", "action")][-limit:]
-    msgs = [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
-    if not with_images:
-        return msgs
-    return _attach_sticker_images(rows, msgs)
+    return _messages_from_rows(_context_rows(conv_id, budget)[0], with_images)
 
 
 # 一轮里最多挂几张图：图片很占额度，重点是"这两张长什么样"，
@@ -664,7 +715,17 @@ def chat():
                 yield _sse({"type": "npc", "name": addressed_npc.get("name") or "店员",
                             "content": npc_text})
 
-        context_messages = _context_window(conv_id, limit=10)
+        # 窗口按 token 预算选；掉出去的那段并进检查点，检查点放在历史最前面。
+        # 前台不等摘要：这一轮照常用窗口，摘要写完下一轮生效（失败也只是照旧）。
+        kept_rows, dropped_rows = _context_rows(conv_id)
+        context_messages = _messages_from_rows(kept_rows)
+        try:
+            checkpoint_text = db.get_checkpoint(conv_id)[0]
+        except Exception:
+            checkpoint_text = ""
+        context_messages = checkpoint.inject(context_messages, checkpoint_text)
+        if dropped_rows:
+            checkpoint.fold_async(db, conv_id, dropped_rows, deepseek, api_key=api_key)
         for chunk in deepseek.chat_stream(context_messages, system_prompt,
                                           api_key_override=api_key):
             if first_chunk_at[0] is None:
