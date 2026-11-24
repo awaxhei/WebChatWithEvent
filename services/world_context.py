@@ -97,35 +97,6 @@ def activity_line(db, conv_id, now_minutes=None):
     return f"【你此刻在做】{_strip_third_person(text)}"
 
 
-def self_actions_block(db, conv_id, now_minutes=None, limit=2, window=60):
-    """她刚才自己做过的事（第二人称，少量），供对话提示词使用
-
-    这一段是**玩家亲眼看到的画面**：她接下来开口时，手里的东西、身边的位置
-    都得接着它，否则会出现「一会儿被子一会儿椅子」这种前后矛盾。
-    """
-    try:
-        tail = db.get_autonomy_tail(conv_id)
-    except Exception:
-        return ""
-    acts = [t for t in tail if t.get("action") == "act" and t.get("text")]
-    if now_minutes is not None:
-        keep = []
-        for t in acts:
-            at = int(t.get("at_minutes") or 0)
-            if not at or int(now_minutes) - at <= window:
-                keep.append(t)
-        acts = keep
-    acts = acts[-limit:]
-    if not acts:
-        return ""
-    lines = ["【你刚才做的动作】（玩家亲眼看到，这就是此刻的画面）"]
-    for t in acts:
-        lines.append(f"- {_strip_third_person(t['text'])}")
-    lines.append("接下来这几句话得接着它：你手上拿的、身边占着的，还是这些东西，"
-                 "不要换成另一个名词；要换就先写一个放下/递过去的动作。")
-    return "\n".join(lines)
-
-
 def recent_activity_block(db, conv_id, limit=4):
     """她最近自己做过的事（来自自主行动流水，用于防重复）"""
     try:
@@ -197,6 +168,6 @@ def scene_line(db, conv_id, location, now_minutes):
 
 __all__ = [
     "recent_events_block", "activity_line", "recent_activity_block",
-    "self_actions_block", "world_block", "time_line", "place_block", "scene_line",
+    "world_block", "time_line", "place_block", "scene_line",
     "CHARACTER_NAME", "SELF_TIER",
 ]

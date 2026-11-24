@@ -230,15 +230,23 @@ def main():
     check("活动行改成第二人称（去掉「尤夏」主语）",
           "尤夏" not in line and "把碗摞起来" in line, line)
 
-    app_db.push_autonomy(conv6, {"action": "act", "text": "尤夏把灶台擦了一遍",
+    # ── 7b) 她自己动手做下的事要进对话时间线（两个模型读同一份历史）
+    app_db.push_autonomy(conv6, {"action": "act", "text": "把灶台擦了一遍",
                                  "at": 1.0, "at_minutes": 426})
-    acts_block = world_context.self_actions_block(app_db, conv6, 430)
-    check("自己的动作单独给成「你刚才做的动作」",
-          "你刚才做的动作" in acts_block and "尤夏" not in acts_block, acts_block)
-    check("动作接着说的要求也写进去了",
-          "不要换成另一个名词" in acts_block, acts_block)
+    autonomy._do_act(app_db, conv6, "把灶台擦了一遍", "公寓客厅", 426, True)
+    acts = [m for m in app_db.get_messages(conv6) if m["channel"] == "action"]
+    check("在场的自主动作写进时间线", len(acts) == 1 and "灶台" in acts[0]["content"],
+          str([(m["channel"], m["content"]) for m in acts]))
+    autonomy._do_act(app_db, conv6, "在远处翻书", "图书馆", 428, False)
+    acts2 = [m for m in app_db.get_messages(conv6) if m["channel"] == "action"]
+    check("看不见的动作不进时间线", len(acts2) == 1, str([m["content"] for m in acts2]))
 
-    # ── 8) 对话提示词里带上「你刚才做了」
+    # 自主行动那一侧也读同一份时间线，不然她又会挑一个别的道具
+    auto_prompt = autonomy._build_prompt(app_db, conv6, 430, "", "公寓客厅", True, False, 0)
+    check("自主行动能看到自己刚做的动作",
+          "（动作）" in auto_prompt and "把灶台擦了一遍" in auto_prompt, auto_prompt[-300:])
+
+    # ── 8) 动作以她的输出格式回灌进对话历史（不是靠提示词再念一遍）
     llm2 = CaptureLLM()
     chat_mod.deepseek = llm2
     try:
@@ -246,14 +254,13 @@ def main():
         body = r.data.decode("utf-8")   # 必须消费流，生成器才会真正跑起来
         check("聊天接口正常返回（第二人称场景）", r.status_code == 200 and '"type": "done"' in body,
               str(r.status_code))
-        prompt = llm2.system_prompt
-        check("提示词含「你刚才做的动作」", "你刚才做的动作" in prompt, prompt[:400])
-        check("提示词里她自己的动作不再是第三人称",
-              "尤夏把灶台擦了一遍" not in prompt)
-        # 动作块放在提示词最后（紧挨格式提醒）：放中间模型会忘掉，出现被子椅子打架
-        tail = prompt[prompt.find("你刚才做的动作"):] if "你刚才做的动作" in prompt else ""
-        check("动作块在提示词末尾", bool(tail) and "【格式】" in tail,
-              tail[-160:] or prompt[-160:])
+        sent = json.dumps(llm2.messages, ensure_ascii=False)
+        check("历史里带着她自己刚才的动作", "把灶台擦了一遍" in sent, sent[-400:])
+        acts_sent = [m for m in llm2.messages
+                     if isinstance(m.get("content"), str) and '"动作"' in m["content"]]
+        check("动作按她的输出格式回灌", bool(acts_sent), sent[-400:])
+        check("提示词里不再单独念一遍动作",
+              "你刚才做的动作" not in llm2.system_prompt, llm2.system_prompt[-200:])
     finally:
         chat_mod.deepseek = real
 

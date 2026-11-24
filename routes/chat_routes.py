@@ -278,6 +278,10 @@ def _as_context_content(row):
         return content
     if row["role"] == "assistant" and channel == PHONE_CHANNEL:
         return json.dumps({"消息": content}, ensure_ascii=False)
+    if row["role"] == "assistant" and channel == "action":
+        # 她自己的动作（模型给的「动作」字段、自主行动做下的事）也回灌成同一种格式，
+        # 两个模型共用一条时间线，她下一轮才知道自己手上刚动过什么
+        return json.dumps({"动作": content}, ensure_ascii=False)
     return content
 
 
@@ -290,7 +294,8 @@ def _context_window(conv_id, limit=10, with_images=True):
     表情包消息会把**图片本身**挂上去（不只是标签文字）：她真的能看见那张图。
     """
     rows = [m for m in db.get_messages(conv_id)
-            if (m.get("channel") or "chat") in (CHAT_CHANNEL, PHONE_CHANNEL, "npc")][-limit:]
+            if (m.get("channel") or "chat")
+            in (CHAT_CHANNEL, PHONE_CHANNEL, "npc", "action")][-limit:]
     msgs = [{"role": m["role"], "content": _as_context_content(m)} for m in rows]
     if not with_images:
         return msgs
@@ -613,16 +618,14 @@ def chat():
     # 人在哪儿是每轮的实时事实：玩家在界面上换场景不会说话
     place = world_context.place_block(db, conv_id, yuxia_loc, player_loc)
     scene_here = world_context.scene_line(db, conv_id, yuxia_loc, now_minutes)
-    # 她自己的动作用第二人称单独给，不能混进「最近发生的事」里
-    self_acts = world_context.self_actions_block(db, conv_id, now_minutes, limit=2)
     # 现场还有谁（煎饼摊老板这类）：手机里不列人
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
     state_block = "" if asleep else state_engine.block(db, conv_id)
-    # 她自己的动作放在最后（紧挨着格式提醒）：模型对末尾最敏感，
-    # 不然它会把刚做完的动作忘掉，一会儿被子一会儿椅子。
+    # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
+    # 两个模型读同一份历史，就不必在提示词里再强调一遍。
     blocks = "\n\n".join(b for b in (world, place, scene_here, npcs_here,
-                                     state_block, self_acts) if b)
+                                     state_block) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"

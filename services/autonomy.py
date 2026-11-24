@@ -312,11 +312,14 @@ def _scene_line(db, conv_id, yuxia_loc, now_minutes):
 
 def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
                   co_located, idle, idle_seconds, can_act=True, follow_only=False):
+    # 读的是和对话模型同一份时间线（含她自己动手做的 action 行），
+    # 不然两边会各说各的：对话里讲被子，自主行动却去拍椅子。
     recent = [m for m in db.get_messages(conv_id)
-              if (m.get("channel") or "chat") in ("chat", "phone")][-8:]
+              if (m.get("channel") or "chat") in ("chat", "phone", "action")][-8:]
     recent_text = "\n".join(
         f"{'青梅' if m['role'] == 'user' else '你'}"
-        f"（{'手机' if m.get('channel') == 'phone' else '当面'}）：{_readable(m['content'])}"
+        f"（{'手机' if m.get('channel') == 'phone' else '动作' if m.get('channel') == 'action' else '当面'}）："
+        f"{_readable(m['content'])}"
         for m in recent
     )
     known = "、".join(locations.list_names(db, conv_id)[-20:])
@@ -566,6 +569,11 @@ def _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located):
     db.add_event(conv_id, "misc", _short_title(text), text, "completed",
                  story_time=clock.format_time(now_minutes),
                  tier=world_context.SELF_TIER)
+    # 也写进对话时间线：两个模型（自主行动 / 对话）看的是同一份历史，
+    # 否则下一轮对话模型不知道她刚才动手做了什么，就会出现「被子」和「椅子」打架。
+    # 只写玩家在场时看得见的动作。
+    if co_located:
+        db.add_message(conv_id, "assistant", text, channel="action", scene=yuxia_loc)
     db.push_autonomy(conv_id, {"action": "act", "text": text, "at": time.time(),
                                "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
