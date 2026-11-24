@@ -247,6 +247,44 @@ def main():
     finally:
         chat_mod.deepseek = real
 
+    # ── 4c) 异地（手机通道）：她不该写动作，更不该有「被抱住」这种画面
+    conv_far = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_far)
+    app_db.set_current_location(conv_far, "公寓玄关")
+    app_db.set_player_location(conv_far, "公寓客厅")
+
+    class PhoneStub(StubLLM):
+        def __init__(self):
+            super().__init__(reply='{"消息": "隔着手机抱不到啦", "动作": "被抱住，脸往她肩上贴"}')
+            self.prompt = ""
+
+        def chat_stream(self, messages, system_prompt="", **kw):
+            self.prompt = system_prompt
+            yield self.reply
+
+    phone_llm = PhoneStub()
+    chat_mod.deepseek = phone_llm
+    try:
+        # 玩家在手机通道里「做出动作」：系统当成一行文字送给她，她要用文字回
+        r = c.post("/api/chat", json={"conversation_id": conv_far, "message": "（抱住她）"})
+        r.data.decode("utf-8")
+        rows = app_db.get_messages(conv_far)
+        act_rows = [m for m in rows if m["channel"] == "action"]
+        phone_rows = [m for m in rows if m["channel"] == "phone"]
+        check("异地时不落她的动作", not act_rows, str([m["content"] for m in act_rows]))
+        check("异地时她用消息回", any("抱不到" in m["content"] for m in phone_rows),
+              str([m["content"] for m in phone_rows]))
+        check("提示词写明不在一起、看不见对方",
+              "不在一起，看不见对方" in phone_llm.prompt, phone_llm.prompt[-260:])
+        check("提示词把括号动作当成一行字",
+              "只是她打的一行字" in phone_llm.prompt, phone_llm.prompt[-260:])
+        user_rows = [m for m in rows if m["role"] == "user"]
+        check("玩家的动作原文进了时间线",
+              any("抱住她" in m["content"] for m in user_rows),
+              str([m["content"] for m in user_rows]))
+    finally:
+        chat_mod.deepseek = real
+
     # ── 5) 随机事件可以改变她的状态（忙碌 / 感冒 / 发烧），并且会自然过期
     from services import event_engine
     conv4 = app_db.create_conversation(user)

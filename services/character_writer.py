@@ -147,12 +147,17 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         act = player_action(db, conv_id)
     except Exception:
         act = ""
-    player_part = (
-        f"   玩家这一句本身是一个动作：「{act}」。可以顺着写这个动作带出的结果（只一件），"
-        "但仍然不要替她加别的动作、不要写她的心理。\n"
-        if act else
-        "   玩家这一句是在说话/没有动作，那就只写尤夏，一个字都不要写青梅。\n"
-    )
+    if not co_located:
+        # 异地：她看不见玩家，只能对着手机，别写接触
+        player_part = ("   你们现在不在一起，她看不见对方：只写她对着手机的那一下"
+                       "（握着、指尖停住、看一眼屏幕），不要写抱、摸、靠过去、递东西。\n")
+    elif act:
+        player_part = (
+            f"   玩家这一句本身是一个动作：「{act}」。可以顺着写这个动作带出的结果（只一件），"
+            "但仍然不要替她加别的动作、不要写她的心理。\n"
+        )
+    else:
+        player_part = "   玩家这一句是在说话/没有动作，那就只写尤夏，一个字都不要写青梅。\n"
 
     # 此地的实物：让她动的是真的东西
     props_line = ""

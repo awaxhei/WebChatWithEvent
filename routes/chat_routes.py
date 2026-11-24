@@ -661,6 +661,9 @@ def chat():
         "手机里是活蹦乱跳又嘴硬的那一面：句子短、节奏快，可以连发两三条"
         "（一条问、一条催、一条自己找补），语气词（呀、嘛、叭、诶、啦、哦）和颜文字往外掉，"
         "被戳中了先嘴硬「才没有」，下一条又忍不住露出来。"
+        "**你们不在一起，看不见对方**：不要写动作，也不要写抱、摸、靠过去、递东西这类身体接触"
+        "——那些此刻都还发生不了。她发来括号里的动作（「（抱住她）」这种），"
+        "那只是她打的一行字，就当成一句文字回她（「隔着手机抱不到啦」这样）。"
     )
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
     format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
@@ -735,7 +738,9 @@ def chat():
         _mark("AI A 输出完成")
         # 注意要用「全部消息数」：get_message_count 只数玩家消息，不会变
         wrote_before = db.get_total_message_count(conv_id)
-        actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel)
+        # 不在同一个地方时不收她的动作：手机里她看不见你，写「被抱住」就是假画面
+        actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
+                                 allow_actions=can_speak)
         if db.get_total_message_count(conv_id) == wrote_before:
             # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
             # 明确要一句最短的话或一个动作，别让玩家对着空气等
@@ -749,7 +754,8 @@ def chat():
                 retry_full += chunk
                 yield _sse({"type": "chunk", "content": chunk})
             actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
-                                     now_minutes, channel) or actions
+                                     now_minutes, channel,
+                                     allow_actions=can_speak) or actions
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
@@ -760,7 +766,8 @@ def chat():
     return Response(generate(), mimetype="text/event-stream")
 
 
-def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL):
+def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL,
+                   allow_actions=True):
     """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
 
     返回这一轮写下的「动作」列表，调用方可以立刻推给前端。
@@ -803,9 +810,10 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if obj.get("对白") and can_speak:
             # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆
             speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
-        if obj.get("动作") and len(actions) < MAX_ACTIONS_PER_REPLY:
+        if obj.get("动作") and allow_actions and len(actions) < MAX_ACTIONS_PER_REPLY:
             # 她可以用动作代替说话：动作走旁白通道，不进对话框。
             # 一轮最多两条：动作堆多了会盖过对白。
+            # 两人不在一起时（手机通道）不收动作：她看不见你，写了就是「被抱住」这种假画面。
             actions.extend(_bubble_parts(_strip_speaker(str(obj["动作"])),
                                          max_parts=MAX_ACTIONS_PER_REPLY - len(actions)))
         if obj.get("表情包"):
