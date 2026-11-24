@@ -34,29 +34,76 @@ def _fallback(location, bucket):
     return f"{bucket}的{location}，光线和声音都安静下来，空气里有种熟悉的味道。"
 
 
-def generate_description(location, bucket, deepseek, api_key=None):
-    """让 LLM 写一段该地点该时段的环境描写（纯写景，无人物动作）"""
-    user_msg = f"地点：{location}\n时段：{bucket}"
+def _parse_scene(raw):
+    """场景输出可以是 JSON（带道具），也可以是纯文本（老缓存/模型不听话）"""
+    text = (raw or "").strip().strip('"”').strip()
+    props = []
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            text = str(data.get("环境") or data.get("描写") or "").strip()
+            for item in (data.get("道具") or [])[:12]:
+                if isinstance(item, dict):
+                    props.append(item)
+    if not text:
+        return "", []
+    for prefix in ("【地点】", "地点：", "描写：", "环境："):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text[:200], props
+
+
+def generate_description(location, bucket, deepseek, api_key=None, known_props=None):
+    """让 LLM 写一段该地点该时段的环境描写（纯写景，无人物动作）
+
+    同时给一批「道具」：这些东西会落库，之后可以被角色拿动、改变状态，
+    而不是写完就消失的文学修饰。
+    known_props: 这里已经有的东西，重新生成描写时要沿用，别凭空换一批。
+    """
+    facts = f"地点：{location}\n时段：{bucket}"
+    if known_props:
+        listing = "、".join(f"{p['name']}（{p.get('state') or ''}）".rstrip("（）")
+                            if isinstance(p, dict) else str(p) for p in known_props[:12])
+        facts += (f"\n这里已经有的东西：{listing}"
+                  "\n这些要保留在原处或写清现在怎么变了，不要凭空换一批东西。")
     try:
-        text = deepseek.chat_sync(
-            [{"role": "user", "content": user_msg}],
+        raw = deepseek.chat_sync(
+            [{"role": "user", "content": facts}],
             system_prompt=SCENE_DESCRIPTION_PROMPT,
             temperature=0.9,
             api_key_override=api_key,
         )
     except Exception as e:
         print(f"[场景] 生成失败: {e}")
-        return _fallback(location, bucket)
+        return _fallback(location, bucket), []
 
-    if not text or text.startswith("[生成失败"):
-        return _fallback(location, bucket)
+    if not raw or raw.startswith("[生成失败"):
+        return _fallback(location, bucket), []
 
-    text = text.strip().strip('"”').strip()
-    # 去掉模型可能带出的标签或标题
-    for prefix in ("【地点】", "地点：", "描写：", "环境："):
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
-    return pronoun.fix(text[:200]) or _fallback(location, bucket)
+    text, props = _parse_scene(raw)
+    return pronoun.fix(text) or _fallback(location, bucket), props
+
+
+def _known(db, conv_id, location):
+    """这个地点已经有的东西（重新生成描写时要沿用）"""
+    try:
+        import core.props as props_mod
+        return props_mod.items(db, conv_id, location)
+    except Exception:
+        return []
+
+
+def _save_props(db, conv_id, location, props):
+    if not props:
+        return
+    try:
+        import core.props as props_mod
+        props_mod.remember(db, conv_id, location, props)
+    except Exception as e:
+        print(f"[场景] 道具落库失败: {e}")
 
 
 def ensure_description(db, conv_id, location, minutes, deepseek, api_key=None,
@@ -78,8 +125,11 @@ def ensure_description(db, conv_id, location, minutes, deepseek, api_key=None,
         _spawn_generation(db, conv_id, location, bucket, deepseek, api_key)
         return bucket, cached or "", False
 
-    text = generate_description(location, bucket, deepseek, api_key=api_key)
+    text, props = generate_description(
+        location, bucket, deepseek, api_key=api_key,
+        known_props=_known(db, conv_id, location))
     db.set_location_variant(conv_id, location, bucket, text)
+    _save_props(db, conv_id, location, props)
     return bucket, text, True
 
 
@@ -92,8 +142,11 @@ def _spawn_generation(db, conv_id, location, bucket, deepseek, api_key):
 
     def run():
         try:
-            text = generate_description(location, bucket, deepseek, api_key=api_key)
+            text, props = generate_description(
+                location, bucket, deepseek, api_key=api_key,
+                known_props=_known(db, conv_id, location))
             db.set_location_variant(conv_id, location, bucket, text)
+            _save_props(db, conv_id, location, props)
         except Exception as e:
             print(f"[场景] 后台生成失败: {e}")
         finally:

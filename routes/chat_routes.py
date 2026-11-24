@@ -18,6 +18,7 @@ from flask import Blueprint, request, Response, jsonify
 
 import core.clock as clock
 import core.locations as locations
+import core.props as props
 import core.scenes as scenes
 import core.stickers as stickers
 import core.tokens as tokens
@@ -655,11 +656,12 @@ def chat():
             woke_up = True
 
     channel_rule = (
-        "你们现在在同一个地方，可以当面说话。当面的对白要短、平、少。"
+        "你们现在在同一个地方，可以当面说话。当面是黏人的那一面：直白、会撒娇、"
+        "想到什么就说什么，被拒绝会蔫下去。"
         if can_speak else
         "你们现在不在面对面交流，只能用「消息」联系，不要输出对白。"
-        "手机里的你要活泼、傲娇、带语气词和颜文字，可以连发两三条短句，"
-        "和当面的冷淡形成明显反差。"
+        "手机里是嘴硬的那一面：心口不一，嘴上说不要，下一条又忍不住露出来，"
+        "句尾带「~」、带颜文字，可以连发两三条短句。"
     )
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
     format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
@@ -671,12 +673,14 @@ def chat():
     scene_here = world_context.scene_line(db, conv_id, yuxia_loc, now_minutes)
     # 现场还有谁（煎饼摊老板这类）：手机里不列人
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
+    # 此地的实物（环境描写登记下来的）：让她提到杯子、毯子时是同一个
+    props_here = props.block(db, conv_id, yuxia_loc)
     # 她此刻的状态（睡眠时不走到这里，见下面 generate 的早退分支）
     state_block = "" if asleep else state_engine.block(db, conv_id)
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
-    blocks = "\n\n".join(b for b in (world, place, scene_here, npcs_here,
-                                     state_block) if b)
+    blocks = "\n\n".join(b for b in (world, place, scene_here, props_here,
+                                     npcs_here, state_block) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"

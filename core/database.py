@@ -131,6 +131,20 @@ class ChatDB:
                 );
                 CREATE INDEX IF NOT EXISTS idx_npcs_conv ON npcs(conversation_id, status);
 
+                -- v11：地点里的实物（环境描写写到的道具要真的存在，并且可以被改动）
+                CREATE TABLE IF NOT EXISTS props (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    location        TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    state           TEXT DEFAULT '',
+                    updated_at      TEXT DEFAULT (datetime('now','localtime')),
+                    UNIQUE(conversation_id, location, name),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_props_conv
+                    ON props(conversation_id, location);
+
                 -- v3：表情包索引（导入即用，缓存自动打标结果）
                 CREATE TABLE IF NOT EXISTS stickers (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -587,6 +601,31 @@ class ChatDB:
         with self._get_conn() as conn:
             conn.execute("UPDATE conversations SET context_brief=?, context_brief_turn=? WHERE id=?",
                          (brief, int(turn), conv_id))
+
+    # ----- v11：地点里的实物 -----
+    def get_props(self, conv_id, location, limit=12):
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT name, state FROM props WHERE conversation_id=? AND location=?"
+                " ORDER BY id ASC LIMIT ?",
+                (conv_id, location, int(limit))).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_prop(self, conv_id, location, name, state):
+        """记一样东西的状态（同名就更新）"""
+        name = (name or "").strip()[:16]
+        if not name or not location:
+            return None
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO props(conversation_id, location, name, state) VALUES(?,?,?,?)"
+                " ON CONFLICT(conversation_id, location, name)"
+                " DO UPDATE SET state=excluded.state, updated_at=datetime('now','localtime')",
+                (conv_id, location, name, (state or "").strip()[:40]))
+        return name
+
+    def get_prop_names(self, conv_id, location):
+        return [p["name"] for p in self.get_props(conv_id, location)]
 
     # ----- v10：故事检查点（旧对话压缩） -----
     def get_checkpoint(self, conv_id):

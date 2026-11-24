@@ -45,8 +45,22 @@ class StubLLM:
 
 
 class StubScene:
-    def chat_sync(self, *a, **kw):
-        return "站台上空无一人，铁轨延伸进暮色里。"
+    """场景生成：JSON 形态（带道具）+ 记录它收到的已有道具"""
+
+    def __init__(self, payload=None, plain=None):
+        self.payload = payload
+        self.plain = plain
+        self.user_msg = ""
+
+    def chat_sync(self, messages, **kw):
+        self.user_msg = messages[0]["content"] if messages else ""
+        if self.plain:
+            return self.plain
+        if self.payload:
+            return self.payload
+        return ('{"环境": "站台上空无一人，铁轨延伸进暮色里。",'
+                ' "道具": [{"名字": "长椅", "状态": "积着一层灰"},'
+                ' {"名字": "站牌", "状态": "字迹被雨泡花了"}]}')
 
 
 def main():
@@ -76,11 +90,37 @@ def main():
     check("新场景已登记", "学校天台" in locations.list_names(db, conv))
     check("尤夏已移动到新场景", db.get_current_location(conv) == "学校天台")
 
-    # 3) 新场景自动生成环境描写
-    bucket, text, generated = scenes.ensure_description(db, conv, "学校天台", 18 * 60, StubScene())
+    # 3) 新场景自动生成环境描写（同时登记道具）
+    stub_scene = StubScene()
+    bucket, text, generated = scenes.ensure_description(db, conv, "学校天台", 18 * 60, stub_scene)
     check("新场景自动生成描写", generated and text.startswith("站台上空无一人"), text[:20])
     cached = db.get_location_variants(conv, "学校天台")
     check("描写按时段缓存", "傍晚" in cached)
+    scene_props = db.get_props(conv, "学校天台")
+    check("环境描写里的道具真的落库",
+          len(scene_props) == 2 and scene_props[0]["name"] == "长椅", str(scene_props))
+    check("道具带着状态", scene_props[0]["state"] == "积着一层灰", str(scene_props))
+
+    # 道具可以被改动，改完提示词里就是新的
+    db.set_prop(conv, "学校天台", "长椅", "被擦干净了")
+    import core.props as props_mod
+    block = props_mod.block(db, conv, "学校天台")
+    check("提示词里带出此地的实物", "长椅（被擦干净了）" in block, block)
+    check("道具块说明可以拿动", "可以拿、可以动" in block, block)
+
+    # 重新生成描写时，已有道具要喂回去，不许凭空换一批
+    again_stub = StubScene()
+    scenes.ensure_description(db, conv, "学校天台", 19 * 60, again_stub, force=True)
+    check("重新生成时带上已有道具",
+          "长椅" in again_stub.user_msg and "被擦干净了" in again_stub.user_msg,
+          again_stub.user_msg[:200])
+    check("并说明不要凭空换一批", "不要凭空换一批" in again_stub.user_msg,
+          again_stub.user_msg[:200])
+
+    # 老缓存/模型不听话只给纯文本时，描写照用，不报错
+    plain_stub = StubScene(plain="风从天台边上灌进来，晾衣绳晃个不停。")
+    _b, plain_text, _g = scenes.ensure_description(db, conv, "旧车站月台", 18 * 60, plain_stub)
+    check("纯文本描写也能用", "晾衣绳" in plain_text, plain_text[:20])
 
     # 4) 开关关闭时不允许自主新建
     autonomy.AUTONOMY_ALLOW_NEW_LOCATION = False

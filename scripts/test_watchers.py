@@ -1,6 +1,7 @@
 """
 v5 探针：场景观察者 + 神态描写（不耗 API，用桩模型）
 """
+import json
 import os
 import sys
 import uuid
@@ -74,10 +75,10 @@ def main():
     none_llm = StubLLM(scene_json='{"new_location": "", "entered_by": "none", "reason": "无"}')
     check("没有新场景时返回 None", sw.observe(db, conv, none_llm, 620, "", None) is None)
 
-    # 动作描写（现在写的是两个人）
+    # 动作描写：只写尤夏，且默认不写玩家
     class CaptureLLM(StubLLM):
         def __init__(self):
-            super().__init__(desc="尤夏把杯子往青梅那边推了推；青梅伸手接过来，指尖在杯壁上停了停。")
+            super().__init__(desc="尤夏把杯子往自己那边挪了挪，指尖在杯沿上停了一下。")
             self.last_user = ""
             self.last_system = ""
 
@@ -89,13 +90,44 @@ def main():
     cap = CaptureLLM()
     text = cw.describe(db, conv, cap, 630, "现在是傍晚", api_key=None)
     check("生成动作描写", bool(text) and len(text) >= 6, text)
-    check("提示词要求写两个人", "两个人都要写到" in cap.last_system, cap.last_system[:80])
+    check("提示词只让写尤夏", "只写尤夏" in cap.last_system, cap.last_system[:80])
+    check("提示词默认禁止写玩家", "不要写青梅" in cap.last_system, cap.last_system[:80])
+    check("玩家没做动作时，明确说一个字都不要写青梅",
+          "一个字都不要写青梅" in cap.last_system, cap.last_system[-260:])
     check("提示词带上双方位置", "青梅在" in cap.last_user, cap.last_user[:160])
     check("提示词带上此刻时间", "此刻" in cap.last_user, cap.last_user[:160])
     states = [m for m in db.get_messages(conv) if m["channel"] == "state"]
     check("动作描写落库到 state 通道", len(states) == 1 and states[0]["content"] == text)
     check("动作描写不混入聊天通道",
           all(m["channel"] == "chat" for m in db.get_messages(conv, channel="chat")))
+
+    # 玩家这一句本身是动作时，才允许顺着写这个动作带出的结果
+    db.add_message(conv, "user", "（钻进被窝）", channel="chat")
+    cap2 = CaptureLLM()
+    cw.describe(db, conv, cap2, 635, "现在是傍晚", api_key=None)
+    check("玩家做动作时把动作原文给了旁白",
+          "钻进被窝" in cap2.last_system, cap2.last_system[-260:])
+    check("有动作也只允许写这一下的结果",
+          "顺着写这个动作带出的结果" in cap2.last_system
+          and "不要替她加别的动作" in cap2.last_system, cap2.last_system[-260:])
+
+    # 模型不按 JSON 输出时，整段当旁白（不能因为格式丢掉描写）
+    plain = CaptureLLM()
+    plain.desc = "尤夏把脸埋进抱枕里，只露出耳朵。"
+    out = cw.describe(db, conv, plain, 636, "现在是傍晚", api_key=None)
+    check("纯文本输出也能用", "抱枕" in out, out)
+
+    # 旁白可以改动道具状态：JSON 输出里的「道具」会写回库里
+    here = db.get_current_location(conv)
+    db.set_prop(conv, here, "抱枕", "在床头")
+    prop_llm = CaptureLLM()
+    prop_llm.desc = json.dumps(
+        {"旁白": "尤夏把抱枕抓过来按在怀里。",
+         "道具": [{"名字": "抱枕", "状态": "被抱在怀里"}]}, ensure_ascii=False)
+    cw.describe(db, conv, prop_llm, 637, "现在是傍晚", api_key=None)
+    saved = [p for p in db.get_props(conv, here) if p["name"] == "抱枕"]
+    check("旁白动过的东西状态被写回", bool(saved) and "怀里" in saved[0]["state"],
+          str(saved))
 
     # 青梅是女生：模型写成「他」也要被纠正
     male_llm = CaptureLLM()
