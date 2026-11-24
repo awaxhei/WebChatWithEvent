@@ -13,6 +13,7 @@ import time
 
 import core.clock as clock
 from config import (
+    TIME_KEYWORD_JUMP,
     TIME_OBSERVER_ENABLED, TIME_OBSERVER_INTERVAL, TIME_OBSERVER_PROMPT,
 )
 
@@ -21,8 +22,16 @@ ALLOWED_JUMPS = {"NONE", "NEXT_MORNING", "NOON", "AFTERNOON", "EVENING", "LATE_N
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
+# 超过这个间隔（分钟）没说话，就认为时间在别的世界线里流过了，静默推过去
+IDLE_DRIFT_MAX_MINUTES = 6 * 60
+
+
 def init_clock(db, conv_id):
-    """读取会话时钟；老会话首次进入时尝试从事件文本恢复，否则按 config 初始化"""
+    """读取会话时钟；老会话首次进入时尝试从事件文本恢复，否则按 config 初始化
+
+    时间已经**锚定真实世界**：读出来的故事时间 = 上次落库的故事时间
+    + 距上次落库真实过去的时间。所以不打字的时候，时间也在走。
+    """
     minutes = db.get_story_minutes(conv_id)
     if not minutes:
         recovered = None
@@ -32,6 +41,16 @@ def init_clock(db, conv_id):
             recovered = None
         minutes = recovered or clock.initial_minutes()
         db.set_story_minutes(conv_id, minutes)
+        return minutes
+
+    try:
+        anchored, at = db.get_story_anchor(conv_id)
+    except Exception:
+        anchored, at = int(minutes), 0.0
+    if at:
+        drift_min = int((time.time() - at) // 60)
+        if drift_min > 0:
+            return int(minutes) + min(drift_min, IDLE_DRIFT_MAX_MINUTES)
     return minutes
 
 
@@ -42,18 +61,8 @@ def apply_message_tick(db, conv_id, user_text):
     """
     now = init_clock(db, conv_id)
     now = clock.tick(now)
-    # 真实时间也在流：隔了很久才回来，故事里的时间也该往前走，
-    # 而不是停在上一句的同一分钟里。（按真实分钟折算，单次最多推 6 小时）
-    try:
-        last = float(db.get_last_user_at(conv_id) or 0)
-    except Exception:
-        last = 0.0
-    if last:
-        idle_minutes = int((time.time() - last) // 60)
-        if idle_minutes > 0:
-            now += min(idle_minutes, 6 * 60)
 
-    jump = clock.detect_keyword_jump(user_text)
+    jump = clock.detect_keyword_jump(user_text) if TIME_KEYWORD_JUMP else None
     applied = None
     if jump:
         new_now, delta = clock.apply_jump(now, jump)

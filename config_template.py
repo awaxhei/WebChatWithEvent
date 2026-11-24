@@ -90,6 +90,14 @@ JWT_SECRET_KEY = os.environ.get("YUXIA_JWT_SECRET") or "webcheck-ollama-secret-k
 JWT_EXPIRE_DAYS = 30
 
 # ============================================================
+# v13：时间锚定真实世界
+# - 故事时间跟着真实时间流（不打字也在走）
+# - 关掉手动拨时钟与关键词跳时：只剩自然流逝
+# ============================================================
+TIME_MANUAL_SET = False       # False = /api/set_time 直接拒绝
+TIME_KEYWORD_JUMP = False     # False = 「晚安」「起床了」这类词不再拨时钟
+
+# ============================================================
 # AI A: 对话助手提示词（从 yuxia_prompt.txt 自动加载）
 # ============================================================
 _PROMPT_PATH = os.path.join(ROOT, "yuxia_prompt.txt")

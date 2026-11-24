@@ -279,22 +279,23 @@ def main():
     finally:
         chat_mod.deepseek = real
 
-    # ── 10) 拨时间之后，尤夏能从世界块里看到天色变了
+    # ── 10) 时间跟随真实世界之后，手动拨时被拒绝；世界块只反映当前时刻
     convT = app_db.create_conversation(user)
     app_db.add_message(convT, "user", "先坐会儿", channel="chat")
     r = c.post(f"/api/time/{convT}", json={"hour": 22, "minute": 15})
-    t = r.get_json() or {}
-    check("拨时间接口可用", r.status_code == 200 and t.get("story_minutes"), str(r.status_code))
-    block_t = world_context.world_block(app_db, convT, t.get("story_minutes"))
-    check("世界块里能看到时间被拨动", "时间被拨到了" in block_t, block_t[:200])
+    check("手动拨时钟被拒绝", r.status_code == 400, str(r.status_code))
+    check("拒绝理由说明时间已跟随真实世界",
+          "真实世界" in (r.get_json() or {}).get("error", ""), str(r.get_json()))
+    # 时间由真实流逝推进：直接把锚点往前挪，模拟「过了很久」
+    app_db.set_story_minutes(convT, 22 * 60 + 15)
+    block_t = world_context.world_block(app_db, convT, 22 * 60 + 15)
+    check("世界块里的此刻跟着时间走", "22:15" in block_t, block_t[:200])
     llmT = CaptureLLM()
     chat_mod.deepseek = llmT
     try:
         r = c.post("/api/chat", json={"conversation_id": convT, "message": "天怎么黑这么快"})
         r.data.decode("utf-8")
-        check("尤夏的提示词里有这次时间变化", "时间被拨到了" in llmT.system_prompt,
-              llmT.system_prompt[:300])
-        check("提示词里的此刻时间已更新", "22:15" in llmT.system_prompt, llmT.system_prompt[:300])
+        check("提示词里的此刻时间已更新", "22:1" in llmT.system_prompt, llmT.system_prompt[:300])
     finally:
         chat_mod.deepseek = real
 

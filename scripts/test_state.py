@@ -314,6 +314,33 @@ def main():
     finally:
         chat_mod.deepseek = real
 
+    # ── 4e) 时间锚定真实世界：不打字也在走；手动拨时被拒
+    import time as _time
+    import services.time_keeper as tk
+    conv_clock = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_clock)
+    app_db.set_story_minutes(conv_clock, 9 * 60)
+    base = tk.init_clock(app_db, conv_clock)
+    check("刚写过锚点，时间不走样", abs(base - 9 * 60) <= 1, str(base))
+    # 把锚点往前挪一小时，模拟「一小时没人说话」
+    with app_db._get_conn() as conn:
+        conn.execute("UPDATE conversations SET story_at=? WHERE id=?",
+                     (_time.time() - 3600, conv_clock))
+    drifted = tk.init_clock(app_db, conv_clock)
+    check("不打字时间也在流（1 小时 ≈ 60 分钟）",
+          60 <= drifted - 9 * 60 <= 62, str(drifted - 9 * 60))
+
+    r = c.post(f"/api/time/{conv_clock}", json={"hour": 18, "minute": 0})
+    check("手动拨时钟被拒", r.status_code == 400, str(r.status_code))
+    check("拒绝原因写清楚", "真实世界" in (r.get_json() or {}).get("error", ""),
+          str(r.get_json()))
+
+    # 关键词跳时也关掉了：说「晚安」不再跳到第二天
+    now2, jumped = tk.apply_message_tick(app_db, conv_clock, "我去睡了，晚安")
+    check("关键词不再拨时钟", jumped is None, str(jumped))
+    check("晚安之后仍在同一天", now2 // 1440 == 9 * 60 // 1440 or now2 < 24 * 60,
+          str(now2))
+
     # ── 5) 随机事件可以改变她的状态（忙碌 / 感冒 / 发烧），并且会自然过期
     from services import event_engine
     conv4 = app_db.create_conversation(user)

@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $pyDir "services") | Out-Nu
 Copy-Item (Join-Path $root "app.py") $pyDir -Force
 Copy-Item (Join-Path $root "mobile_boot.py") $pyDir -Force
 # 打包信息：手机端 /api/ping 会带出来，用来确认装上的到底是哪一版
-$shaFile = Join-Path $root ".git\refs\heads\main"
+$shaFile = Join-Path -Path ([string]$root) -ChildPath ".git\refs\heads\main"
 $sha = "unknown"
 if (Test-Path $shaFile) {
     $full = (Get-Content $shaFile -ErrorAction SilentlyContinue | Select-Object -First 1)

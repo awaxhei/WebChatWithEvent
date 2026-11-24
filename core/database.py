@@ -1,7 +1,7 @@
 """
 ChatDB: 数据库初始化、迁移、CRUD 操作封装
 """
-import os, sqlite3, uuid, hashlib, json
+import os, sqlite3, time, uuid, hashlib, json
 from threading import Lock
 
 
@@ -215,6 +215,8 @@ class ChatDB:
                 ("messages", "scene", "TEXT DEFAULT ''"),
                 # v12：动作/消息发生在故事的第几分钟（动作要有时间，不然只是嘴上说说）
                 ("messages", "story_minutes", "INTEGER DEFAULT 0"),
+                # v13：故事时钟锚定的真实时刻（unix 秒）：时间从此按真实世界流
+                ("conversations", "story_at", "REAL DEFAULT 0"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -407,8 +409,20 @@ class ChatDB:
         return row["story_minutes"] or 0
 
     def set_story_minutes(self, conv_id, minutes):
+        """写故事时间的同时，记下对应的真实时刻（时间锚点）"""
         with self._get_conn() as conn:
-            conn.execute("UPDATE conversations SET story_minutes=? WHERE id=?", (int(minutes), conv_id))
+            conn.execute(
+                "UPDATE conversations SET story_minutes=?, story_at=? WHERE id=?",
+                (int(minutes), time.time(), conv_id))
+
+    def get_story_anchor(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT story_minutes, story_at FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        if not row:
+            return 0, 0.0
+        return int(row["story_minutes"] or 0), float(row["story_at"] or 0)
 
     # ----- v3：地点 -----
     def add_location(self, conv_id, name, description=""):

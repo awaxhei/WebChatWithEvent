@@ -34,6 +34,7 @@ from services.event_engine import (
     should_run_random_event, should_run_event_summary,
 )
 from config import (
+    TIME_MANUAL_SET, TIME_KEYWORD_JUMP,
     CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP,
     STICKER_DIR, STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
     MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT,
@@ -1060,6 +1061,10 @@ def adjust_time(conv_id):
     denied = ensure_conversation_owner(db, conv_id, request.user_id)
     if denied:
         return denied
+
+    if not TIME_MANUAL_SET:
+        # 时间锚定真实世界之后不再允许手动拨：只剩自然流逝
+        return jsonify({"error": "时间已改为跟随真实世界，不能再手动拨动"}), 400
 
     data = request.get_json(silent=True) or {}
     now = time_keeper.init_clock(db, conv_id)
