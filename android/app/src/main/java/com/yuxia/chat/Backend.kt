@@ -20,8 +20,13 @@ object Backend {
 
     fun baseUrl(): String = "http://127.0.0.1:$PORT"
 
-    private fun promptText(ctx: Context): String = runCatching {
-        ctx.assets.open("yuxia_prompt.txt").bufferedReader().use { it.readText() }
+    private fun promptText(ctx: Context): String = assetText(ctx, "yuxia_prompt.txt")
+
+    /** 梗库（yuxia_memes.txt）：同样由 assets 带过去，落盘后由后端读取 */
+    private fun memesText(ctx: Context): String = assetText(ctx, "yuxia_memes.txt")
+
+    private fun assetText(ctx: Context, name: String): String = runCatching {
+        ctx.assets.open(name).bufferedReader().use { it.readText() }
     }.getOrDefault("")
 
     /** 启动内嵌服务；重复调用直接返回 */
@@ -32,7 +37,9 @@ object Backend {
         val root = File(ctx.filesDir, "yuxia")
         if (!root.exists()) root.mkdirs()
         val module = Python.getInstance().getModule("mobile_boot")
-        val token = module.callAttr("start", root.absolutePath, PORT, promptText(ctx)).toString()
+        val token = module.callAttr(
+            "start", root.absolutePath, PORT, promptText(ctx), memesText(ctx),
+        ).toString()
         Prefs.setBaseUrl(ctx, baseUrl())
         Prefs.setToken(ctx, token)
         started = true

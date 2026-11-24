@@ -17,7 +17,7 @@ import threading
 _server = {"started": False, "port": 0}
 
 
-def prepare(root, prompt_text=""):
+def prepare(root, prompt_text="", memes_text=""):
     """准备工作目录：环境变量必须在 import config 之前设好"""
     root = os.path.abspath(root)
     os.environ["YUXIA_ROOT"] = root
@@ -33,12 +33,17 @@ def prepare(root, prompt_text=""):
     if prompt_text and not os.path.exists(prompt_path):
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(prompt_text)
+    # 梗库同理：App 从 assets 带过来，落盘后由 config 读取
+    memes_path = os.path.join(root, "yuxia_memes.txt")
+    if memes_text and not os.path.exists(memes_path):
+        with open(memes_path, "w", encoding="utf-8") as f:
+            f.write(memes_text)
     return root
 
 
-def start(root, port=54123, prompt_text=""):
+def start(root, port=54123, prompt_text="", memes_text=""):
     """起内嵌服务并返回本机 token（重复调用只起一次）"""
-    root = prepare(root, prompt_text)
+    root = prepare(root, prompt_text, memes_text)
     import app as webapp                     # 必须在环境变量就绪后导入
     token = _local_token(webapp.db)
     _serve_once(webapp.app, root, int(port))

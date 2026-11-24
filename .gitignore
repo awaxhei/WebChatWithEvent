@@ -26,6 +26,7 @@ android/.idea/
 # APK 打包时复制进去的后端副本 / 提示词
 android/app/src/main/python/
 android/app/src/main/assets/yuxia_prompt.txt
+android/app/src/main/assets/yuxia_memes.txt
 
 # 表情包是本地素材，不进仓库
 static/stickers/

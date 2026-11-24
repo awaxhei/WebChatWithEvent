@@ -87,6 +87,8 @@ def main():
     os.makedirs(os.path.join(sim_root, "static", "stickers"), exist_ok=True)
     shutil.copy(os.path.join(ROOT, "yuxia_prompt.txt"),
                 os.path.join(sim_root, "yuxia_prompt.txt"))
+    shutil.copy(os.path.join(ROOT, "yuxia_memes.txt"),
+                os.path.join(sim_root, "yuxia_memes.txt"))
     sim_code = (
         "import os, sys\n"
         f"root = {sim_root!r}\n"
@@ -111,14 +113,20 @@ def main():
     base = f"http://127.0.0.1:{port}"
 
     prompt = open(os.path.join(ROOT, "yuxia_prompt.txt"), encoding="utf-8").read()
+    memes = open(os.path.join(ROOT, "yuxia_memes.txt"), encoding="utf-8").read()
 
     import mobile_boot
-    token = mobile_boot.start(app_root, port, prompt)
+    token = mobile_boot.start(app_root, port, prompt, memes)
     time.sleep(1.0)
 
     check("start() 返回本机 token", isinstance(token, str) and len(token) > 20, str(token)[:20])
     check("提示词落盘到 App 目录",
           os.path.exists(os.path.join(app_root, "yuxia_prompt.txt")))
+    memes_path = os.path.join(app_root, "yuxia_memes.txt")
+    check("梗库落盘到 App 目录", os.path.exists(memes_path))
+    if os.path.exists(memes_path):
+        with open(memes_path, encoding="utf-8") as f:
+            check("梗库内容一并带过去", "猫猫头" in f.read())
     check("SQLite 落在 App 目录", os.path.exists(os.path.join(app_root, "data", "chat.db")),
           os.listdir(os.path.join(app_root, "data")) if os.path.isdir(os.path.join(app_root, "data")) else "no data dir")
     check("表情包目录建好",

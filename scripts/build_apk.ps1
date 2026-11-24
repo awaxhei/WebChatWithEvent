@@ -45,6 +45,7 @@ foreach ($sub in @("core", "routes", "services")) {
 # ??????? asset ????????? Kotlin ??
 New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
 Copy-Item (Join-Path $root "yuxia_prompt.txt") (Join-Path $assetsDir "yuxia_prompt.txt") -Force
+Copy-Item (Join-Path $root "yuxia_memes.txt") (Join-Path $assetsDir "yuxia_memes.txt") -Force
 
 # ---------------------------------------------------------------- 2) gradle
 Set-Content -Path (Join-Path $android "local.properties") -Value ("sdk.dir=" + $SdkHome.Replace('\', '\\')) -Encoding ASCII

@@ -108,11 +108,44 @@ def _load_sticker_emotions():
 
 STICKER_EMOTIONS = _load_sticker_emotions()
 
+
+# ============================================================
+# 梗库（yuxia_memes.txt，一行一个，玩家可以自己改）
+# 这些是「她认得」的梗，不是「她要说」的梗——提示词里已经写明只在对方先抛时接。
+# ============================================================
+def _load_memes():
+    path = os.path.join(ROOT, "yuxia_memes.txt")
+    if not os.path.isfile(path):
+        return []
+    items = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                items.append(line)
+    except Exception:
+        return []
+    return items[:40]
+
+
+YUXIA_MEMES = _load_memes()
+
 if STICKER_EMOTIONS:
     _emo_list = "\n".join(f"- `{e}`" for e in STICKER_EMOTIONS)
     CHAT_PROMPT = _CHAT_PROMPT_RAW + f"\n{_emo_list}\n"
 else:
     CHAT_PROMPT = _CHAT_PROMPT_RAW + "\n- `(暂无表情包)`\n"
+
+if YUXIA_MEMES:
+    _meme_list = "、".join(YUXIA_MEMES)
+    CHAT_PROMPT += (
+        "\n---\n\n"
+        f"## 最近常飘过的梗\n{_meme_list}\n\n"
+        "这些你认得，用不着解释；但不必都说——只在对方先抛的时候接一句，"
+        "或者在最合适的那一下拿来用。\n"
+    )
 
 # ============================================================
 # AI B: 环境叙述者提示词
@@ -434,7 +467,8 @@ CHECKPOINT_PROMPT = (
     "## 未了的话与约定\n"
     "- 说了一半的话、约好的时间、提起但没做的打算\n"
     "## 关键事实与偏好\n"
-    "- 具体的东西、数字、顺序、地点名、她怕什么喜欢什么、青梅说过哪些明确要求\n\n"
+    "- 具体的东西、数字、顺序、地点名、她怕什么喜欢什么、青梅说过哪些明确要求\n"
+    "- 你们之间的梗：叫过的绰号、出过的糗、反复提的那件事（只有你们懂的那些）\n\n"
     "规则：\n"
     "1. 用第二人称「你」指代尤夏；青梅是女生，用「她」\n"
     "2. 保留具体名词、数字、顺序、时间与地点名（被子、第三层柜子、07:11），不要写成空泛概括\n"

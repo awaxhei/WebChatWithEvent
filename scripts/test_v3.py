@@ -195,6 +195,23 @@ def test_memory():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+    # ── 3.5 梗库：yuxia_memes.txt 拼进人设 ──────────────
+    import config as cfg
+    from config import CHAT_PROMPT
+    check("梗库已加载", len(cfg.YUXIA_MEMES) >= 3, str(cfg.YUXIA_MEMES[:5]))
+    check("梗库进了对话提示词",
+          "最近常飘过的梗" in CHAT_PROMPT and cfg.YUXIA_MEMES[0] in CHAT_PROMPT,
+          str(cfg.YUXIA_MEMES[:3]))
+    check("梗库说明是「她认得、不必都说」",
+          "不必都说" in CHAT_PROMPT, CHAT_PROMPT[-200:])
+    check("注释与空行被跳过",
+          all(m.strip() and not m.startswith("#") for m in cfg.YUXIA_MEMES),
+          str(cfg.YUXIA_MEMES[:3]))
+    with open(os.path.join(ROOT, "yuxia_prompt.txt"), encoding="utf-8") as f:
+        persona = f.read()
+    check("人设里有「梗」这一节", "## 梗" in persona)
+    check("接梗而不是表演梗", "不表演梗" in persona, persona[persona.find("## 梗"):][:80])
+
 # ── 4. 表情包 ────────────────────────────────────────
 
 def test_stickers():
