@@ -35,13 +35,14 @@ def gap_minutes(db, conv_id, now_minutes):
     return max(0, int((time.time() - seen) // 60))
 
 
-def should_settle(db, conv_id, now_minutes):
+def should_settle(db, conv_id, now_minutes, deepseek=None, api_key=None):
     """离开够久、而且有已经结束的日程段，才值得花一次调用"""
     gap = gap_minutes(db, conv_id, now_minutes)
     if gap < OFFLINE_SETTLE_MIN_MINUTES:
         return 0
     from_minutes = int(now_minutes) - gap
-    blocks = schedule.blocks_between(from_minutes, now_minutes, "yuxia", limit=4)
+    blocks = schedule.blocks_between(db, conv_id, from_minutes, now_minutes,
+                                    "yuxia", limit=4, deepseek=deepseek, api_key=api_key)
     return len(blocks)
 
 
@@ -50,7 +51,7 @@ def _facts(db, conv_id, now_minutes, gap, blocks):
     lines = [
         f"【你离开了 {gap} 分钟】",
         f"【现在】{clock.format_time(now_minutes)}",
-        f"【她此刻】{schedule.block_at(now_minutes, 'yuxia')['activity']}",
+        f"【她此刻】{schedule.block_at(db, conv_id, now_minutes, 'yuxia')['activity']}",
         f"【她这段时间的日程】",
     ]
     for b in blocks:
@@ -97,15 +98,17 @@ def settle(db, conv_id, deepseek, now_minutes, api_key=None, force=False):
 
     她睡着的时候不结算、更不推送：夜里不该被消息吵醒。
     """
-    if schedule.block_at(now_minutes, "yuxia")["reply"] == "asleep" and not force:
+    if schedule.block_at(db, conv_id, now_minutes, "yuxia")["reply"] == "asleep" \
+            and not force:
         return 0
-    if not force and should_settle(db, conv_id, now_minutes) <= 0:
+    if not force and should_settle(db, conv_id, now_minutes, deepseek, api_key) <= 0:
         return 0
     gap = gap_minutes(db, conv_id, now_minutes)
     if gap < OFFLINE_SETTLE_MIN_MINUTES and not force:
         return 0
     from_minutes = int(now_minutes) - max(gap, 1)
-    blocks = schedule.blocks_between(from_minutes, now_minutes, "yuxia", limit=4)
+    blocks = schedule.blocks_between(db, conv_id, from_minutes, now_minutes,
+                                    "yuxia", limit=4, deepseek=deepseek, api_key=api_key)
     if not blocks:
         return 0
 
@@ -150,7 +153,7 @@ def settle(db, conv_id, deepseek, now_minutes, api_key=None, force=False):
             when = int(now_minutes)
         when = max(from_minutes, min(when, int(now_minutes)))
         db.add_message(conv_id, "assistant", text, channel="phone",
-                       scene=schedule.block_at(when, "yuxia")["location"],
+                       scene=schedule.block_at(db, conv_id, when, "yuxia")["location"],
                        story_minutes=when)
         written += 1
 

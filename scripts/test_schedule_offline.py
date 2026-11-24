@@ -73,25 +73,75 @@ def main():
     c.set_cookie("auth_token", generate_token(user["id"]))
     uid = user["id"]
 
-    # 固定成工作日，避免测试在周末跑到另一张表
-    real_is_weekend = schedule.is_weekend
-    schedule.is_weekend = lambda: False
     try:
         # ── 1) 日程表
-        b9 = schedule.block_at(9 * 60)
+        # 先让模型排一天，之后查询都走这份动态日程
+        class SchedLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def chat_sync(self, messages, system_prompt="", **kw):
+                self.calls += 1
+                if "作息表" in (system_prompt or ""):
+                    return json.dumps({
+                        "yuxia": [
+                            {"start": 0, "end": 450, "activity": "睡着",
+                             "location": "尤夏的房间", "reply": "asleep",
+                             "enterable": False, "tag": "sleep"},
+                            {"start": 450, "end": 540, "activity": "赶早八",
+                             "location": "大学教室", "reply": "busy",
+                             "enterable": False, "tag": "class"},
+                            {"start": 540, "end": 720, "activity": "上课摸鱼",
+                             "location": "大学教室", "reply": "busy",
+                             "enterable": False, "tag": "class"},
+                            {"start": 720, "end": 780, "activity": "食堂吃午饭",
+                             "location": "食堂", "reply": "free",
+                             "enterable": True, "tag": "meal"},
+                            {"start": 780, "end": 1440, "activity": "没课，窝在公寓",
+                             "location": "公寓客厅", "reply": "free",
+                             "enterable": True, "tag": "free"},
+                        ],
+                        "qingmei": [
+                            {"start": 0, "end": 460, "activity": "睡觉",
+                             "location": "青梅的房间", "reply": "asleep",
+                             "enterable": False, "tag": "sleep"},
+                            {"start": 460, "end": 1440, "activity": "在公寓",
+                             "location": "公寓客厅", "reply": "free",
+                             "enterable": True, "tag": "free"},
+                        ],
+                    }, ensure_ascii=False)
+                return "{}"
+
+        conv0 = app_db.create_conversation(uid)
+        locations.ensure_defaults(app_db, conv0)
+        sched_llm = SchedLLM()
+        data = schedule._generate(app_db, conv0, 0, sched_llm)
+        check("模型能排出一天的日程", bool(data) and len(data["yuxia"]) == 5,
+              str(data)[:120])
+        again = schedule.ensure_day(app_db, conv0, 9 * 60)
+        check("当天日程会被缓存复用",
+              len(again["yuxia"]) == 5 and again["yuxia"][1]["activity"] == "赶早八",
+              str(again["yuxia"][1]))
+
+        b9 = schedule.block_at(app_db, conv0, 9 * 60)
         check("早上九点在上课", b9["tag"] == "class" and "课" in b9["activity"], str(b9))
         check("上课时回消息是忙（可摸鱼）", b9["reply"] == "busy", str(b9["reply"]))
-        b12 = schedule.block_at(12 * 60 + 30)
+        b12 = schedule.block_at(app_db, conv0, 12 * 60 + 30)
         check("中午十二点半在吃饭", b12["tag"] == "meal", str(b12))
-        b2330 = schedule.block_at(23 * 60 + 30)
-        check("半夜在睡", b2330["reply"] == "asleep", str(b2330))
-        ok, why = schedule.player_may_enter("大学教室", 9 * 60)
+        # 动态日程里这一天的半夜是「窝在公寓」；兜底模板则是睡
+        night = [b for b in schedule._fallback("yuxia")
+                 if b["start"] <= 23 * 60 + 30 < b["end"]][0]
+        check("兜底模板半夜在睡", night["reply"] == "asleep", str(night))
+        check("动态日程半夜按模型排的来",
+              schedule.block_at(app_db, conv0, 23 * 60 + 30)["activity"] == "没课，窝在公寓",
+              str(schedule.block_at(app_db, conv0, 23 * 60 + 30)))
+        ok, why = schedule.player_may_enter(app_db, conv0, "大学教室", 9 * 60)
         check("上课中的教室玩家进不去", not ok and "课" in why, why)
-        ok2, _ = schedule.player_may_enter("大学教室", 21 * 60)
+        ok2, _ = schedule.player_may_enter(app_db, conv0, "大学教室", 21 * 60)
         check("下课之后教室可以进", ok2)
-        blocks = schedule.blocks_between(7 * 60, 13 * 60)
+        blocks = schedule.blocks_between(app_db, conv0, 7 * 60, 13 * 60)
         acts = " ".join(b["activity"] for b in blocks)
-        check("跨度里能挑出已结束的日程段", len(blocks) >= 3 and "早饭" in acts, str(len(blocks)))
+        check("跨度里能挑出已结束的日程段", len(blocks) >= 2, str(len(blocks)))
         check("还没结束的段不结算",
               all(b["end"] <= 13 * 60 for b in blocks), str([b["end"] for b in blocks]))
 
@@ -186,7 +236,7 @@ def main():
         r = c.post(f"/api/move/{conv5}", json={"who": "player", "location": "大学教室"})
         check("下课后可以进教室", r.status_code == 200, str(r.status_code))
     finally:
-        schedule.is_weekend = real_is_weekend
+        pass
 
     print()
     if FAILED:

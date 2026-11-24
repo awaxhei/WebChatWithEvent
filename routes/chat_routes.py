@@ -19,6 +19,7 @@ from flask import Blueprint, request, Response, jsonify
 import core.clock as clock
 import core.locations as locations
 import core.props as props
+import core.system_text as system_text
 import core.scenes as scenes
 import core.stickers as stickers
 import core.tokens as tokens
@@ -533,9 +534,9 @@ def chat():
         sticker_feel = _sticker_feeling(sticker_row)
         sticker_desc = stickers.describe(db, sticker_path)
         if sticker_feel:
-            user_message = f"（青梅发来一个表情包，情绪是「{sticker_feel}」，画面是：{sticker_desc}）"
+            user_message = system_text.sticker_received(sticker_desc, sticker_feel)
         else:
-            user_message = f"（青梅发来一个表情包，画面是：{sticker_desc}）"
+            user_message = system_text.sticker_received(sticker_desc)
 
     _T0["t"] = 0.0
     _mark("请求进入")
@@ -565,17 +566,17 @@ def chat():
             from_player = db.get_player_location(conv_id)
             db.set_player_location(conv_id, target)
             _log_move(conv_id, "player", from_player, target, created)
-            user_message = f"（青梅走到了{target}）"
+            user_message = system_text.move_player(target)
             moved = True
     elif bring_match:
         if db.get_current_location(conv_id) != db.get_player_location(conv_id):
-            user_message = f"（青梅想拉着尤夏去{bring_match.group(1)}，可两人根本不在一起）"
+            user_message = system_text.move_blocked(bring_match.group(1))
         else:
             from_yuxia = db.get_current_location(conv_id)
             target, created = locations.switch_both(db, conv_id, bring_match.group(1))
             if target:
                 _log_move(conv_id, "both", from_yuxia, target, created)
-                user_message = f"（青梅拉着尤夏一起去了{target}）"
+                user_message = system_text.move_together(target)
                 moved = True
                 moved_together = True
 
@@ -706,7 +707,9 @@ def chat():
     # 此地的实物（环境描写登记下来的）：让她提到杯子、毯子时是同一个
     props_here = props.block(db, conv_id, yuxia_loc)
     # 此刻的日程：她这边在上课还是已经回公寓了
-    schedule_here = schedule.describe(now_minutes, "yuxia") if SCHEDULE_ENABLED else ""
+    schedule_here = (schedule.describe(db, conv_id, now_minutes, "yuxia",
+                                      deepseek, api_key)
+                     if SCHEDULE_ENABLED else "")
     state_block = state_engine.block(db, conv_id)
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
@@ -730,13 +733,13 @@ def chat():
 
         # 到点了：先让世界说一句她睡着了，再接她的回应
         if fell_asleep:
-            note = "尤夏睡着了。"
+            note = system_text.note(system_text.FALL_ASLEEP)
             db.add_message(conv_id, "assistant", note, channel="state", scene=yuxia_loc)
             yield _sse({"type": "yuxia_state", "content": note})
 
         if woke_up:
             yield _sse({"type": "yuxia_state",
-                        "content": "尤夏迷迷糊糊地睁开眼，还没完全醒。"})
+                        "content": system_text.wake_up()})
 
         # 先说 NPC 的话：她得等人家回完，再接话才自然
         if addressed_npc:
@@ -776,7 +779,7 @@ def chat():
             # 明确要一句最短的话或一个动作，别让玩家对着空气等
             retry_messages = list(context_messages) + [{
                 "role": "user",
-                "content": "【系统】上一轮没有产生任何内容。请至少输出一句话，或一个动作。",
+                "content": system_text.RETRY_HINT,
             }]
             retry_full = ""
             for chunk in deepseek.chat_stream(retry_messages, system_prompt,
@@ -958,7 +961,8 @@ def move(conv_id):
     if who in ("player", "both") and SCHEDULE_ENABLED:
         try:
             now_here = time_keeper.init_clock(db, conv_id)
-            allowed, why = schedule.player_may_enter(target, now_here)
+            allowed, why = schedule.player_may_enter(
+                db, conv_id, target, now_here, deepseek, request_api_key())
             if not allowed:
                 return jsonify({"error": f"进不去：{why}"}), 400
         except Exception:

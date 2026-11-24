@@ -145,6 +145,17 @@ class ChatDB:
                 CREATE INDEX IF NOT EXISTS idx_props_conv
                     ON props(conversation_id, location);
 
+                -- v14：每天生成的日程（按故事日缓存，动态排班）
+                CREATE TABLE IF NOT EXISTS day_schedules (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    day             INTEGER NOT NULL,
+                    payload         TEXT DEFAULT '{}',
+                    created_at      TEXT DEFAULT (datetime('now','localtime')),
+                    UNIQUE(conversation_id, day),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+
                 -- v3：表情包索引（导入即用，缓存自动打标结果）
                 CREATE TABLE IF NOT EXISTS stickers (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -631,6 +642,21 @@ class ChatDB:
         with self._get_conn() as conn:
             conn.execute("UPDATE conversations SET context_brief=?, context_brief_turn=? WHERE id=?",
                          (brief, int(turn), conv_id))
+
+    # ----- v14：当天的日程 -----
+    def get_day_schedule(self, conv_id, day):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM day_schedules WHERE conversation_id=? AND day=?",
+                (conv_id, int(day))).fetchone()
+        return (row["payload"] or "") if row else ""
+
+    def set_day_schedule(self, conv_id, day, payload):
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO day_schedules(conversation_id, day, payload) VALUES(?,?,?)"
+                " ON CONFLICT(conversation_id, day) DO UPDATE SET payload=excluded.payload",
+                (conv_id, int(day), payload or "{}"))
 
     # ----- v11：地点里的实物 -----
     def get_props(self, conv_id, location, limit=12):

@@ -219,6 +219,18 @@ def test_persona_and_memes():
              if "你" in ln and not any("你" in q for q in re.findall(r"「[^」]*」", ln))]
     check("人设改成第一人称了", not stray, " / ".join(stray[:2]))
     check("人设里没有「你叫尤夏」这种第二人称开头", not persona.startswith("# 尤夏\n\n你叫尤夏"))
+    # 系统自己写的话：书面语、第三人称、不撒娇
+    import core.system_text as st
+    casual = ("呀", "啦", "哦", "嘛", "呢", "吧", "哈", "嘿", "诶", "啊", "喔")
+    bad = [tpl for tpl in st.PUBLIC_TEMPLATES
+           if any(ch in tpl for ch in casual)]
+    check("系统提示语里没有口语语气词", not bad, str(bad))
+    check("换地点写成书面旁白",
+          st.move_player("厨房") == "（青梅走到了厨房。）", st.move_player("厨房"))
+    check("睡着/醒来是同一套写法",
+          st.note(st.FALL_ASLEEP).endswith("。）")
+          and st.note(st.WAKE_UP).endswith("。）"),
+          st.note(st.FALL_ASLEEP))
     check("人设里有「梗」这一节", "## 梗" in persona)
     check("接梗而不是表演梗", "不表演梗" in persona, persona[persona.find("## 梗"):][:80])
 
