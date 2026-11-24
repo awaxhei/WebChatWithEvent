@@ -9,6 +9,7 @@
 """
 import json
 import re
+import time
 
 import core.clock as clock
 from config import (
@@ -41,6 +42,16 @@ def apply_message_tick(db, conv_id, user_text):
     """
     now = init_clock(db, conv_id)
     now = clock.tick(now)
+    # 真实时间也在流：隔了很久才回来，故事里的时间也该往前走，
+    # 而不是停在上一句的同一分钟里。（按真实分钟折算，单次最多推 6 小时）
+    try:
+        last = float(db.get_last_user_at(conv_id) or 0)
+    except Exception:
+        last = 0.0
+    if last:
+        idle_minutes = int((time.time() - last) // 60)
+        if idle_minutes > 0:
+            now += min(idle_minutes, 6 * 60)
 
     jump = clock.detect_keyword_jump(user_text)
     applied = None

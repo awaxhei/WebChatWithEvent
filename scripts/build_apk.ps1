@@ -34,6 +34,16 @@ New-Item -ItemType Directory -Force -Path (Join-Path $pyDir "services") | Out-Nu
 
 Copy-Item (Join-Path $root "app.py") $pyDir -Force
 Copy-Item (Join-Path $root "mobile_boot.py") $pyDir -Force
+# 打包信息：手机端 /api/ping 会带出来，用来确认装上的到底是哪一版
+$shaFile = Join-Path $root ".git\refs\heads\main"
+$sha = "unknown"
+if (Test-Path $shaFile) {
+    $full = (Get-Content $shaFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($full -and $full.Length -ge 7) { $sha = $full.Trim().Substring(0, 7) }
+}
+$built = Get-Date -Format "yyyy-MM-dd HH:mm"
+$info = "BUILD_SHA = `"$sha`"`nBUILD_TIME = `"$built`"`n"
+[System.IO.File]::WriteAllText((Join-Path $pyDir "build_info.py"), $info, (New-Object System.Text.UTF8Encoding($false)))
 # config.py ???? Key??? APK?????Key ? App ??????
 Copy-Item (Join-Path $root "config_template.py") (Join-Path $pyDir "config.py") -Force
 foreach ($sub in @("core", "routes", "services")) {

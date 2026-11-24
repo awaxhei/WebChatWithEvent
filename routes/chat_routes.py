@@ -113,6 +113,17 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
 # 一轮里最多几条动作旁白
 MAX_ACTIONS_PER_REPLY = 2
 
+# 两人不在一起时，动作里出现这些就说明她写成了「碰到对方」——那不是此刻能发生的事
+_CONTACT_WORDS = ("抱住", "抱紧", "拥抱", "抱着", "摸", "靠", "贴", "牵", "递", "塞",
+                  "喂", "亲", "搂", "蹭", "拉住", "抓住她", "拍她", "碰她", "抱住她")
+
+
+def _action_ok(action, co_located):
+    """这个动作此刻说不说得通：异地时不能有身体接触，但一个人在那边做事是允许的"""
+    if co_located:
+        return True
+    return not any(w in action for w in _CONTACT_WORDS)
+
 
 def _bubble_parts(text, limit=24, max_parts=5):
     """一句回复拆成几个气泡：她的多个短句应该一条一条发，而不是挤在一起
@@ -273,8 +284,13 @@ def _as_context_content(row):
         return json.dumps({"消息": content}, ensure_ascii=False)
     if row["role"] == "assistant" and channel == "action":
         # 她自己的动作（模型给的「动作」字段、自主行动做下的事）也回灌成同一种格式，
-        # 两个模型共用一条时间线，她下一轮才知道自己手上刚动过什么
-        return json.dumps({"动作": content}, ensure_ascii=False)
+        # 两个模型共用一条时间线，她下一轮才知道自己手上刚动过什么。
+        # 带上时间：动作是「几点做的」，不是一句漂浮的台词。
+        payload = {"动作": content}
+        minutes = int(row.get("story_minutes") or 0)
+        if minutes:
+            payload["时间"] = clock.format_time(minutes)
+        return json.dumps(payload, ensure_ascii=False)
     return content
 
 
@@ -738,15 +754,15 @@ def chat():
         _mark("AI A 输出完成")
         # 注意要用「全部消息数」：get_message_count 只数玩家消息，不会变
         wrote_before = db.get_total_message_count(conv_id)
-        # 不在同一个地方时不收她的动作：手机里她看不见你，写「被抱住」就是假画面
+        # 传「是否同处一地」：异地时动作照收（她在自己那边做事），但不允许写身体接触
         actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
-                                 allow_actions=can_speak)
+                                 allow_actions=co_located)
         if db.get_total_message_count(conv_id) == wrote_before:
             # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
             # 明确要一句最短的话或一个动作，别让玩家对着空气等
             retry_messages = list(context_messages) + [{
                 "role": "user",
-                "content": "（你刚才什么也没输出。至少给一句最短的话，或者一个动作。）",
+                "content": "【系统】上一轮没有产生任何内容。请至少输出一句话，或一个动作。",
             }]
             retry_full = ""
             for chunk in deepseek.chat_stream(retry_messages, system_prompt,
@@ -755,7 +771,7 @@ def chat():
                 yield _sse({"type": "chunk", "content": chunk})
             actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
                                      now_minutes, channel,
-                                     allow_actions=can_speak) or actions
+                                     allow_actions=co_located) or actions
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
@@ -794,7 +810,8 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
             if can_speak:
                 db.add_message(conv_id, "assistant",
                                json.dumps({"对白": part}, ensure_ascii=False),
-                               channel=CHAT_CHANNEL, scene=yuxia_loc)
+                               channel=CHAT_CHANNEL, scene=yuxia_loc,
+                               story_minutes=now_minutes)
             else:
                 db.add_message(conv_id, "assistant", part,
                                channel=fallback_channel, scene=yuxia_loc)
@@ -810,12 +827,15 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if obj.get("对白") and can_speak:
             # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆
             speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
-        if obj.get("动作") and allow_actions and len(actions) < MAX_ACTIONS_PER_REPLY:
+        if obj.get("动作") and len(actions) < MAX_ACTIONS_PER_REPLY:
             # 她可以用动作代替说话：动作走旁白通道，不进对话框。
             # 一轮最多两条：动作堆多了会盖过对白。
-            # 两人不在一起时（手机通道）不收动作：她看不见你，写了就是「被抱住」这种假画面。
-            actions.extend(_bubble_parts(_strip_speaker(str(obj["动作"])),
-                                         max_parts=MAX_ACTIONS_PER_REPLY - len(actions)))
+            # 两人不在一起时仍然收动作用来推进剧情，但写「抱、摸、递」这种接触的丢掉。
+            for piece in _bubble_parts(_strip_speaker(str(obj["动作"])),
+                                       max_parts=MAX_ACTIONS_PER_REPLY - len(actions)):
+                if not _action_ok(piece, allow_actions):
+                    continue
+                actions.append(piece)
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
@@ -849,23 +869,28 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
             if first and mood:
                 payload["心情"] = mood
             db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
-                           channel=CHAT_CHANNEL, scene=yuxia_loc)
+                           channel=CHAT_CHANNEL, scene=yuxia_loc,
+                           story_minutes=now_minutes)
             first = False
         if stickers_used and not speech:
             payload = {"表情包": ",".join(stickers_used)}
             if mood:
                 payload["心情"] = mood
             db.add_message(conv_id, "assistant", json.dumps(payload, ensure_ascii=False),
-                           channel=CHAT_CHANNEL, scene=yuxia_loc)
+                           channel=CHAT_CHANNEL, scene=yuxia_loc,
+                           story_minutes=now_minutes)
 
     for msg in phone_msgs:
-        db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc)
+        db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc,
+                       story_minutes=now_minutes)
 
     # 她的动作：写进独立的 action 通道（前端渲染成斜体旁白），不进对话框。
     # 以前和「神态」共用 state 通道，而前端对 state 只保留最后一条，
     # 于是动作写进库里却几乎看不到——尤其手机 App。
     for act in actions:
-        db.add_message(conv_id, "assistant", act, channel="action", scene=yuxia_loc)
+        # 动作带时间：它不是一句台词，而是「第几分钟做了什么」的一件事
+        db.add_message(conv_id, "assistant", act, channel="action", scene=yuxia_loc,
+                       story_minutes=now_minutes)
 
     readable = " ".join(speech + [f"（手机）{m}" for m in phone_msgs]).strip()
     if readable:

@@ -213,6 +213,8 @@ class ChatDB:
                 ("events", "tier", "TEXT DEFAULT ''"),
                 ("messages", "channel", "TEXT DEFAULT 'chat'"),
                 ("messages", "scene", "TEXT DEFAULT ''"),
+                # v12：动作/消息发生在故事的第几分钟（动作要有时间，不然只是嘴上说说）
+                ("messages", "story_minutes", "INTEGER DEFAULT 0"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -642,24 +644,27 @@ class ChatDB:
                          (text or "", int(upto_id or 0), conv_id))
 
     # ----- v4：消息通道（chat / phone） -----
-    def add_message(self, conv_id, role, content, channel="chat", scene=""):
+    def add_message(self, conv_id, role, content, channel="chat", scene="", story_minutes=0):
         with self._get_conn() as conn:
             cur = conn.execute(
-                "INSERT INTO messages(conversation_id, role, content, channel, scene) VALUES(?,?,?,?,?)",
-                (conv_id, role, content, channel, scene))
+                "INSERT INTO messages(conversation_id, role, content, channel, scene,"
+                " story_minutes) VALUES(?,?,?,?,?,?)",
+                (conv_id, role, content, channel, scene, int(story_minutes or 0)))
             return cur.lastrowid
 
     def get_messages(self, conv_id, channel=None):
         with self._get_conn() as conn:
             if channel:
                 rows = conn.execute(
-                    "SELECT id, role, content, channel, scene, created_at FROM messages"
+                    "SELECT id, role, content, channel, scene, story_minutes, created_at"
+                    " FROM messages"
                     " WHERE conversation_id=? AND channel=? ORDER BY id ASC",
                     (conv_id, channel)).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, role, content, channel, scene, created_at FROM messages"
-                    " WHERE conversation_id=? ORDER BY id ASC", (conv_id,)).fetchall()
+                    "SELECT id, role, content, channel, scene, story_minutes, created_at"
+                    " FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                    (conv_id,)).fetchall()
         return [dict(r) for r in rows]
 
     def get_phone_messages(self, conv_id, since_id=0, limit=200):

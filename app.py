@@ -97,7 +97,14 @@ def ping():
     如果没有这一步，后端一退出，页面还能靠 Service Worker 缓存照常显示，
     点登录只会得到一句笼统的"网络错误"，看不出真正原因。
     """
-    out = jsonify({"ok": True, "app": "yuxia", "host": request.host})
+    build = {}
+    try:
+        import build_info                      # 打包时生成，开发环境里没有这个模块
+        build = {"build_sha": getattr(build_info, "BUILD_SHA", ""),
+                 "build_at": getattr(build_info, "BUILD_TIME", "")}
+    except Exception:
+        build = {"build_sha": "dev", "build_at": ""}
+    out = jsonify({"ok": True, "app": "yuxia", "host": request.host, **build})
     out.headers["Cache-Control"] = "no-store"
     return out
 

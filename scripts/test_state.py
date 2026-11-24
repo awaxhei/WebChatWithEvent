@@ -79,7 +79,9 @@ def main():
     # ── 1) 状态的时间规则
     check("23:30 该睡了", st.rules_state(23 * 60 + 30) == "睡眠", st.rules_state(1410))
     check("凌晨 2 点还是睡", st.rules_state(2 * 60) == "睡眠")
-    check("7:10 刚醒，迷糊", st.rules_state(7 * 60 + 10) == "迷糊")
+    # 早上七点她当然还在睡（用户定的口径）；醒来是她被叫醒之后的事
+    check("7:10 还在睡", st.rules_state(7 * 60 + 10) == "睡眠", st.rules_state(430))
+    check("8 点之后不强制状态", st.rules_state(8 * 60 + 1) == "", st.rules_state(481))
     check("中午不强制状态", st.rules_state(12 * 60) == "", st.rules_state(720))
 
     conv = app_db.create_conversation(user)
@@ -90,8 +92,8 @@ def main():
     check("夜里规则把清醒改成睡眠",
           st.apply_rules(app_db, conv, 23 * 60 + 30) == "睡眠", app_db.get_yuxia_state(conv))
     check("睡眠状态能读出来", st.is_asleep(app_db, conv))
-    check("天亮后从睡眠醒来变迷糊",
-          st.apply_rules(app_db, conv, 7 * 60) == "迷糊", app_db.get_yuxia_state(conv))
+    check("早上七点规则仍然让她睡",
+          st.apply_rules(app_db, conv, 7 * 60) == "睡眠", app_db.get_yuxia_state(conv))
     app_db.set_yuxia_state(conv, "清醒")
     check("白天不会把人弄成睡眠",
           st.apply_rules(app_db, conv, 12 * 60) == "清醒", app_db.get_yuxia_state(conv))
@@ -271,7 +273,7 @@ def main():
         rows = app_db.get_messages(conv_far)
         act_rows = [m for m in rows if m["channel"] == "action"]
         phone_rows = [m for m in rows if m["channel"] == "phone"]
-        check("异地时不落她的动作", not act_rows, str([m["content"] for m in act_rows]))
+        check("异地时身体接触的动作被丢掉", not act_rows, str([m["content"] for m in act_rows]))
         check("异地时她用消息回", any("抱不到" in m["content"] for m in phone_rows),
               str([m["content"] for m in phone_rows]))
         check("提示词写明不在一起、看不见对方",
@@ -282,6 +284,33 @@ def main():
         check("玩家的动作原文进了时间线",
               any("抱住她" in m["content"] for m in user_rows),
               str([m["content"] for m in user_rows]))
+    finally:
+        chat_mod.deepseek = real
+
+    # ── 4d) 异地时允许她一个人做事（推进剧情），动作带时间
+    conv_far2 = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_far2)
+    app_db.set_current_location(conv_far2, "便利店")
+    app_db.set_player_location(conv_far2, "公寓客厅")
+    app_db.set_story_minutes(conv_far2, 15 * 60 + 20)
+
+    class SoloLLM(StubLLM):
+        def __init__(self):
+            super().__init__(reply='{"消息": "买到了", "动作": "把饭团放进袋子里"}')
+
+    chat_mod.deepseek = SoloLLM()
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv_far2, "message": "买个饭团"})
+        r.data.decode("utf-8")
+        acts = [m for m in app_db.get_messages(conv_far2) if m["channel"] == "action"]
+        check("异地时一个人做的事照收", len(acts) == 1 and "饭团" in acts[0]["content"],
+              str([m["content"] for m in acts]))
+        minutes = int(acts[0].get("story_minutes") or 0) if acts else 0
+        check("动作带上故事时间", 15 * 60 + 20 <= minutes <= 15 * 60 + 40, str(minutes))
+        ctx = chat_mod._context_window(conv_far2)
+        joined = json.dumps(ctx, ensure_ascii=False)
+        check("回灌给她的动作里带「时间」",
+              "时间" in joined and "15:2" in joined, joined[-200:])
     finally:
         chat_mod.deepseek = real
 
