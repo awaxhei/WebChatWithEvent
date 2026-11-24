@@ -127,6 +127,14 @@ def main():
     if os.path.exists(memes_path):
         with open(memes_path, encoding="utf-8") as f:
             check("梗库内容一并带过去", "猫猫头" in f.read())
+
+    # 改了人设重装 App：文件要跟着更新，不能一直用第一次落盘的旧版
+    mobile_boot.prepare(app_root, "新版人设", "新版梗库")
+    with open(os.path.join(app_root, "yuxia_prompt.txt"), encoding="utf-8") as f:
+        check("人设内容变了会覆盖", f.read() == "新版人设")
+    with open(memes_path, encoding="utf-8") as f:
+        check("梗库内容变了也会覆盖", f.read() == "新版梗库")
+    mobile_boot.prepare(app_root, prompt, memes)   # 还原，后面的用例还要用
     check("SQLite 落在 App 目录", os.path.exists(os.path.join(app_root, "data", "chat.db")),
           os.listdir(os.path.join(app_root, "data")) if os.path.isdir(os.path.join(app_root, "data")) else "no data dir")
     check("表情包目录建好",

@@ -6,6 +6,7 @@ v3 子系统离线单元测试（不调用任何 LLM）
 """
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -195,7 +196,11 @@ def test_memory():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-    # ── 3.5 梗库：yuxia_memes.txt 拼进人设 ──────────────
+
+# ── 4. 表情包 ────────────────────────────────────────
+
+def test_persona_and_memes():
+    """梗库拼进提示词；人设是第一人称"""
     import config as cfg
     from config import CHAT_PROMPT
     check("梗库已加载", len(cfg.YUXIA_MEMES) >= 3, str(cfg.YUXIA_MEMES[:5]))
@@ -209,10 +214,14 @@ def test_memory():
           str(cfg.YUXIA_MEMES[:3]))
     with open(os.path.join(ROOT, "yuxia_prompt.txt"), encoding="utf-8") as f:
         persona = f.read()
+    # 人设是第一人称：正文里的「你」只允许出现在她自己的台词引号里
+    stray = [ln.strip() for ln in persona.split("\n")
+             if "你" in ln and not any("你" in q for q in re.findall(r"「[^」]*」", ln))]
+    check("人设改成第一人称了", not stray, " / ".join(stray[:2]))
+    check("人设里没有「你叫尤夏」这种第二人称开头", not persona.startswith("# 尤夏\n\n你叫尤夏"))
     check("人设里有「梗」这一节", "## 梗" in persona)
     check("接梗而不是表演梗", "不表演梗" in persona, persona[persona.find("## 梗"):][:80])
 
-# ── 4. 表情包 ────────────────────────────────────────
 
 def test_stickers():
     tmp = mkdtemp("yuxia_stk_")
@@ -530,6 +539,7 @@ def main():
     test_v4_scenes_phone_tiers()
     print("\n── 记忆流 ──")
     test_memory()
+    test_persona_and_memes()
     print("\n── 表情包 ──")
     test_stickers()
     print("\n── 表情包的上下文 ──")

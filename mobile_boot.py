@@ -28,17 +28,29 @@ def prepare(root, prompt_text="", memes_text=""):
                 os.path.join("static", "stickers", "upload")):
         os.makedirs(os.path.join(root, sub), exist_ok=True)
 
-    # 人设提示词由 App 从 assets 里带过来，第一次启动时落盘
-    prompt_path = os.path.join(root, "yuxia_prompt.txt")
-    if prompt_text and not os.path.exists(prompt_path):
-        with open(prompt_path, "w", encoding="utf-8") as f:
-            f.write(prompt_text)
-    # 梗库同理：App 从 assets 带过来，落盘后由 config 读取
-    memes_path = os.path.join(root, "yuxia_memes.txt")
-    if memes_text and not os.path.exists(memes_path):
-        with open(memes_path, "w", encoding="utf-8") as f:
-            f.write(memes_text)
+    # 人设与梗库由 App 从 assets 带过来，落盘后由 config 读取。
+    # 内容变了就覆盖：改了人设重装 App，手机上必须真的用上新的那一份，
+    # 否则每一次改人设都只对电脑版生效。
+    _sync_text(os.path.join(root, "yuxia_prompt.txt"), prompt_text)
+    _sync_text(os.path.join(root, "yuxia_memes.txt"), memes_text)
     return root
+
+
+def _sync_text(path, text):
+    """把 assets 里的文本写到应用目录；内容相同就不动"""
+    if not text:
+        return False
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                if f.read() == text:
+                    return False
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return True
+    except Exception as e:
+        print(f"[mobile] 写入失败 {path}: {e}")
+        return False
 
 
 def start(root, port=54123, prompt_text="", memes_text=""):

@@ -128,8 +128,8 @@ def block(db, conv_id):
     """给对话提示词用的一小段：她此刻是什么状态、这个状态怎么说话"""
     state = get(db, conv_id)
     style = STYLE.get(state) or STYLE["清醒"]
-    return (f"【你此刻的状态】{state}\n"
-            f"【这个状态下的你】{style}\n"
+    return (f"【我此刻的状态】{state}\n"
+            f"【这个状态下的我】{style}\n"
             "（状态会变：饿了、吃饱了、刚睡醒、被说到高兴的地方，都可以在回复里"
             "带一个「状态」字段告诉系统，取值只有 清醒 / 迷糊 / 兴奋 / 饥饿 / 饱腹。）")
 
