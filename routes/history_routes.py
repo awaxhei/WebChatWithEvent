@@ -26,6 +26,10 @@ def get_conversation(conv_id):
     if denied:
         return denied
 
+    try:
+        db.touch_last_seen(conv_id)        # 打开历史 = 人回来了
+    except Exception:
+        pass
     messages = db.get_messages(conv_id)
     atmo = db.get_atmosphere(conv_id, limit=100)
     events = db.get_recent_events(conv_id, limit=50)

@@ -217,6 +217,8 @@ class ChatDB:
                 ("messages", "story_minutes", "INTEGER DEFAULT 0"),
                 # v13：故事时钟锚定的真实时刻（unix 秒）：时间从此按真实世界流
                 ("conversations", "story_at", "REAL DEFAULT 0"),
+                # v14：玩家最后一次出现在前台的真实时刻（离线结算按它算离开了多久）
+                ("conversations", "last_seen_at", "REAL DEFAULT 0"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -414,6 +416,18 @@ class ChatDB:
             conn.execute(
                 "UPDATE conversations SET story_minutes=?, story_at=? WHERE id=?",
                 (int(minutes), time.time(), conv_id))
+
+    def touch_last_seen(self, conv_id, ts=None):
+        """玩家在界面上出现了一次（说话、开界面、刷新场景都算）"""
+        with self._get_conn() as conn:
+            conn.execute("UPDATE conversations SET last_seen_at=? WHERE id=?",
+                         (float(ts if ts is not None else time.time()), conv_id))
+
+    def get_last_seen_at(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT last_seen_at FROM conversations WHERE id=?",
+                               (conv_id,)).fetchone()
+        return float(row["last_seen_at"] or 0) if row else 0.0
 
     def get_story_anchor(self, conv_id):
         with self._get_conn() as conn:

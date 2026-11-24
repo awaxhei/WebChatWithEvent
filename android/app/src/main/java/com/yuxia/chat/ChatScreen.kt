@@ -154,16 +154,23 @@ fun ChatScreen(vm: ChatViewModel) {
                     Column {
                         Text("尤夏", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (s.coLocated) s.location else "${s.location}（你在${s.playerLocation}）",
+                            if (s.coLocated) s.location else "她在${s.location}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
                         )
+                        if (!s.coLocated && s.playerLocation.isNotBlank()) {
+                            Text(
+                                "你在${s.playerLocation}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showTimeDial = true }) {
-                        Icon(Icons.Filled.Schedule, contentDescription = "调整时间")
-                    }
+                    // 时间锚定真实世界之后不再手动拨动，这里就不再放入口
                     IconButton(onClick = { showEvents = true; vm.loadEvents() }) {
                         Icon(Icons.Filled.ListAlt, contentDescription = "故事进展")
                     }

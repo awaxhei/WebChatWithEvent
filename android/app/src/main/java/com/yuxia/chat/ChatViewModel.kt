@@ -154,6 +154,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 回到前台：把历史、场景、事件重拉一遍
+     *
+     * 后台时通知可能已经先到了，聊天界面却还停在离开前的位置——
+     * 这就是「通知比实际聊天早」的观感来源。回前台先对齐一次。
+     */
+    fun reloadOnResume() {
+        val conv = state.convId
+        if (conv.isEmpty() || state.screen != Screen.Chat) return
+        viewModelScope.launch {
+            try {
+                val obj = withContext(Dispatchers.IO) { Api.history(app, conv) }
+                applyHistory(obj)
+                loadEvents()
+                refreshScene()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun openConversation(id: String) {
         viewModelScope.launch {
             Prefs.setConvId(app, id)

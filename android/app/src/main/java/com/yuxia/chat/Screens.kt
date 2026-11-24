@@ -53,10 +53,23 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 @Composable
 fun AppRoot(vm: ChatViewModel) {
     val s = vm.state
+    // 回到前台就对齐一次：后台时她可能已经发过消息（通知先到），界面得跟上
+    val lifecycle = LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.reloadOnResume()
+        }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
     when (s.screen) {
         Screen.Boot -> BootScreen(s, onRetry = vm::retryBoot)
         Screen.ApiKey -> ApiKeyScreen(s, onSave = vm::saveApiKey, onSkip = { vm.enterHomeFromKeyScreen() })

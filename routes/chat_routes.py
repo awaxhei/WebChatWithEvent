@@ -27,14 +27,14 @@ from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
     autonomy, character_writer, checkpoint, context_writer, memory_engine, npc,
-    scene_watcher, time_keeper, world_context, state_engine,
+    offline, scene_watcher, schedule, time_keeper, world_context, state_engine,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
     should_run_random_event, should_run_event_summary,
 )
 from config import (
-    TIME_MANUAL_SET, TIME_KEYWORD_JUMP,
+    TIME_MANUAL_SET, TIME_KEYWORD_JUMP, SCHEDULE_ENABLED,
     CHAT_PROMPT, CHARACTER_NAME, CHAT_CHANNEL, PHONE_CHANNEL, NPC_CAP,
     STICKER_DIR, STICKER_UPLOAD_MAX_FILES, STICKER_UPLOAD_MAX_MB,
     MOOD_FACES, MOOD_DEFAULT, AUTONOMY_SPEED_DEFAULT,
@@ -579,6 +579,17 @@ def chat():
                 moved = True
                 moved_together = True
 
+    # 你离开的这段时间她也在过日子：先结算，再回你这句话
+    try:
+        offline_now = time_keeper.init_clock(db, conv_id)
+        offline.settle(db, conv_id, deepseek, offline_now, api_key=api_key)
+    except Exception as e:
+        print(f"[离线] 结算跳过: {e}")
+    try:
+        db.touch_last_seen(conv_id)
+    except Exception:
+        pass
+
     yuxia_loc = db.get_current_location(conv_id)
     player_loc = db.get_player_location(conv_id)
     co_located = player_loc == yuxia_loc
@@ -694,11 +705,13 @@ def chat():
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 此地的实物（环境描写登记下来的）：让她提到杯子、毯子时是同一个
     props_here = props.block(db, conv_id, yuxia_loc)
+    # 此刻的日程：她这边在上课还是已经回公寓了
+    schedule_here = schedule.describe(now_minutes, "yuxia") if SCHEDULE_ENABLED else ""
     state_block = state_engine.block(db, conv_id)
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
-    blocks = "\n\n".join(b for b in (world, place, scene_here, props_here,
-                                     npcs_here, state_block) if b)
+    blocks = "\n\n".join(b for b in (world, place, scene_here, schedule_here,
+                                     props_here, npcs_here, state_block) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
@@ -916,6 +929,10 @@ def get_scene(conv_id):
     denied = ensure_conversation_owner(db, conv_id, request.user_id)
     if denied:
         return denied
+    try:
+        db.touch_last_seen(conv_id)        # 打开界面 = 人回来了
+    except Exception:
+        pass
     return jsonify(_scene_payload(conv_id, request_api_key()))
 
 
@@ -936,6 +953,16 @@ def move(conv_id):
 
     from_yuxia = db.get_current_location(conv_id)
     from_player = db.get_player_location(conv_id)
+
+    # 她正在上课的教室，玩家进不去（摸鱼可以发消息，但不能推门进去）
+    if who in ("player", "both") and SCHEDULE_ENABLED:
+        try:
+            now_here = time_keeper.init_clock(db, conv_id)
+            allowed, why = schedule.player_may_enter(target, now_here)
+            if not allowed:
+                return jsonify({"error": f"进不去：{why}"}), 400
+        except Exception:
+            pass
 
     # 一起过去：只有两人在同一个地方时才谈得上"一起走"
     if who == "both":
@@ -1174,6 +1201,13 @@ def idle(conv_id):
 
     api_key = request_api_key()
     now = time_keeper.init_clock(db, conv_id)
+    # 你不在的时候她照样过：按日程段结算这段时间，顺便把她发的消息落库
+    try:
+        written = offline.settle(db, conv_id, deepseek, now, api_key=api_key)
+        if written:
+            db.touch_last_seen(conv_id)     # 这一段已经交代过，别重复结算
+    except Exception as e:
+        print(f"[离线] 后台结算跳过: {e}")
     # 事件带来的状态（忙碌/感冒/发烧）会自然过期；到点睡、天亮迷糊也在这里对齐
     state_engine.expire(db, conv_id, now)
     state_engine.apply_rules(db, conv_id, now)

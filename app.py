@@ -100,7 +100,8 @@ def ping():
     build = {}
     try:
         import build_info                      # 打包时生成，开发环境里没有这个模块
-        build = {"build_sha": getattr(build_info, "BUILD_SHA", ""),
+        build = {"build_sha": getattr(build_info, "BUILD_TAG", "")
+                 or getattr(build_info, "BUILD_SHA", ""),
                  "build_at": getattr(build_info, "BUILD_TIME", "")}
     except Exception:
         build = {"build_sha": "dev", "build_at": ""}
