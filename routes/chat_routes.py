@@ -51,6 +51,18 @@ _PUSH_CMD_RE = re.compile(r"^/推进\s*(.*)")
 _MOVE_CMD_RE = re.compile(r"^/去\s*(.+)")
 _BRING_CMD_RE = re.compile(r"^/带\s*(.+)")
 
+# 推进剧情：玩家没说话，只戳了一下、或者给了一个方向。
+# 这一轮该由「动作」推进画面——以前和普通聊天同一条提示词，
+# 于是按下去只换来一句安抚的话，手机端看着就像什么都没发生。
+PUSH_RULE = (
+    "【这一轮是推进剧情】\n"
+    "青梅没有开口，只是动了一下，或者给了一个方向。这一小段由你来推进画面：\n"
+    "- **至少写一个 `动作`**：写清我做了什么、场面因此变成什么样；动作是这一轮的主体\n"
+    "- 对白可以有，但要短；没有对白也可以\n"
+    "- 接着上一轮的时间线往下做，不要重复刚做过的动作\n"
+    "- 两个人不在一起时，动作只写我自己在这边做的事\n"
+)
+
 
 def _sse(payload):
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -690,9 +702,10 @@ def chat():
         "手机里是活蹦乱跳又嘴硬的那一面：句子短、节奏快，可以连发两三条"
         "（一条问、一条催、一条自己找补），语气词（呀、嘛、叭、诶、啦、哦）和颜文字往外掉，"
         "被戳中了先嘴硬「才没有」，下一条又忍不住露出来。"
-        "**你们不在一起，看不见对方**：不要写动作，也不要写抱、摸、靠过去、递东西这类身体接触"
-        "——那些此刻都还发生不了。她发来括号里的动作（「（抱住她）」这种），"
+        "**你们不在一起，看不见对方**：消息里不要写动作，也不要写抱、摸、靠过去、递东西"
+        "这类身体接触——那些此刻都还发生不了。她发来括号里的动作（「（抱住她）」这种），"
         "那只是她打的一行字，就当成一句文字回她（「隔着手机抱不到啦」这样）。"
+        "你自己在这边做的事可以写进 `动作` 字段，系统会当旁白记下来。"
     )
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
     format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
@@ -718,6 +731,8 @@ def chat():
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
+    if is_push_cmd:
+        system_prompt += f"{PUSH_RULE}\n\n"
     system_prompt += f"{channel_rule}\n\n{format_rule}"
     _mark("提示词组装完成（准备开始流式）")
 
@@ -789,6 +804,22 @@ def chat():
             actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
                                      now_minutes, channel,
                                      allow_actions=co_located) or actions
+        if is_push_cmd and not actions:
+            # 推进剧情这一轮必须有动作：只说了一句话就再要一次，只要动作。
+            # 这次不流式：台词已经存过，再流一遍会在界面上重复出现。
+            try:
+                extra = deepseek.chat_sync(
+                    list(context_messages) + [{"role": "user",
+                                               "content": system_text.PUSH_RETRY_HINT}],
+                    system_prompt=system_prompt, api_key_override=api_key)
+            except Exception as e:
+                print(f"[推进] 追要动作失败: {e}")
+                extra = ""
+            if extra:
+                more = _persist_reply(conv_id, extra, can_speak, yuxia_loc,
+                                      now_minutes, channel,
+                                      allow_actions=co_located)
+                actions = list(actions or []) + list(more or [])
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})

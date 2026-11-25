@@ -299,6 +299,51 @@ def main():
     finally:
         chat_mod.deepseek = real
 
+    # ── 10b) 推进剧情：这一轮要出动作推进画面，不能又变成一句安抚的台词
+    convP = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, convP)
+    locations.switch_both(app_db, convP, "公寓客厅")
+    llmP = CaptureLLM('{"动作": "我把被子往上拉了拉，往你那边挪了半个身位。"}')
+    chat_mod.deepseek = llmP
+    try:
+        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/推进 一起睡"})
+        body = r.data.decode("utf-8")
+        check("推进剧情在提示词里说明这一轮要出动作",
+              "【这一轮是推进剧情】" in llmP.system_prompt, llmP.system_prompt[-300:])
+        check("普通聊天不带这段提示",
+              "【这一轮是推进剧情】" not in (llmT.system_prompt or ""))
+        check("动作当场推给前端",
+              '"yuxia_action"' in body and "挪了半个身位" in body, body[-300:])
+        acts = [m for m in app_db.get_messages(convP) if m["channel"] == "action"]
+        check("动作落进动作通道",
+              any("挪了半个身位" in (m["content"] or "") for m in acts),
+              str([m["content"] for m in acts]))
+
+        # 只给台词不给动作：再要一次，而且这次只要动作
+        class PushRetryLLM(CaptureLLM):
+            def __init__(self):
+                super().__init__('{"对白": "……嗯。"}')
+                self.sync_calls = 0
+
+            def chat_sync(self, messages, system_prompt="", **kw):
+                if "推进剧情" not in (system_prompt or ""):
+                    return "[生成失败: 测试桩]"
+                self.sync_calls += 1
+                self.messages = list(messages)
+                return '{"动作": "我伸手把灯关了，房间里只剩窗帘缝里那点光。"}'
+
+        llmR = PushRetryLLM()
+        chat_mod.deepseek = llmR
+        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/推进"})
+        body = r.data.decode("utf-8")
+        check("推进剧情缺动作时会再要一次", llmR.sync_calls == 1, str(llmR.sync_calls))
+        check("追要的请求里说明只差动作",
+              "没有写动作" in json.dumps(llmR.messages, ensure_ascii=False),
+              json.dumps(llmR.messages, ensure_ascii=False)[-200:])
+        check("追来的动作也推给前端", "窗帘缝里那点光" in body, body[-200:])
+    finally:
+        chat_mod.deepseek = real
+
     # ── 11) 玩家在界面上换场景：一个字都没说，她也得知道人走了
     convS = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, convS)

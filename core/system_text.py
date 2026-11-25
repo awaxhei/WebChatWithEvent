@@ -31,6 +31,8 @@ STICKER_RECEIVED_WITH_FEEL = "青梅发来一个表情包，情绪是「{feel}�
 
 # 给模型看的系统提示（不显示给玩家）
 RETRY_HINT = "【系统】上一轮没有产生任何内容。请至少输出一句话，或一个动作。"
+PUSH_RETRY_HINT = ("【系统】这一轮是推进剧情，但你只写了话、没有写动作。"
+                   "请只输出一个 JSON 对象，用 `动作` 推进画面，对白可以省略。")
 
 
 def move_player(place):
@@ -61,5 +63,5 @@ def wake_up():
 PUBLIC_TEMPLATES = (
     MOVE_PLAYER, MOVE_TOGETHER, MOVE_BLOCKED,
     FALL_ASLEEP, WAKE_UP, STICKER_RECEIVED, STICKER_RECEIVED_WITH_FEEL,
-    RETRY_HINT,
+    RETRY_HINT, PUSH_RETRY_HINT,
 )
