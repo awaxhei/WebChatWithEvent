@@ -148,6 +148,24 @@ def main():
     check("联系人回复进了手机通道", got and "忙完" in got[-1]["content"],
           str(app_db.get_phone_messages(conv2)))
 
+    # ── 2b) 她说「我去问问妈妈」：妈妈会真的回一句（不靠模型自己写说话人）
+    conv2b = new_conv(user, "尤夏的房间", both=False)
+    app_db.set_player_location(conv2b, "青梅的房间")
+    npc.ensure_person(app_db, conv2b, "妈妈", role="尤夏的母亲", phone=True)
+    stub2b = StubLLM('{"消息": "我去问问妈妈"}')
+    chat_mod.deepseek = stub2b
+    try:
+        r = c.post("/api/chat", json={"conversation_id": conv2b, "message": "周末有空吗"})
+        evs = sse(r.data.decode("utf-8"))
+    finally:
+        chat_mod.deepseek = real_llm
+    check("说要问妈妈时，妈妈真的回了",
+          any(e.get("type") == "npc_phone" for e in evs),
+          str([e.get("type") for e in evs]))
+    mom2b = [m for m in app_db.get_phone_messages(conv2b)
+             if m.get("speaker") == "妈妈"]
+    check("妈妈的回复落进手机历史", bool(mom2b), str(app_db.get_phone_messages(conv2b)))
+
     # ── 3) 事件门控：亲密时刻 / 冷却 / 睡着
     conv3 = new_conv(user)
     app_db.add_message(conv3, "user", "别走", story_minutes=600)

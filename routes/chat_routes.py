@@ -890,6 +890,24 @@ def chat():
             retry = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
                                    now_minutes, channel, allow_actions=co_located)
             actions = retry["actions"] or actions
+            if retry.get("phone"):
+                reply["phone"] = retry["phone"]
+        # 她说「我去问问妈妈」时，让妈妈真的回一条（只在模型没自己写出说话人时补）
+        if not any((p.get("speaker") or "") for p in reply.get("phone") or []):
+            spoken_now = []
+            for obj in _extract_json_objects(full) or []:
+                for key in ("对白", "消息"):
+                    if obj.get(key):
+                        spoken_now.append(str(obj[key]))
+            person, asked = _contact_followup(db, conv_id, spoken_now)
+            if person:
+                contact_text = npc.phone_reply(db, conv_id, person, asked, deepseek,
+                                               api_key=api_key,
+                                               story_minutes=now_minutes)
+                if contact_text:
+                    yield _sse({"type": "npc_phone",
+                                "name": person.get("name") or "对方",
+                                "content": contact_text})
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
@@ -898,6 +916,30 @@ def chat():
                     "co_located": co_located, "story_time": story_time})
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+_ASK_CONTACT_RE = re.compile(r"(问问|问一下|问一声|去问|问过|找.{0,4}问)")
+
+
+def _contact_followup(db, conv_id, texts):
+    """她这一轮说「去问问妈妈」时，把妈妈真的叫出来回一句
+
+    模型不一定每轮都按 `说话人` 的格式写别人的消息；这里做一个确定性的兜底：
+    她说要去问某个**已登记的联系人**，就用那句话去要一条对方的回复。
+    返回 (联系人, 用来问的那句话) 或 (None, "")。
+    """
+    joined = " ".join(t for t in texts if t).strip()
+    if not joined or not _ASK_CONTACT_RE.search(joined):
+        return None, ""
+    try:
+        contacts = npc.phone_contacts(db, conv_id)
+    except Exception:
+        contacts = []
+    for person in contacts:
+        keys = [person.get("name") or "", person.get("role") or ""]
+        if any(k and k in joined for k in keys):
+            return person, joined[-120:]
+    return None, ""
 
 
 def _recent_spoken(db, conv_id, limit=4):
