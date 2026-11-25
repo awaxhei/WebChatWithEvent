@@ -799,13 +799,14 @@ def chat():
             yield _sse({"type": "scene_changed",
                         "scene": _scene_payload(conv_id, api_key)})
 
-        # 到点了：先让世界说一句她睡着了，再接她的回应
-        if fell_asleep:
+        # 到点了：先让世界说一句她睡着了，再接她的回应。
+        # 只在同一个地方才播报：手机里看不到她睡着还是睁眼，这条旁白只该在当面出现。
+        if fell_asleep and co_located:
             note = system_text.note(system_text.FALL_ASLEEP)
             db.add_message(conv_id, "assistant", note, channel="state", scene=yuxia_loc)
             yield _sse({"type": "yuxia_state", "content": note})
 
-        if woke_up:
+        if woke_up and co_located:
             yield _sse({"type": "yuxia_state",
                         "content": system_text.wake_up()})
 
@@ -911,8 +912,10 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     speech, stickers_used, phone_msgs, actions = [], [], [], []
     mood = ""
     for obj in objects:
-        if obj.get("对白") and can_speak:
-            # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆
+        if obj.get("对白"):
+            # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆。
+            # 异地时先收着，下面统一转成手机消息发出去（以前这里带着 can_speak 判断，
+            # 于是异地模型偶尔给了「对白」就整句丢掉，还会白白触发一次"空回复"重试）
             speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
         if obj.get("动作") and len(actions) < MAX_ACTIONS_PER_REPLY:
             # 她可以用动作代替说话：动作走旁白通道，不进对话框。
@@ -1393,9 +1396,12 @@ def atmosphere(conv_id):
                 yield _sse({"type": "scene_changed",
                             "scene": _scene_payload(conv_id, api_key)})
 
-        # 尤夏的神态描写（她本人只说话，描写由这里生成）
-        state_text = character_writer.describe(db, conv_id, deepseek, now,
-                                               brief or "", api_key=api_key)
+        # 尤夏的神态描写（她本人只说话，描写由这里生成）。
+        # 只有在同一个地方才看得见：手机里没有这一段，别在手机通道冒出一句「她迷迷糊糊睁开眼」。
+        state_text = ""
+        if _co_located(conv_id):
+            state_text = character_writer.describe(db, conv_id, deepseek, now,
+                                                   brief or "", api_key=api_key)
         if state_text:
             yield _sse({"type": "yuxia_state", "content": state_text})
 

@@ -174,6 +174,25 @@ def main():
         check("睡着时被问到也会回答", llm2.streamed == 1, str(llm2.streamed))
         check("回完状态是迷糊", app_db.get_yuxia_state(conv) == "迷糊",
               app_db.get_yuxia_state(conv))
+
+        # ── 2c) 手机通道里不该出现「她迷迷糊糊睁开眼」这类只看得到人的旁白
+        conv_far = app_db.create_conversation(user)
+        locations.ensure_defaults(app_db, conv_far)
+        locations.switch_both(app_db, conv_far, "公寓客厅")
+        app_db.set_player_location(conv_far, "厨房")     # 她在客厅、你在厨房：异地
+        app_db.set_story_minutes(conv_far, 23 * 60 + 30)
+        app_db.set_yuxia_state(conv_far, "睡眠")
+        llm3 = StubLLM(reply='{"对白": "唔姆。……还没睡吗。"}')
+        chat_mod.deepseek = llm3
+        r = c.post("/api/chat", json={"conversation_id": conv_far, "message": "还在睡吗"})
+        evs_far = sse(r.data.decode("utf-8"))
+        check("异地时不播报睡着/醒来",
+              not any(e.get("type") == "yuxia_state" for e in evs_far),
+              str([e for e in evs_far if e.get("type") == "yuxia_state"])[:160])
+        states_far = [m for m in app_db.get_messages(conv_far) if m["channel"] == "state"]
+        check("异地时也不往库里写这段旁白", not states_far,
+              str([m["content"] for m in states_far]))
+        check("异地照样回消息", llm3.streamed == 1, str(llm3.streamed))
     finally:
         chat_mod.deepseek = real
 

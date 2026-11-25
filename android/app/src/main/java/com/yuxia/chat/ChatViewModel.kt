@@ -549,7 +549,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             "yuxia_state" -> {
                 val text = ev.optString("content")
-                if (text.isNotBlank()) appendEntry(phone, Entry.StateDesc(text))
+                // 睡着/睁眼这类旁白是当面才看得见的事，手机通道里不该出现
+                if (text.isNotBlank() && !phone) appendEntry(false, Entry.StateDesc(text))
             }
             "scene_discovered" -> {
                 val where = ev.optString("location")
