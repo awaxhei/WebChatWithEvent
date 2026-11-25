@@ -2017,7 +2017,7 @@ class EmotionAssistant {
                 this._startIdlePolling();   // 用服务端下发的间隔重启轮询
             }
         } catch (e) {
-            this.eventPanel.init({ default_story_time: '第一天 07:00', default_story_summary: '与尤夏的故事，从这里开始...' });
+            this.eventPanel.init({ default_story_time: '第一天', default_story_summary: '与尤夏的故事，从这里开始...' });
         }
     }
     onConvIdChange(convId) { this.historyManager.loadHistory(); }

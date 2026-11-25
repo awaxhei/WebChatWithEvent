@@ -1,18 +1,21 @@
 """
-时间系统编排 —— 确定性时钟 + 时间观察者
+故事时钟 —— 跟随真实世界的确定性时钟
 
 分工：
-- 服务器：持有唯一的时间真值（conversations.story_minutes），每轮自动 +N 分钟
-- 关键词规则：命中"晚安/午饭/放学"等词时按固定规则跳（不经过 LLM）
-- 时间观察者 LLM：只允许返回一个跳跃枚举，具体分钟数仍由 core.clock 换算
-  因此 LLM 永远无法把时间写错，也无法让时间倒退
+- 服务器持有唯一的时间真值（conversations.story_minutes）
+- 钟点就是本机此刻的钟点：新会话从现在的真实时间开始，第 N 天按会话建立那天起算
+- 不打字时间也在走：读时钟时按上次落库的真实时刻补上经过的分钟数
+- 按轮次加分钟、关键词跳时、时间观察者都已停用：模型和打字次数都改不了钟点，
+  否则故事时间会跑到真实时间前面，手机上看到的就不再是真实世界
 """
+import datetime as _dt
 import json
 import re
 import time
 
 import core.clock as clock
 from config import (
+    TIME_FOLLOW_REAL,
     TIME_KEYWORD_JUMP,
     TIME_OBSERVER_ENABLED, TIME_OBSERVER_INTERVAL, TIME_OBSERVER_PROMPT,
 )
@@ -22,24 +25,43 @@ ALLOWED_JUMPS = {"NONE", "NEXT_MORNING", "NOON", "AFTERNOON", "EVENING", "LATE_N
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
-# 超过这个间隔（分钟）没说话，就认为时间在别的世界线里流过了，静默推过去
-IDLE_DRIFT_MAX_MINUTES = 6 * 60
+# 一次读取最多补多少分钟：防系统时钟被改坏时故事时间飞掉。
+# 正常使用就是真实流逝，隔几天再打开也照样对得上。
+IDLE_DRIFT_MAX_MINUTES = 31 * 24 * 60
+
+
+def real_minutes(conv_id=None, db=None):
+    """此刻的真实时间换算成故事分钟：第 N 天（按会话建立那天起算）+ 当前钟点"""
+    now = _dt.datetime.now()
+    day_index = 0
+    if db is not None and conv_id:
+        try:
+            created = db.get_conversation_created_at(conv_id)
+            if created:
+                day_index = max(0, (now.date() - created.date()).days)
+        except Exception:
+            day_index = 0
+    return day_index * 1440 + now.hour * 60 + now.minute
 
 
 def init_clock(db, conv_id):
-    """读取会话时钟；老会话首次进入时尝试从事件文本恢复，否则按 config 初始化
+    """读取会话时钟。
 
-    时间已经**锚定真实世界**：读出来的故事时间 = 上次落库的故事时间
-    + 距上次落库真实过去的时间。所以不打字的时候，时间也在走。
+    新会话从此刻的真实钟点开始（以前固定从 7:00 开始，于是手机上不管几点打开
+    都是第一天早上），之后按真实流逝推进。所以「第N天 HH:MM」就是此刻的世界。
     """
     minutes = db.get_story_minutes(conv_id)
+
     if not minutes:
-        recovered = None
-        try:
-            recovered = clock.parse_display_time(db.get_latest_story_time(conv_id) or "")
-        except Exception:
+        if TIME_FOLLOW_REAL:
+            minutes = real_minutes(conv_id, db)
+        else:
             recovered = None
-        minutes = recovered or clock.initial_minutes()
+            try:
+                recovered = clock.parse_display_time(db.get_latest_story_time(conv_id) or "")
+            except Exception:
+                recovered = None
+            minutes = recovered or clock.initial_minutes()
         db.set_story_minutes(conv_id, minutes)
         return minutes
 
@@ -55,11 +77,20 @@ def init_clock(db, conv_id):
 
 
 def apply_message_tick(db, conv_id, user_text):
-    """每轮基础推进 + 关键词跳跃。
+    """取当前故事时间；跟随真实时间时不再按轮次加分钟，也不做关键词跳时。
 
     返回 (当前分钟数, 命中的跳跃类型或 None)
     """
     now = init_clock(db, conv_id)
+
+    if TIME_FOLLOW_REAL:
+        # 把补上的真实流逝落库，锚点随之更新，消息的时间戳就和真实时间一致
+        try:
+            db.set_story_minutes(conv_id, now)
+        except Exception:
+            pass
+        return now, None
+
     now = clock.tick(now)
 
     jump = clock.detect_keyword_jump(user_text) if TIME_KEYWORD_JUMP else None
@@ -75,8 +106,12 @@ def apply_message_tick(db, conv_id, user_text):
 
 
 def should_observe(msg_count):
-    """是否该询问时间观察者（隔轮询问，省 token）"""
-    if not TIME_OBSERVER_ENABLED:
+    """是否该询问时间观察者（隔轮询问，省 token）。
+
+    跟随真实时间时，模型判出来的跳跃下一次读取就会被真实钟点覆盖，
+    所以直接不问，省一次调用。
+    """
+    if TIME_FOLLOW_REAL or not TIME_OBSERVER_ENABLED:
         return False
     return msg_count % max(1, TIME_OBSERVER_INTERVAL) == 0
 
@@ -105,6 +140,8 @@ def _parse_intent(raw_text):
 
 def observe(db, conv_id, deepseek, recent_text, api_key=None):
     """让时间观察者判断是否需要跳跃；需要则应用并返回详情"""
+    if TIME_FOLLOW_REAL:
+        return None            # 钟点由真实时间决定，模型说了不算
     now = init_clock(db, conv_id)
     user_msg = (
         f"【当前故事时间】{clock.format_time(now)}\n"

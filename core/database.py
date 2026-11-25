@@ -2,6 +2,7 @@
 ChatDB: 数据库初始化、迁移、CRUD 操作封装
 """
 import os, sqlite3, time, uuid, hashlib, json
+from datetime import datetime
 from threading import Lock
 
 
@@ -238,6 +239,19 @@ class ChatDB:
                 except sqlite3.OperationalError:
                     pass
 
+            # v15：钟点改为跟随真实时间。老会话的时钟停在建立时那一刻（比如永远 7:00），
+            # 升级后第一次启动把它们对齐到当前的真实钟点，已经走到第几天保持不变。
+            try:
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+            except Exception:
+                version = 0
+            if version < 15:
+                self._realign_clock(conn)
+                try:
+                    conn.execute("PRAGMA user_version=15")
+                except Exception:
+                    pass
+
             # v7：早期自主行动事件没有 tier 标记，按"misc + completed"回填成 self，
             # 否则她自己的动作会被当成"世界发生的事"喂回给她（AI C 产出的 misc 都是 active）
             try:
@@ -254,6 +268,27 @@ class ChatDB:
                     conn.execute("UPDATE conversations SET user_id=? WHERE user_id=0", (first_user["uid"],))
             except Exception:
                 pass
+
+    @staticmethod
+    def _realign_clock(conn, now=None):
+        """把已有会话的钟点对齐到当前真实时间（天数保持不变），返回改动条数"""
+        now = now or datetime.now()
+        real = now.hour * 60 + now.minute
+        try:
+            rows = conn.execute("SELECT id, story_minutes FROM conversations").fetchall()
+        except Exception:
+            return 0
+        changed = 0
+        for row in rows:
+            minutes = int(row["story_minutes"] or 0)
+            if minutes <= 0:
+                continue      # 还没走过表的会话交给 init_clock 从真实时间起步
+            day = minutes // 1440
+            conn.execute(
+                "UPDATE conversations SET story_minutes=?, story_at=? WHERE id=?",
+                (day * 1440 + real, time.time(), row["id"]))
+            changed += 1
+        return changed
 
     def sync_accounts(self, preset_accounts):
         with self._get_conn() as conn:
@@ -279,6 +314,21 @@ class ChatDB:
         with self._get_conn() as conn:
             rows = conn.execute("SELECT id, title, created_at, updated_at FROM conversations WHERE user_id=? ORDER BY updated_at DESC", (user_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_conversation_created_at(self, conv_id):
+        """会话建立的本地时间（故事时间按它算「第几天」）；读不出来返回 None"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT created_at FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        if not row or not row["created_at"]:
+            return None
+        raw = str(row["created_at"]).strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        return None
 
     def delete_conversation(self, conv_id):
         with self._get_conn() as conn:

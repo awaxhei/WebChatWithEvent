@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,7 +59,7 @@ def fresh_db():
 
 def test_clock():
     start = clock.initial_minutes()
-    check("时钟初始为第一天 07:00", clock.format_time(start) == "第一天 07:00", clock.format_time(start))
+    check("老模型起点仍是第一天 07:00（时钟工具）", clock.format_time(start) == "第一天 07:00", clock.format_time(start))
     check("每轮 +3 分钟", clock.format_time(clock.tick(start)) == "第一天 07:03")
 
     check("识别「晚安」关键词", clock.detect_keyword_jump("我去睡了，晚安") == "NEXT_MORNING")
@@ -88,19 +89,39 @@ def test_clock():
     check("解析中文天数「第二十天」", clock.parse_day_number("第二十天") == 20)
 
 
-def test_clock_recovery():
-    """老会话的时间应从已有事件文本恢复，而不是一律回到第一天早晨"""
+def test_clock_follows_real_time():
+    """时钟跟着真实世界：新会话从此刻钟点起步，老会话升级后对齐，天数照旧累计"""
+    from datetime import datetime
+
     db, _uid, conv, tmp = fresh_db()
     try:
-        db.add_event(conv, "scene_change", "转场", "到了咖啡店", "active",
-                     story_time="第三天下午 15:20")
-
-        from services.time_keeper import init_clock
+        from services.time_keeper import IDLE_DRIFT_MAX_MINUTES, init_clock   # noqa: F401
+        now = datetime.now()
         minutes = init_clock(db, conv)
-        check("老会话时间从事件文本恢复", minutes == 2 * 1440 + 15 * 60 + 20,
-              clock.format_time(minutes))
-        check("恢复后写入时钟", db.get_story_minutes(conv) == minutes)
+        check("新会话从真实钟点起步",
+              minutes % 1440 == now.hour * 60 + now.minute, clock.format_time(minutes))
+        check("起步时间写入时钟", db.get_story_minutes(conv) == minutes)
         check("再次读取不变", init_clock(db, conv) == minutes)
+
+        # 隔了两天没打开：故事时间自己走过两天，天数跟着长
+        with db._get_conn() as conn:
+            conn.execute("UPDATE conversations SET story_at=? WHERE id=?",
+                         (time.time() - 2 * 86400, conv))
+        later = init_clock(db, conv)
+        check("隔两天没说话，时间照样走过两天",
+              later - minutes >= 2 * 1440 - 1, clock.format_time(later))
+        check("天数跟着长", later // 1440 >= 2, clock.format_time(later))
+
+        # 升级前的老会话：钟点停在建立时的 7:00，第一次 migrate 后要对齐到真实时间
+        db.set_story_minutes(conv, 2 * 1440 + 7 * 60)
+        with db._get_conn() as conn:
+            conn.execute("PRAGMA user_version=0")
+        db.migrate()
+        minutes = init_clock(db, conv)
+        check("老会话对齐到真实钟点（不再是固定 7:00）",
+              minutes % 1440 == datetime.now().hour * 60 + datetime.now().minute,
+              clock.format_time(minutes))
+        check("对齐只改钟点，不改天数", minutes // 1440 == 2, clock.format_time(minutes))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -543,8 +564,8 @@ def test_migration():
 def main():
     print("── 故事时钟 ──")
     test_clock()
-    print("\n── 时钟恢复 ──")
-    test_clock_recovery()
+    print("\n── 时钟跟随真实世界 ──")
+    test_clock_follows_real_time()
     print("\n── 地点实体 ──")
     test_locations()
     print("\n── v4 场景 / 手机 / 事件分级 ──")

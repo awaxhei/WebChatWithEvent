@@ -15,8 +15,9 @@ import secrets
 ROOT = os.environ.get("YUXIA_ROOT") or os.path.dirname(os.path.abspath(__file__))
 CHARACTER_NAME = "尤夏"
 
-# 故事默认初始时间（前端事件面板的首屏显示；真正的时钟由 core/clock.py 维护）
-DEFAULT_STORY_TIME = "第一天 07:00"
+# 故事默认初始时间（前端事件面板的首屏占位；真正的时钟由 services/time_keeper.py 维护，
+# 按真实时间走，所以这里不再写死一个钟点，免得首屏一闪而过显示成"早上七点"）
+DEFAULT_STORY_TIME = "第一天"
 
 # 故事默认初始地点（AI B 环境叙述使用）
 DEFAULT_LOCATION = "公寓客厅"
@@ -96,6 +97,9 @@ JWT_EXPIRE_DAYS = 30
 # ============================================================
 TIME_MANUAL_SET = False       # False = /api/set_time 直接拒绝
 TIME_KEYWORD_JUMP = False     # False = 「晚安」「起床了」这类词不再拨时钟
+# 故事时间直接取本地钟点：第 N 天按会话建立那天起算，几点就是几点。
+# 打开后每轮 +N 分钟与时间观察者都不再起作用（否则故事时间会跑到真实时间前面）。
+TIME_FOLLOW_REAL = True
 
 # ============================================================
 # v14：日程与离线结算
@@ -304,7 +308,7 @@ EVENT_PROMPT = (
 # ============================================================
 # v3 新增：故事时钟（确定性推进，不依赖 LLM 记时间）
 # ============================================================
-# 故事起点（第一天 07:00，单位为"距第 0 天 00:00 的分钟数"）
+# 老模型的起钟点（只在 TIME_FOLLOW_REAL = False 时用得到；跟随真实时间时按当前钟点起步）
 CLOCK_START_MINUTES = 7 * 60
 # 每轮用户消息自动推进的分钟数
 CLOCK_MINUTES_PER_TURN = 3

@@ -202,15 +202,15 @@ def main():
     check("act 计入连续上限", autonomy.maybe_act(db, conv12, llm12, 600, "x", idle=False) is None)
     check("超限后不调用模型", llm12.calls == 0)
 
-    # 13) act 会占用故事时间（否则多次行动全挤在同一分钟）
+    # 13) 跟随真实时间时，动作不再额外占用故事时间（否则会跑到真实时间前面）
     conv13 = fresh()
     db.set_story_minutes(conv13, 600)
     acted13 = autonomy.maybe_act(
         db, conv13, StubLLM('{"action": "act", "text": "把窗帘拉开一条缝", "location": ""}'),
         600, "x", idle=False)
     check("act 已执行", bool(acted13) and acted13["action"] == "act", str(acted13))
-    check("act 推进了故事时间",
-          db.get_story_minutes(conv13) == 600 + autonomy.AUTONOMY_ACT_MINUTES,
+    check("动作不再额外加故事时间",
+          db.get_story_minutes(conv13) == 600,
           str(db.get_story_minutes(conv13)))
     check("act 事件标记为 self（不能当世界事件喂回去）",
           any(e.get("tier") == "self" for e in db.get_recent_events(conv13, limit=5)))

@@ -31,12 +31,26 @@ from config import (
     AUTONOMY_WAIT_MAX_SECONDS, AUTONOMY_WAIT_PHONE_FACTOR,
     AUTONOMY_WAIT_QUESTION_FACTOR, AUTONOMY_SPEED_FACTORS,
     AUTONOMY_SPEED_DEFAULT, AUTONOMY_SPEED_MIN, AUTONOMY_SPEED_MAX,
+    TIME_FOLLOW_REAL,
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 VALID_ACTIONS = {"none", "speak", "phone", "move", "act", "lead"}
 
 _TAIL_KEEP = AUTONOMY_MAX_CONSECUTIVE + 4  # 流水要够长，才能把连续次数算满
+
+
+def _advance_clock(db, conv_id, now_minutes, delta):
+    """行动占用一点故事时间，免得多次行动全挤在同一分钟里。
+
+    跟随真实时间时不再额外加：真实时间本身在走，再加就跑到前面去了。
+    """
+    if TIME_FOLLOW_REAL:
+        return
+    try:
+        db.set_story_minutes(conv_id, int(now_minutes) + delta)
+    except Exception:
+        pass
 
 # 与最近说过/做过的话相似到这个程度，就认为是在重复
 _SIMILARITY_LIMIT = 0.68
@@ -439,10 +453,7 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
                                    "at_minutes": int(now_minutes)},
                          keep=_TAIL_KEEP)
         # 说话也占一点时间，否则一整天停在同一个分钟里
-        try:
-            db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_SPEAK_MINUTES)
-        except Exception:
-            pass
+        _advance_clock(db, conv_id, now_minutes, AUTONOMY_SPEAK_MINUTES)
         db.set_last_yuxia_at(conv_id, time.time(), channel)
         return {"action": action, "text": text, "channel": channel, "visible": True}
 
@@ -506,10 +517,7 @@ def _do_move(db, conv_id, decision, yuxia_loc, now_minutes):
                                "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
     # 走路也要花时间
-    try:
-        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
-    except Exception:
-        pass
+    _advance_clock(db, conv_id, now_minutes, AUTONOMY_ACT_MINUTES)
     db.set_last_yuxia_at(conv_id, time.time(), "act")
     return {"action": "move", "location": new_loc, "text": "", "created": created, "visible": True}
 
@@ -542,10 +550,7 @@ def _do_lead(db, conv_id, decision, yuxia_loc, now_minutes):
     db.push_autonomy(conv_id, {"action": "lead", "text": f"带青梅去了{new_loc}",
                                "at": time.time(), "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
-    try:
-        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
-    except Exception:
-        pass
+    _advance_clock(db, conv_id, now_minutes, AUTONOMY_ACT_MINUTES)
     db.set_last_yuxia_at(conv_id, time.time(), "act")
     return {"action": "lead", "location": new_loc, "text": "", "created": created, "visible": True}
 
@@ -578,10 +583,7 @@ def _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located):
                                "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
     # 做事要占时间：否则多次行动全挤在同一分钟，看起来像一口气干完一整顿早饭
-    try:
-        db.set_story_minutes(conv_id, int(now_minutes) + AUTONOMY_ACT_MINUTES)
-    except Exception:
-        pass
+    _advance_clock(db, conv_id, now_minutes, AUTONOMY_ACT_MINUTES)
     db.set_last_yuxia_at(conv_id, time.time(), "act")
     # 不在同一个地方时，玩家看不到，只在故事进展里留痕
     return {"action": "act", "text": text, "activity": text,
