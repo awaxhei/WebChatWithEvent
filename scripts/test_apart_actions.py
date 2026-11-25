@@ -139,16 +139,28 @@ def main():
     check("默认的便利店是公共空间",
           npc.is_private(app_db, conv2, "便利店") is False)
     custom, _ = locations.resolve(app_db, conv2, "旧仓库")
-    check("新地点默认公共", npc.is_private(app_db, conv2, custom) is False,
-          str(custom))
-    locations.set_private(app_db, conv2, custom, True)
-    check("地点隐私可以显式声明", npc.is_private(app_db, conv2, custom) is True)
+    check("新地点默认私人（不会凭空站人）",
+          npc.is_private(app_db, conv2, custom) is True, str(custom))
+    locations.set_private(app_db, conv2, custom, False)
+    check("地点隐私可以显式声明成公共",
+          npc.is_private(app_db, conv2, custom) is False)
     import services.scene_watcher as scene_watcher
     parsed = scene_watcher._parse(
         '{"new_location": "旅店房间", "entered_by": "both", "private": true, '
         '"reason": "两个人进去了"}')
     check("场景观察者能声明新地点是私人空间",
           parsed and parsed.get("private") is True, str(parsed))
+
+    # 私人空间只认剧情点名的人：旧事件人物/路人不会站在屋里
+    app_db.add_npc(conv2, "旧事件里的人", "邻居", "公寓客厅", "", declared=1)
+    check("旧事件人物在私人空间里不显示",
+          "旧事件里的人" not in npc.present_block(app_db, conv2, "公寓客厅"),
+          npc.present_block(app_db, conv2, "公寓客厅"))
+    app_db.add_npc(conv2, "妈妈", "尤夏的母亲", "公寓客厅", "", declared=1,
+                   source="declared")
+    check("剧情点名的家人仍然在",
+          "妈妈" in npc.present_block(app_db, conv2, "公寓客厅"),
+          npc.present_block(app_db, conv2, "公寓客厅"))
 
     print()
     if FAILED:

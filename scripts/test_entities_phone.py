@@ -194,7 +194,7 @@ def main():
     check("她睡着时不安排事件", not allowed and "睡" in reason, reason)
 
     # ── 4) 偶然事件里的东西、人都落地；地点不对就丢掉
-    conv5 = new_conv(user)
+    conv5 = new_conv(user, "便利店")
     for i in range(6):
         app_db.add_message(conv5, "user", f"第{i}句话", story_minutes=1200 + i)
         app_db.add_message(conv5, "assistant",
@@ -205,7 +205,7 @@ def main():
             "type": "random",
             "title": "快递到了",
             "description": "快递员把箱子放在门口，纸箱上写着青梅的名字。",
-            "location": "公寓客厅",
+            "location": "便利店",
             "intensity": "low",
             "objects": [{"名字": "快递箱", "状态": "门口，写着青梅的名字，还没拆"}],
             "people": [{"名字": "快递员", "身份": "送快递的人"}],
@@ -214,10 +214,10 @@ def main():
     ev_stub = StubLLM(event=event)
     got_event = events._run_random_event(conv5, app_db, ev_stub, now_minutes=1210)
     check("事件生成成功", bool(got_event), str(got_event))
-    props5 = {p["name"]: p["state"] for p in app_db.get_props(conv5, "公寓客厅")}
+    props5 = {p["name"]: p["state"] for p in app_db.get_props(conv5, "便利店")}
     check("事件里的快递箱是真的", "快递箱" in props5, str(props5))
     people5 = [p for p in app_db.get_npcs(conv5) if p["name"] == "快递员"]
-    check("事件里的快递员站在门口", people5 and people5[0]["location"] == "公寓客厅",
+    check("事件里的快递员站在门口", people5 and people5[0]["location"] == "便利店",
           str(people5))
     check("事件记了发生时间，用来冷却",
           app_db.get_last_random_event_minutes(conv5) == 1210)
@@ -226,6 +226,19 @@ def main():
     got_bad = events._run_random_event(conv5, app_db, StubLLM(event=bad_event),
                                        now_minutes=1220)
     check("发生在看不见的地方的事件被丢掉", got_bad is None, str(got_bad))
+
+    # 私人空间（家里）里不安排外人进来：带人的事件直接丢掉
+    conv_home_event = new_conv(user, "公寓客厅")
+    home_event = json.loads(json.dumps(event))
+    home_event["random_event"]["location"] = "公寓客厅"
+    got_home_event = events._run_random_event(conv_home_event, app_db,
+                                              StubLLM(event=home_event),
+                                              now_minutes=1230)
+    check("私人空间里不安排陌生人进入", got_home_event is None, str(got_home_event))
+    check("私人空间里没留下事件人物",
+          not [p for p in app_db.get_npcs(conv_home_event)
+               if p["name"] == "快递员" and p.get("source") == "event"],
+          str(app_db.get_npcs(conv_home_event)))
 
     # ── 5) 导出会话：对话 / 事件 / 出场的人 / 物件
     exp = c.get(f"/api/export/{conv5}")

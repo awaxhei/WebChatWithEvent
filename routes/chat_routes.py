@@ -555,7 +555,7 @@ def _scene_payload(conv_id, api_key):
             people = [n for n in db.get_npcs(conv_id) if n.get("location") == loc]
             # 私人空间里只列剧情明确点名的人（妈妈/室友），不列路边刷出来的路人
             if npc.is_private(db, conv_id, loc):
-                people = [n for n in people if n.get("declared")]
+                people = [n for n in people if npc.is_regular(n)]
             view["npcs"] = people
         else:
             view["npcs"] = []
@@ -704,6 +704,15 @@ def chat():
     msg_count = db.get_message_count(conv_id)
     # 此刻贴得有多近：0 没接触 / 1 碰到 / 2 亲密接触。
     # 只在同一地点时才放宽她的动作条数——手机里碰不到对方。
+    # 会话里还从来没有过接触声明时（老对话升级后的第一轮），先让模型判一次；
+    # 之后以她自己回复里的 `接触` 为准。
+    if co_located:
+        try:
+            _level, _at = db.get_contact_level(conv_id)
+            if _at == 0:
+                intimacy.classify(db, conv_id, deepseek, api_key, now_minutes)
+        except Exception as e:
+            print(f"[接触判定] 跳过: {e}")
     heat = intimacy.level(db, conv_id) if co_located else 0
     _mark("时钟推进")
 
@@ -877,7 +886,7 @@ def chat():
         reply = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
                                allow_actions=co_located,
                                max_actions=4 if heat >= 2 else (3 if heat == 1 else 2),
-                               action_limit=32 if heat >= 2 else 24)
+                               action_limit=32 if heat >= 2 else 24, heat=heat)
         actions = reply["actions"]
         if db.get_total_message_count(conv_id) == wrote_before:
             # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
@@ -895,7 +904,7 @@ def chat():
             retry = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
                                    now_minutes, channel, allow_actions=co_located,
                                    max_actions=4 if heat >= 2 else (3 if heat == 1 else 2),
-                                   action_limit=32 if heat >= 2 else 24)
+                                   action_limit=32 if heat >= 2 else 24, heat=heat)
             actions = retry["actions"] or actions
             if retry.get("phone"):
                 reply["phone"] = retry["phone"]
@@ -977,11 +986,12 @@ def _recent_spoken(db, conv_id, limit=4):
 
 def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL,
                    allow_actions=True, max_actions=MAX_ACTIONS_PER_REPLY,
-                   action_limit=24):
+                   action_limit=24, heat=0):
     """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
 
     `max_actions` / `action_limit`：贴在一起的时候放宽——她的反应本来就该多几条，
     不会被「一轮最多两条动作」的常规上限砍掉。
+    `heat >= 2` 时不接受新的真人进了房间（电话联系人除外）。
     返回 {"actions": [...], "phone": [{"speaker","text"}]}：
     调用方可以把这一轮的动作和「不是她发的」手机消息立刻推给前端。
     """
@@ -1025,7 +1035,8 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     mood = ""
     for obj in objects:
         # 这一条里声明的物件 / 人物先落地：下文提到它们时就是同一件东西、同一个人
-        meta = entities.apply_reply(db, conv_id, obj, yuxia_loc)
+        meta = entities.apply_reply(db, conv_id, obj, yuxia_loc,
+                                    allow_people=heat < 2)
         speaker = meta.get("speaker") or ""
         # 她自己声明的身体接触程度：随机事件门控读它，不再去扫最近消息里的词。
         # 异地时只能是 0，不认「隔着手机亲密」这种声明。

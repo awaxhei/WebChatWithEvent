@@ -111,6 +111,43 @@ def record(db, conv_id, value, story_minutes=0):
     return parsed
 
 
+def classify(db, conv_id, deepseek, api_key=None, story_minutes=0, limit=8):
+    """模型没给 `接触` 时，用一个很小的调用判一下（不扫词表）
+
+    只在会话还没有过任何声明（contact_at=0）时用。返回 0/1/2，失败返回 None。
+    """
+    from config import INTIMACY_PROMPT
+    text = recent_text(db, conv_id, limit)
+    if not text:
+        return None
+    try:
+        raw = deepseek.chat_sync(
+            [{"role": "user", "content": text}],
+            system_prompt=INTIMACY_PROMPT,
+            temperature=0.0,
+            api_key_override=api_key,
+            max_tokens=20,
+            thinking=False,
+        )
+    except Exception as e:
+        print(f"[接触判定] 调用失败: {e}")
+        return None
+    if not raw or raw.startswith("[生成失败"):
+        return None
+    parsed = None
+    for ch in str(raw):
+        if ch in "012":
+            parsed = int(ch)
+            break
+    if parsed is None:
+        return None
+    try:
+        db.set_contact_level(conv_id, parsed, story_minutes)
+    except Exception:
+        return None
+    return parsed
+
+
 def is_intimate(db, conv_id, limit=None):
     return level(db, conv_id, limit) >= 2
 

@@ -100,6 +100,11 @@ def _hit(haystack, needle):
     return bool(needle) and needle in (haystack or "")
 
 
+def is_regular(npc):
+    """私人空间里只认剧情点名的人：偶然事件塞进来的、随口叫出来的都不算"""
+    return (npc.get("source") or "") == "declared"
+
+
 def find_addressed(db, conv_id, location, message):
     """这句话是不是在跟现场的某个 NPC 说（**不创建任何人**）
 
@@ -126,7 +131,7 @@ def find_addressed(db, conv_id, location, message):
     present = kept
     if is_private(db, conv_id, location):
         # 私人空间里只认「剧情明确点名」的人（妈妈、室友），不认路边刷出来的路人
-        present = [n for n in present if n.get("declared")]
+        present = [n for n in present if is_regular(n)]
         if not present:
             return None
     # 句子里提到了现场某个人的名字 / 身份 → 就是在跟他说
@@ -206,7 +211,7 @@ def _create(db, conv_id, location, name):
     if db.count_npcs(conv_id) > NPC_CAP:
         return None
     persona = f"{location}的{role}，说话随意、简短，只管自己眼前的事。"
-    npc_id = db.add_npc(conv_id, name, role, location, persona)
+    npc_id = db.add_npc(conv_id, name, role, location, persona, source="detect")
     return db.get_npc(npc_id)
 
 
@@ -221,12 +226,16 @@ def spawn_named(db, conv_id, location, name):
     return _create(db, conv_id, location, name)
 
 
-def ensure_person(db, conv_id, name, role="", location="", phone=False, persona=""):
+def ensure_person(db, conv_id, name, role="", location="", phone=False, persona="",
+                  source="declared"):
     """登记一个**明确被提到**的人：在场的人 / 电话联系人
 
     和 spawn_named 的区别：这条路径是模型在输出里点名声明的人物（「妈妈」
     「煎饼摊老板」），不是在猜玩家在跟谁说话，所以私人空间也照收——
     她家里来了人，是剧情说清楚的，不是路边随便冒出来的路人。
+
+    `source`：declared = 剧情/她点名的人；event = 偶然事件塞进来的临时人物。
+    私人空间只认 declared，事件人物不会站在卧室里。
     同名的人只登记一次，之后拿到的都是同一个人。
     """
     if not NPC_ENABLED:
@@ -246,6 +255,12 @@ def ensure_person(db, conv_id, name, role="", location="", phone=False, persona=
                 existing["declared"] = 1
             except Exception:
                 pass
+        if source == "declared" and existing.get("source") != "declared":
+            try:
+                db.set_npc_source(existing["id"], "declared")
+                existing["source"] = "declared"
+            except Exception:
+                pass
         if phone and not existing.get("phone"):
             db.set_npc_phone(existing["id"], True)
             existing["phone"] = 1
@@ -261,7 +276,7 @@ def ensure_person(db, conv_id, name, role="", location="", phone=False, persona=
             return None
         npc_id = db.add_npc(conv_id, name, role, "" if phone else location,
                             persona or f"{role}，说话随意、简短，只管自己眼前的事。",
-                            phone=1 if phone else 0, declared=1)
+                            phone=1 if phone else 0, declared=1, source=source)
         return db.get_npc(npc_id)
     except Exception as e:
         print(f"[NPC] 登记失败: {e}")
@@ -341,7 +356,7 @@ def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
     """让 NPC 回一两句话；失败返回空串（不打断主流程）"""
     if not NPC_ENABLED or not npc:
         return ""
-    if is_private(db, conv_id, npc.get("location")) and not npc.get("declared"):
+    if is_private(db, conv_id, npc.get("location")) and not is_regular(npc):
         return ""
     system = (
         NPC_PROMPT
@@ -518,9 +533,10 @@ def present_block(db, conv_id, location):
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         return ""
-    # 私人空间里只列剧情明确点名的人（妈妈、室友），不列路边刷出来的路人
+    # 私人空间里只列剧情明确点名的人（妈妈、室友），
+    # 偶然事件塞进来的临时人物、路边刷出来的路人都不会站在屋里
     if is_private(db, conv_id, location):
-        present = [n for n in present if n.get("declared")]
+        present = [n for n in present if is_regular(n)]
     if not present:
         return ""
     names = "、".join(f"{n['name']}（{n['role']}）" if n.get("role") and n["role"] != n["name"]

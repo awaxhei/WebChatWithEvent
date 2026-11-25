@@ -101,7 +101,9 @@ def main():
     hot_text = "\n".join(
         [json.dumps({"对白": "别……", "接触": "亲密"}, ensure_ascii=False)]
         + [json.dumps({"动作": f"第{i}个反应：手抓得紧了一点"}, ensure_ascii=False)
-           for i in range(5)])
+           for i in range(5)]
+        + [json.dumps({"人物": [{"名字": "邻居", "身份": "隔壁邻居"}]},
+                      ensure_ascii=False)])
     stub = StubLLM(hot_text)
     chat_mod.deepseek = stub
     try:
@@ -123,6 +125,9 @@ def main():
     check("多出来的动作没有盖掉对白",
           bool([m for m in app_db.get_messages(conv_hot)
                 if m.get("channel") == "chat" and "别" in m["content"]]))
+    check("亲密时不会让新的人进房间",
+          not [p for p in app_db.get_npcs(conv_hot) if p["name"] == "邻居"],
+          str(app_db.get_npcs(conv_hot)))
 
     # 常规轮次仍然只收两条
     conv = new_conv(user, [("user", "在干嘛"), ("assistant", "发呆。")])

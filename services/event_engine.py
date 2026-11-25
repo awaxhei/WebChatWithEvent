@@ -26,6 +26,13 @@ from services.atmosphere import extract_location
 
 EVENT_TYPES = ("milestone", "scene_change", "emotional_shift", "time_advance", "random", "misc")
 
+# 私人空间里"有人会进来"的典型说法：只用来兜底拒绝这类事件，
+# 主判据是事件自己声明的 people + location 的 private 标记。
+_INTRUSION_CUES = (
+    "敲门", "门铃", "快递", "外卖", "邻居", "房东", "闯入", "闯进", "有人进来",
+    "进屋", "进门", "访客", "保安", "收废品",
+)
+
 
 def _readable_row(row):
     """一条消息的人话版本（当面通道存的是 JSON）"""
@@ -208,10 +215,17 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
         props_line = props.block(db, conv_id, yuxia_loc)
         people_line = npc.present_block(db, conv_id, player_loc if co_located else yuxia_loc)
         mood = "两人此刻在一起。" if co_located else "两人此刻不在一起，只在手机里联系。"
+        # 地点类型是事实：私人空间（家/房间）里不会有外人进来。
+        # 这里明确告诉模型，避免它安排快递、邻居、房东出现在卧室。
+        def _privacy(loc):
+            try:
+                return "私人空间" if db.get_location_private(conv_id, loc) else "公共空间"
+            except Exception:
+                return "私人空间"
         event_user_msg = (
             f"【当前故事时间】{story_time}\n"
-            f"【尤夏所在地】{yuxia_loc}\n"
-            f"【青梅所在地】{player_loc}\n"
+            f"【尤夏所在地】{yuxia_loc}（{_privacy(yuxia_loc)}）\n"
+            f"【青梅所在地】{player_loc}（{_privacy(player_loc)}）\n"
             f"【两人此刻】{mood}\n"
             + (f"【她正在做】{activity}\n" if activity else "")
             + (f"{props_line}\n" if props_line else "")
@@ -219,6 +233,8 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
             + f"【最近对话】\n{conversation_text}\n\n"
             f"【本次事件的强度等级】{tier}——{RANDOM_EVENT_TIER_GUIDE.get(tier, '')}\n"
             "请按这个强度生成一个偶然事件（不要提高或降低强度）。"
+            "**私人空间里不会有人进来**：不要安排敲门、门铃、快递、外卖、邻居或房东来访，"
+            "people 留空；这类事只能发生在公共空间。"
             "location 必须原样填上面两个地点之一，不要写别的地点名。输出 JSON。"
         )
         result = deepseek.chat_sync(
@@ -239,6 +255,20 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
         if event_loc and event_loc not in (yuxia_loc, player_loc):
             print(f"[随机事件] 地点不在场（{event_loc}），丢弃")
             return None
+        event_loc = event_loc or yuxia_loc
+
+        # 私人空间（家/房间）不会有人进来。模型偶尔还是会写敲门、快递、邻居，
+        # 这里直接丢掉——这不是内容审查，是"这个地点此刻根本没有人能进来"。
+        try:
+            event_private = db.get_location_private(conv_id, event_loc)
+        except Exception:
+            event_private = True
+        people = random_event.get("people") or []
+        if event_private:
+            text = f"{random_event.get('title') or ''}{random_event.get('description') or ''}"
+            if people or any(c in text for c in _INTRUSION_CUES):
+                print(f"[随机事件] 私人空间里不安排外人进入，丢弃：{text[:24]}")
+                return None
 
         # 车轱辘事件：同一件事（汤溢了、风把叶子吹到窗上）不要一次次重演
         description = str(random_event.get("description") or "")
@@ -255,15 +285,15 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
 
         # 事件里提到的实体当场落地：快递箱真的有箱子、门口真的站着人
         try:
-            entities.remember_props(db, conv_id, event_loc or yuxia_loc,
+            entities.remember_props(db, conv_id, event_loc,
                                     random_event.get("objects"))
-            entities.remember_people(db, conv_id, event_loc or yuxia_loc,
-                                     random_event.get("people"))
+            entities.remember_people(db, conv_id, event_loc,
+                                     random_event.get("people"), source="event")
         except Exception as e:
             print(f"[随机事件] 实体登记失败: {e}")
 
         random_event["intensity"] = tier
-        random_event["location"] = event_loc or yuxia_loc
+        random_event["location"] = event_loc
         db.add_event(conv_id, "random", random_event.get("title", "偶然事件"),
                      random_event.get("description", ""), "active",
                      story_time=story_time, tier=tier)

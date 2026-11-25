@@ -127,6 +127,7 @@ def main():
     conv = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv)
     locations.switch(app_db, conv, "煎饼摊")
+    app_db.set_location_private(conv, "煎饼摊", False)
     app_db.set_player_location(conv, "煎饼摊")
 
     # ── 1) 模型说"在跟第三人说话" → 按 who 建 NPC
@@ -200,6 +201,7 @@ def main():
     conv_h = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv_h)
     locations.switch_both(app_db, conv_h, "街上")
+    app_db.set_location_private(conv_h, "街上", False)
     for phrase in ("hey?", "hey", "hi, 你好", "ok", "今天天气不错", "尤夏，你吃辣吗"):
         got, judge = resolve(app_db, conv_h, "街上", phrase, '{"addressed": false, "who": ""}')
         check(f"「{phrase}」不会生成 NPC", got is None, str(got))
@@ -230,6 +232,7 @@ def main():
     conv_r = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv_r)
     locations.switch_both(app_db, conv_r, "煎饼摊")
+    app_db.set_location_private(conv_r, "煎饼摊", False)
     for bogus in ("你", "您", "尤夏", "青梅"):
         got, _ = resolve(app_db, conv_r, "煎饼摊", "随便说点什么吧",
                          json.dumps({"addressed": True, "who": bogus}, ensure_ascii=False))
@@ -242,6 +245,7 @@ def main():
     conv_r2 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv_r2)
     locations.switch_both(app_db, conv_r2, "街上")
+    app_db.set_location_private(conv_r2, "街上", False)
     stale2 = app_db.add_npc(conv_r2, "尤夏", "尤夏", "街上", "")
     npc.find_addressed(app_db, conv_r2, "街上", "嗯")
     row2 = app_db.get_npc(stale2)
@@ -300,6 +304,7 @@ def main():
     conv_street = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv_street)
     locations.switch_both(app_db, conv_street, "街上")
+    app_db.set_location_private(conv_street, "街上", False)
     street_stub = Decide('{"addressed": true, "who": "卖红薯的"}')
     got_street = npc.resolve_addressed(app_db, conv_street, "街上", "老板，红薯怎么卖",
                                        street_stub)
@@ -390,7 +395,8 @@ def main():
     # ── 7) 数量上限
     conv2 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv2)
-    locations.resolve(app_db, conv2, "街上")      # 地点要先登记（默认公共）
+    locations.resolve(app_db, conv2, "街上")
+    app_db.set_location_private(conv2, "街上", False)      # 地点要先登记（默认公共）
     for i in range(npc.NPC_CAP):
         app_db.add_npc(conv2, f"路人{i}", "路人", "街上", "")
     overflow, _ = resolve(app_db, conv2, "街上", "老板，来个煎饼",
@@ -405,6 +411,7 @@ def main():
     conv4 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv4)
     locations.resolve(app_db, conv4, "街上")
+    app_db.set_location_private(conv4, "街上", False)
     for i in range(npc.PER_LOCATION_CAP):
         app_db.add_npc(conv4, f"路人{i}", "路人", "街上", "")
     extra, _ = resolve(app_db, conv4, "街上", "老板，来个煎饼",
@@ -417,6 +424,7 @@ def main():
     conv6 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv6)
     locations.switch_both(app_db, conv6, "煎饼摊")
+    app_db.set_location_private(conv6, "煎饼摊", False)
     none_stub = StubLLM()
     chat_mod.deepseek = none_stub
     try:
@@ -432,6 +440,7 @@ def main():
     conv7 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv7)
     locations.switch_both(app_db, conv7, "煎饼摊")
+    app_db.set_location_private(conv7, "煎饼摊", False)
     detect_stub = StubLLM()
     detect_stub.verdict = _with_why('{"addressed": true, "who": "卖煎饼的"}')
 

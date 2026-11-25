@@ -131,6 +131,7 @@ class ChatDB:
                     last_spoke_at   REAL DEFAULT 0,
                     phone           INTEGER DEFAULT 0,
                     declared        INTEGER DEFAULT 0,
+                    source          TEXT DEFAULT '',
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_npcs_conv ON npcs(conversation_id, status);
@@ -248,6 +249,9 @@ class ChatDB:
                 # v17：她声明的身体接触程度（0 无 / 1 碰到 / 2 亲密），以及发生在第几分钟
                 ("conversations", "contact_level", "INTEGER DEFAULT 0"),
                 ("conversations", "contact_at", "INTEGER DEFAULT 0"),
+                # v18：这个人是怎么来的（declared=剧情点名 / event=偶然事件塞进来的 /
+                # detect=玩家对着第三人说话时自动建的）。私人空间只认 declared。
+                ("npcs", "source", "TEXT DEFAULT ''"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -284,6 +288,18 @@ class ChatDB:
                     conn.executemany("UPDATE locations SET private=0 WHERE name=?",
                                      [(n,) for n in public])
                     conn.execute("PRAGMA user_version=17")
+            except Exception:
+                pass
+            # v18：NPC 来源。老数据分不清"剧情点名的人"和"随机事件塞进来的人"，
+            # 只把电话联系人认成 declared；其余 declarer 标记成 legacy——
+            # 在公共场合照常出现，在私人空间里不再显示（免得旧数据里有人站在卧室）。
+            try:
+                if version < 18:
+                    conn.execute("UPDATE npcs SET source='declared'"
+                                 " WHERE source='' AND phone=1")
+                    conn.execute("UPDATE npcs SET source='legacy'"
+                                 " WHERE source='' AND declared=1 AND phone=0")
+                    conn.execute("PRAGMA user_version=18")
             except Exception:
                 pass
 
@@ -1012,12 +1028,13 @@ class ChatDB:
 
     # ----- v8：动态 NPC -----
     def add_npc(self, conv_id, name, role="", location="", persona="", phone=0,
-                declared=0):
+                declared=0, source=""):
         with self._get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO npcs(conversation_id, name, role, location, persona, phone,"
-                " declared) VALUES(?,?,?,?,?,?,?)",
-                (conv_id, name, role, location, persona, int(phone), int(declared)))
+                " declared, source) VALUES(?,?,?,?,?,?,?,?)",
+                (conv_id, name, role, location, persona, int(phone), int(declared),
+                 (source or "").strip()[:16]))
             return cur.lastrowid
 
     def get_npcs(self, conv_id, status="active", location=None):
@@ -1062,6 +1079,11 @@ class ChatDB:
     def set_npc_declared(self, npc_id):
         with self._get_conn() as conn:
             conn.execute("UPDATE npcs SET declared=1 WHERE id=?", (npc_id,))
+
+    def set_npc_source(self, npc_id, source):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET source=? WHERE id=?",
+                         ((source or "").strip()[:16], npc_id))
 
     def get_phone_contacts(self, conv_id):
         """能用手机联系到的人（电话联系人）：不在场也能发消息"""

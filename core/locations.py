@@ -61,11 +61,12 @@ def list_names(db, conv_id):
     return ensure_defaults(db, conv_id)
 
 
-def resolve(db, conv_id, candidate, private=False):
+def resolve(db, conv_id, candidate, private=True):
     """把 AI 给出的地点名归一化到已有地点；不存在则新建。
 
-    `private`：新地点是不是私人空间。默认公共；默认地点里的私人房间建表时已标好，
-    剧情新建的地点由场景观察者声明（私人空间不让陌生人自动出现）。
+    `private`：新地点是不是私人空间。默认私人——宁可不站陌生人，
+    也不要让路人凭空出现在没去过的新房间里；知道是公共场所时显式传 False
+    （场景观察者会按剧情声明）。
 
     返回 (最终地点名, 是否新建)。
     """

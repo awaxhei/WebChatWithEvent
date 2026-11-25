@@ -51,8 +51,12 @@ def remember_props(db, conv_id, location, items):
         return []
 
 
-def remember_people(db, conv_id, location, items):
-    """模型声明的人物：在场的人当 NPC 建/更新，电话联系人另记"""
+def remember_people(db, conv_id, location, items, source="declared"):
+    """模型声明的人物：在场的人当 NPC 建/更新，电话联系人另记
+
+    `source="event"` 用于偶然事件里塞进来的人：公共场合会出现，
+    私人空间则不会（由 npc 的 visible 规则过滤）。
+    """
     if not items:
         return []
     saved = []
@@ -68,6 +72,7 @@ def remember_people(db, conv_id, location, items):
                 location="" if phone else location,
                 phone=phone,
                 persona=str(item.get("设定") or "").strip()[:120],
+                source=source,
             )
             if person:
                 saved.append(name)
@@ -76,9 +81,10 @@ def remember_people(db, conv_id, location, items):
     return saved
 
 
-def apply_reply(db, conv_id, obj, location, co_located=True):
+def apply_reply(db, conv_id, obj, location, co_located=True, allow_people=True):
     """处理一条她输出里的实体声明（物件 / 人物）
 
+    `allow_people=False`：亲密接触中不接受"有人进来"这类新人物（电话联系人除外）。
     返回 {"props": [...], "people": [...], "speaker": "..."}；speaker 是
     这条消息的说话人（NPC 用手机回话时才有）。
     """
@@ -91,7 +97,12 @@ def apply_reply(db, conv_id, obj, location, co_located=True):
     declared = list(obj.get("物件") or []) if isinstance(obj.get("物件"), list) else []
     touched = list(obj.get("道具") or []) if isinstance(obj.get("道具"), list) else []
     out["props"] = remember_props(db, conv_id, prop_loc, declared + touched)
-    out["people"] = remember_people(db, conv_id, prop_loc, obj.get("人物"))
+    people = list(obj.get("人物") or []) if isinstance(obj.get("人物"), list) else []
+    if not allow_people:
+        # 亲密接触中只有电话联系人可以新出现；真人进房间一律不收
+        people = [p for p in people if isinstance(p, dict)
+                  and (p.get("电话") or p.get("phone"))]
+    out["people"] = remember_people(db, conv_id, prop_loc, people)
     speaker = str(obj.get("说话人") or "").strip()[:MAX_NAME]
     if speaker:
         out["speaker"] = speaker
