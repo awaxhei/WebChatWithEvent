@@ -137,6 +137,13 @@ fun ChatScreen(vm: ChatViewModel) {
             vm.pollIdle()
         }
     }
+    // 界面上的钟跟着真实时间走：不再只在进页面/发消息时才跳一下
+    LaunchedEffect(s.convId) {
+        while (true) {
+            delay(15_000)
+            vm.tickClock()
+        }
+    }
     LaunchedEffect(s.entries.size, s.busy) {
         if (s.entries.isNotEmpty()) {
             runCatching { listState.animateScrollToItem(s.entries.size - 1) }
@@ -216,6 +223,10 @@ fun ChatScreen(vm: ChatViewModel) {
                             DropdownMenuItem(
                                 text = { Text("API Key") },
                                 onClick = { menuOpen = false; vm.openApiKeyScreen() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导出当前会话（发给开发者排查）") },
+                                onClick = { menuOpen = false; vm.exportChat() },
                             )
                             DropdownMenuItem(
                                 text = { Text("关于与更新日志") },
@@ -470,6 +481,26 @@ private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ 
 
         is Entry.Narration -> WorldNarration(entry.text)
 
+        // 玩家自己做的动作：右下方，和她说的话一样是「我做的」
+        is Entry.PlayerAction -> Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Text(
+                entry.text,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        color = Color(0xFF86EFAC).copy(alpha = 0.14f),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                fontStyle = FontStyle.Italic,
+                color = Color(0xFF64748B),
+            )
+        }
+
         is Entry.StateDesc -> Text(
             entry.text,
             modifier = Modifier
@@ -480,17 +511,35 @@ private fun EntryRow(entry: Entry, baseUrl: String, currentFace: String = "(ᗜ 
             color = YuxiaColors.InkSoft,
         )
 
-        // 她的动作：居中的斜体旁白，和「她说的」分开，读起来像描写而不是台词
-        is Entry.Action -> Text(
-            entry.text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 3.dp),
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            fontStyle = FontStyle.Italic,
-            color = YuxiaColors.InkSoft,
-            textAlign = TextAlign.Center,
-        )
+        // 她的动作：带着她的小头像和名字，跟「世界旁白」分得开
+        is Entry.Action -> Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MoodAvatar(currentFace, false)
+            Spacer(Modifier.width(6.dp))
+            Column(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(topStart = 0.dp, topEnd = 10.dp,
+                        bottomEnd = 10.dp, bottomStart = 0.dp))
+                    .background(YuxiaColors.SurfaceSoft)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    "尤夏",
+                    fontSize = 9.sp,
+                    letterSpacing = 1.sp,
+                    color = YuxiaColors.Sakura,
+                )
+                Text(
+                    entry.text,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                    fontStyle = FontStyle.Italic,
+                    color = YuxiaColors.InkSoft,
+                )
+            }
+        }
 
         is Entry.Npc -> NpcBubble(entry.name, entry.text)
     }

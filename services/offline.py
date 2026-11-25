@@ -142,8 +142,10 @@ def settle(db, conv_id, deepseek, now_minutes, api_key=None, force=False):
             pass
 
     msgs = [m for m in (data.get("messages") or []) if isinstance(m, dict)]
+    import core.tics as tics
     for item in msgs[:OFFLINE_MAX_MESSAGES]:
-        text = str(item.get("text") or "").strip()[:120]
+        text = tics.Budget(tics.budget_for(db, conv_id)).clean(
+            str(item.get("text") or "").strip()[:120])
         if not text:
             continue
         at = item.get("minutes")

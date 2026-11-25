@@ -42,6 +42,8 @@ data class UiState(
     val storySummary: String = "",
     val eventsLoaded: Boolean = false,
     val storyMinutes: Int = 0,
+    /** 服务端报这个分钟数时的时刻（毫秒）：界面上的钟据此自己往前走 */
+    val clockAt: Long = 0L,
     val npcs: List<String> = emptyList(),
     val pushMode: Boolean = false,
     val moodFace: String = "(ᗜ ‸ ᗜ)",
@@ -226,9 +228,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val role = row.optString("role")
                 val content = row.optString("content")
                 when (channel) {
-                    "phone" -> phoneEntries.add(
-                        if (role == "user") meEntry(content)
-                        else Entry.Her(Model.stripSpeaker(content), phone = true))
+                    "phone" -> {
+                        val speaker = row.optString("speaker").trim()
+                        phoneEntries.add(
+                            when {
+                                role == "user" -> meEntry(content)
+                                speaker.isNotEmpty() -> Entry.Npc(speaker, content)
+                                else -> Entry.Her(Model.stripSpeaker(content), phone = true)
+                            }
+                        )
+                    }
                     "state" -> lastState = content
                     "action" -> entries.add(Entry.Action(content))
                     "npc" -> {
@@ -243,9 +252,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     else -> {
                         if (role == "user") {
                             // 动作模式下玩家发的是旁白（「（青梅把拖鞋放到你脚边。）」），
-                            // 不是他说的话，别渲染成自己的气泡
+                            // 不是他说的话：右对齐的玩家动作，不是世界事件
                             if (content.trimStart().startsWith("（")) {
-                                entries.add(Entry.Narration(content))
+                                entries.add(Entry.PlayerAction(content))
                             } else {
                                 entries.add(meEntry(content))
                             }
@@ -271,6 +280,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             playerLocation = obj.optString("player_location"),
             coLocated = obj.optBoolean("co_located", true),
             storyTime = obj.optString("story_time"),
+            storyMinutes = obj.optInt("story_minutes", state.storyMinutes),
+            clockAt = obj.optLong("sync_at", 0L).let { if (it > 0) it * 1000 else System.currentTimeMillis() },
             unread = if (state.phoneOpen) 0 else obj.optInt("unread", 0),
         )
         refreshScene()
@@ -320,6 +331,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             yuxiaDesc = scene.optString("yuxia_description").ifBlank { scene.optString("description") },
             storyTime = scene.optString("story_time").ifBlank { state.storyTime },
             storyMinutes = scene.optInt("story_minutes", state.storyMinutes),
+            clockAt = scene.optLong("sync_at", 0L).let {
+                if (it > 0) it * 1000 else System.currentTimeMillis()
+            },
             paused = scene.optBoolean("paused", state.paused),
             locations = if (names.isEmpty()) state.locations else names,
             npcs = npcNames,
@@ -515,7 +529,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             body.startsWith("青梅") || body.startsWith("尤夏") -> body
             else -> "青梅$body"
         }
-        appendEntry(false, Entry.Narration("（${act.trimEnd('。')}。）"))
+        appendEntry(false, Entry.PlayerAction("（${act.trimEnd('。')}。）"))
         viewModelScope.launch { sendInternal("/动作 " + body, null, false, echo = false) }
     }
 
@@ -534,12 +548,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             "story_time" -> {
                 val t = ev.optString("content")
-                if (t.isNotEmpty()) state = state.copy(storyTime = t)
+                val minutes = ev.optInt("minutes", -1)
+                val syncAt = ev.optLong("sync_at", 0L)
+                state = state.copy(
+                    storyTime = t.ifBlank { state.storyTime },
+                    storyMinutes = if (minutes >= 0) minutes else state.storyMinutes,
+                    clockAt = if (syncAt > 0) syncAt * 1000 else System.currentTimeMillis(),
+                )
             }
             "scene_changed" -> applyScene(ev.optJSONObject("scene"))
             "npc" -> appendEntry(
                 phone,
                 Entry.Npc(ev.optString("name").ifBlank { "路人" }, ev.optString("content"))
+            )
+            "npc_phone" -> appendEntry(
+                true,
+                Entry.Npc(ev.optString("name").ifBlank { "对方" }, ev.optString("content"))
             )
             "world_narration" -> appendEntry(phone, Entry.Narration(ev.optString("content")))
             // 她的「动作」：这一轮她自己写下的动作，按发生顺序落在时间线上
@@ -612,12 +636,27 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         for (i in renderedObjects until objects.size) {
             val reply = Model.parseReply(objects[i])
             val face = Model.faceOf(reply.mood)
+            // 一句一个气泡（服务端也按同样的规则拆开存库，两边一致）
             reply.speeches.forEach { appendEntry(phone, Entry.Her(it, phone = phone, face = face)) }
             reply.stickerEmotions.forEach { emotion ->
                 index[emotion]?.let { appendEntry(phone, Entry.HerSticker(it)) }
             }
+            // 手机消息：她本人发的进手机面板；带说话人的是妈妈这类第三人发的
+            reply.phoneMessages.forEach { (text, speaker) ->
+                appendEntry(true, if (speaker.isNotBlank()) Entry.Npc(speaker, text)
+                    else Entry.Her(Model.stripSpeaker(text), phone = true))
+            }
         }
         renderedObjects = objects.size
+    }
+
+    /** 界面上的钟：按服务端给的分钟数 + 真实流逝重算一次（每 20 秒调一次） */
+    fun tickClock() {
+        if (state.storyMinutes <= 0) return
+        val at = if (state.clockAt > 0) state.clockAt else System.currentTimeMillis()
+        val extra = ((System.currentTimeMillis() - at) / 60000L).toInt()
+        if (extra <= 0) return
+        state = state.copy(storyTime = Model.formatStoryMinutes(state.storyMinutes + extra))
     }
 
     private fun appendEntry(phone: Boolean, entry: Entry) {
@@ -663,9 +702,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     for (i in 0 until arr.length()) {
                         val row = arr.optJSONObject(i) ?: continue
                         val content = row.optString("content")
+                        val speaker = row.optString("speaker").trim()
                         list.add(
-                            if (row.optString("role") == "user") meEntry(content)
-                            else Entry.Her(Model.stripSpeaker(content), phone = true)
+                            when {
+                                row.optString("role") == "user" -> meEntry(content)
+                                speaker.isNotEmpty() -> Entry.Npc(speaker, content)
+                                else -> Entry.Her(Model.stripSpeaker(content), phone = true)
+                            }
                         )
                     }
                 }
@@ -728,7 +771,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (!res.optBoolean("acted")) {
                     // 面板开着时服务端那边的未读数没有意义（他正在看），一律按 0
                     val unread = if (state.phoneOpen) 0 else res.optInt("unread", state.unread)
-                    state = state.copy(unread = unread)
+                    val minutes = res.optInt("story_minutes", -1)
+                    state = state.copy(
+                        unread = unread,
+                        storyMinutes = if (minutes >= 0) minutes else state.storyMinutes,
+                        clockAt = res.optLong("sync_at", 0L).let {
+                            if (it > 0) it * 1000 else state.clockAt
+                        },
+                        storyTime = res.optString("story_time").ifBlank { state.storyTime },
+                    )
                     if (state.phoneOpen) markPhoneReadQuietly()
                     return@launch
                 }
@@ -748,7 +799,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         Entry.Narration(if (where.isNotEmpty()) "尤夏带着你前往$where" else "尤夏带着你离开了"),
                     )
                     "act" -> if (res.optBoolean("visible", true) && res.optString("text").isNotBlank()) {
-                        appendEntry(false, Entry.Narration(res.optString("text")))
+                        appendEntry(false, Entry.Action(res.optString("text")))
                     }
                     else -> {
                         val text = res.optString("text")
@@ -759,7 +810,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 val time = res.optString("story_time")
-                if (time.isNotEmpty()) state = state.copy(storyTime = time)
+                val minutes = res.optInt("story_minutes", -1)
+                state = state.copy(
+                    storyTime = time.ifBlank { state.storyTime },
+                    storyMinutes = if (minutes >= 0) minutes else state.storyMinutes,
+                    clockAt = res.optLong("sync_at", 0L).let {
+                        if (it > 0) it * 1000 else System.currentTimeMillis()
+                    },
+                )
                 withContext(Dispatchers.IO) { noteSeen() }
             } catch (_: Exception) {
             }
@@ -780,6 +838,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearToast() {
         state = state.copy(toast = null)
+    }
+
+    /** 导出当前会话：拉一份纯文本，写进外部目录后交给系统分享（微信/文件管理器都收得到） */
+    fun exportChat() {
+        val conv = state.convId
+        if (conv.isEmpty()) {
+            state = state.copy(toast = "先开始一段对话")
+            return
+        }
+        viewModelScope.launch {
+            val text = runCatching {
+                withContext(Dispatchers.IO) { Api.exportChat(app, conv) }
+            }.getOrNull()
+            if (text == null) {
+                state = state.copy(toast = "导出失败，请稍后再试")
+                return@launch
+            }
+            val dir = app.getExternalFilesDir(null) ?: app.cacheDir
+            val file = java.io.File(dir, "yuxia-$conv.txt")
+            runCatching { withContext(Dispatchers.IO) { file.writeText(text) } }
+            val uri = runCatching {
+                androidx.core.content.FileProvider.getUriForFile(
+                    app, "com.yuxia.chat.fileprovider", file)
+            }.getOrNull()
+            val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT, "尤夏 · 会话导出")
+                putExtra(android.content.Intent.EXTRA_TEXT, text)
+                if (uri != null) {
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+            val chooser = android.content.Intent.createChooser(share, "导出会话").apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { app.startActivity(chooser) }
+            state = state.copy(toast = "已导出：${file.name}")
+        }
     }
 
     fun clearError() {

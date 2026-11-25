@@ -1,6 +1,8 @@
 """
 历史记录路由：对话列表、详情、删除、新建
 """
+import time
+
 from flask import Blueprint, request, jsonify
 
 import core.clock as clock
@@ -48,6 +50,8 @@ def get_conversation(conv_id):
         "co_located": player_location == location,
         "events": events,
         "story_time": clock.format_time(now),
+        "story_minutes": now,
+        "sync_at": time.time(),
         "story_summary": events[-1]["description"] if events else "",
         "events_initialized": db.is_events_initialized(conv_id),
     })

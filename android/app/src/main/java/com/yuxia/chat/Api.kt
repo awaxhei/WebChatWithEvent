@@ -185,6 +185,19 @@ object Api {
         runCatching { client.newCall(req).execute().close() }
     }
 
+    /** 导出整段会话（纯文本）：手机上把记录发出来调试 */
+    fun exportChat(ctx: Context, conv: String): String {
+        val req = builder(ctx, "/api/export/$conv").get().build()
+        client.newCall(req).execute().use { resp ->
+            val raw = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val msg = runCatching { JSONObject(raw).optString("error") }.getOrNull().orEmpty()
+                throw ApiException(resp.code, msg.ifBlank { "HTTP ${resp.code}" })
+            }
+            return raw
+        }
+    }
+
     // ── 表情包 ───────────────────────────────────────
 
     fun stickers(ctx: Context): JSONObject {

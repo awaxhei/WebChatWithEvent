@@ -128,6 +128,8 @@ class ChatDB:
                                     CHECK(status IN ('active','gone')),
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     last_spoke_at   REAL DEFAULT 0,
+                    phone           INTEGER DEFAULT 0,
+                    declared        INTEGER DEFAULT 0,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_npcs_conv ON npcs(conversation_id, status);
@@ -231,6 +233,15 @@ class ChatDB:
                 ("conversations", "story_at", "REAL DEFAULT 0"),
                 # v14：玩家最后一次出现在前台的真实时刻（离线结算按它算离开了多久）
                 ("conversations", "last_seen_at", "REAL DEFAULT 0"),
+                # v16：最近一次偶然事件发生在故事的第几分钟（事件之间要有间隔，
+                # 不能一轮接一轮地敲她的门）
+                ("conversations", "last_random_event_minutes", "INTEGER DEFAULT 0"),
+                # v16：手机消息的说话人（NPC 用手机回复时记名字，尤夏本人留空）
+                ("messages", "speaker", "TEXT DEFAULT ''"),
+                # v16：这个 NPC 是不是电话联系人（不在场也能用手机联系）
+                ("npcs", "phone", "INTEGER DEFAULT 0"),
+                # v16：是不是模型/剧情明确点名的人（私人空间里也认，和路边刷出来的路人区分）
+                ("npcs", "declared", "INTEGER DEFAULT 0"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -251,6 +262,12 @@ class ChatDB:
                     conn.execute("PRAGMA user_version=15")
                 except Exception:
                     pass
+            # v16：手机 NPC / 说话人 / 事件间隔。只补列，不改历史数据。
+            try:
+                if version < 16:
+                    conn.execute("PRAGMA user_version=16")
+            except Exception:
+                pass
 
             # v7：早期自主行动事件没有 tier 标记，按"misc + completed"回填成 self，
             # 否则她自己的动作会被当成"世界发生的事"喂回给她（AI C 产出的 misc 都是 active）
@@ -748,25 +765,27 @@ class ChatDB:
                          (text or "", int(upto_id or 0), conv_id))
 
     # ----- v4：消息通道（chat / phone） -----
-    def add_message(self, conv_id, role, content, channel="chat", scene="", story_minutes=0):
+    def add_message(self, conv_id, role, content, channel="chat", scene="", story_minutes=0,
+                    speaker=""):
         with self._get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO messages(conversation_id, role, content, channel, scene,"
-                " story_minutes) VALUES(?,?,?,?,?,?)",
-                (conv_id, role, content, channel, scene, int(story_minutes or 0)))
+                " story_minutes, speaker) VALUES(?,?,?,?,?,?,?)",
+                (conv_id, role, content, channel, scene, int(story_minutes or 0),
+                 (speaker or "").strip()[:16]))
             return cur.lastrowid
 
     def get_messages(self, conv_id, channel=None):
         with self._get_conn() as conn:
             if channel:
                 rows = conn.execute(
-                    "SELECT id, role, content, channel, scene, story_minutes, created_at"
+                    "SELECT id, role, content, channel, scene, story_minutes, speaker, created_at"
                     " FROM messages"
                     " WHERE conversation_id=? AND channel=? ORDER BY id ASC",
                     (conv_id, channel)).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, role, content, channel, scene, story_minutes, created_at"
+                    "SELECT id, role, content, channel, scene, story_minutes, speaker, created_at"
                     " FROM messages WHERE conversation_id=? ORDER BY id ASC",
                     (conv_id,)).fetchall()
         return [dict(r) for r in rows]
@@ -774,7 +793,7 @@ class ChatDB:
     def get_phone_messages(self, conv_id, since_id=0, limit=200):
         with self._get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM messages"
+                "SELECT id, role, content, speaker, created_at FROM messages"
                 " WHERE conversation_id=? AND channel='phone' AND id > ?"
                 " ORDER BY id ASC LIMIT ?", (conv_id, since_id, limit)).fetchall()
         return [dict(r) for r in rows]
@@ -939,11 +958,13 @@ class ChatDB:
         return float(row["reply_latency"] or 0) if row else 0.0
 
     # ----- v8：动态 NPC -----
-    def add_npc(self, conv_id, name, role="", location="", persona=""):
+    def add_npc(self, conv_id, name, role="", location="", persona="", phone=0,
+                declared=0):
         with self._get_conn() as conn:
             cur = conn.execute(
-                "INSERT INTO npcs(conversation_id, name, role, location, persona)"
-                " VALUES(?,?,?,?,?)", (conv_id, name, role, location, persona))
+                "INSERT INTO npcs(conversation_id, name, role, location, persona, phone,"
+                " declared) VALUES(?,?,?,?,?,?,?)",
+                (conv_id, name, role, location, persona, int(phone), int(declared)))
             return cur.lastrowid
 
     def get_npcs(self, conv_id, status="active", location=None):
@@ -980,6 +1001,36 @@ class ChatDB:
     def set_npc_location(self, npc_id, location):
         with self._get_conn() as conn:
             conn.execute("UPDATE npcs SET location=? WHERE id=?", (location, npc_id))
+
+    def set_npc_phone(self, npc_id, phone=True):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET phone=? WHERE id=?", (1 if phone else 0, npc_id))
+
+    def set_npc_declared(self, npc_id):
+        with self._get_conn() as conn:
+            conn.execute("UPDATE npcs SET declared=1 WHERE id=?", (npc_id,))
+
+    def get_phone_contacts(self, conv_id):
+        """能用手机联系到的人（电话联系人）：不在场也能发消息"""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM npcs WHERE conversation_id=? AND status='active' AND phone=1"
+                " ORDER BY id ASC", (conv_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ----- v16：偶然事件的间隔 -----
+    def get_last_random_event_minutes(self, conv_id):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT last_random_event_minutes FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        return int(row["last_random_event_minutes"] or 0) if row else 0
+
+    def set_last_random_event_minutes(self, conv_id, minutes):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET last_random_event_minutes=? WHERE id=?",
+                (int(minutes or 0), conv_id))
 
     def touch_npc(self, npc_id, ts):
         with self._get_conn() as conn:

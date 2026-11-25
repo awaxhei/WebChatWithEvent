@@ -13,6 +13,7 @@ import os
 import random
 import re
 import time
+from datetime import datetime
 
 from flask import Blueprint, request, Response, jsonify
 
@@ -28,8 +29,8 @@ from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
-    autonomy, character_writer, checkpoint, context_writer, memory_engine, npc,
-    offline, scene_watcher, schedule, time_keeper, world_context, state_engine,
+    autonomy, character_writer, checkpoint, context_writer, entities, memory_engine,
+    npc, offline, scene_watcher, schedule, time_keeper, world_context, state_engine,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
@@ -332,6 +333,10 @@ def _as_context_content(row):
             pass
         return content
     if row["role"] == "assistant" and channel == PHONE_CHANNEL:
+        speaker = (row.get("speaker") or "").strip()
+        if speaker:
+            # 手机里第三个人发来的消息：写成「妈妈：……」，她就不会当成自己说的
+            return f"{speaker}（手机）：{content}"
         return json.dumps({"消息": content}, ensure_ascii=False)
     if row["role"] == "assistant" and channel == "action":
         # 她自己的动作（模型给的「动作」字段、自主行动做下的事）也回灌成同一种格式，
@@ -532,6 +537,9 @@ def _scene_payload(conv_id, api_key):
     view["locations"] = locations.list_names(db, conv_id)
     view["story_time"] = clock.format_time(now)
     view["story_minutes"] = now
+    # 客户端可以拿它自己往前走：故事时间跟着真实时间流，界面上的钟不该只在
+    # 进页面/发消息时才动一下
+    view["sync_at"] = time.time()
     view["unread"] = db.get_phone_unread(conv_id)
     view["paused"] = db.is_paused(conv_id)
     # 她的心情（界面头像画成对应的颜文字）与行动速度
@@ -547,8 +555,12 @@ def _scene_payload(conv_id, api_key):
     # 只在两个人当面相处的公共场合列出来：手机里、私人空间里都不会有第三人
     try:
         loc = view.get("location")
-        if view.get("co_located") and not npc.is_private(loc):
-            view["npcs"] = [n for n in db.get_npcs(conv_id) if n.get("location") == loc]
+        if view.get("co_located"):
+            people = [n for n in db.get_npcs(conv_id) if n.get("location") == loc]
+            # 私人空间里只列剧情明确点名的人（妈妈/室友），不列路边刷出来的路人
+            if npc.is_private(loc):
+                people = [n for n in people if n.get("declared")]
+            view["npcs"] = people
         else:
             view["npcs"] = []
     except Exception:
@@ -658,11 +670,16 @@ def chat():
     #
     # 但只有「当面 + 公共场合」才可能有第三人：
     # 手机里只有你们两个人，角色房间、公寓玄关这类私人空间也不该站着陌生人。
-    npc_ok = channel == CHAT_CHANNEL and not npc.is_private(player_loc)
+    npc_ok = channel == CHAT_CHANNEL
     addressed_npc = None
-    if not sticker_row and npc_ok:
-        addressed_npc = npc.resolve_addressed(db, conv_id, player_loc, user_message,
-                                              deepseek, api_key=api_key)
+    phone_npc = None
+    if not sticker_row:
+        if npc_ok:
+            addressed_npc = npc.resolve_addressed(db, conv_id, player_loc, user_message,
+                                                  deepseek, api_key=api_key)
+        elif channel == PHONE_CHANNEL:
+            # 手机里也能跟联系人说话：尤夏提到的人、或者玩家点名的人
+            phone_npc = npc.resolve_phone_addressed(db, conv_id, user_message)
 
     db.add_message(conv_id, "user",
                    _stored_user_content(sticker_path, sticker_desc, user_message, sticker_feel),
@@ -759,6 +776,8 @@ def chat():
     npcs_here = npc.present_block(db, conv_id, player_loc) if npc_ok else ""
     # 此地的实物（环境描写登记下来的）：让她提到杯子、毯子时是同一个
     props_here = props.block(db, conv_id, yuxia_loc)
+    # 手机里的联系人（妈妈、室友这类）：她可以在这里被提到、被回消息
+    contacts_here = npc.contacts_block(db, conv_id)
     # 此刻的日程：她这边在上课还是已经回公寓了
     schedule_here = (schedule.describe(db, conv_id, now_minutes, "yuxia",
                                       deepseek, api_key)
@@ -773,7 +792,8 @@ def chat():
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
     blocks = "\n\n".join(b for b in (world, place, scene_here, schedule_here,
-                                     props_here, npcs_here, state_block, tic_hint) if b)
+                                     props_here, npcs_here, contacts_here,
+                                     state_block, tic_hint) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
@@ -794,6 +814,7 @@ def chat():
 
         yield _sse({"type": "conv_id", "id": conv_id})
         yield _sse({"type": "story_time", "content": story_time,
+                    "minutes": now_minutes,
                     "jump": keyword_jump, "reason": "关键词规则" if keyword_jump else ""})
         if moved:
             yield _sse({"type": "scene_changed",
@@ -817,6 +838,14 @@ def chat():
             if npc_text:
                 yield _sse({"type": "npc", "name": addressed_npc.get("name") or "店员",
                             "content": npc_text})
+        # 手机里的联系人回消息：和尤夏的消息混在同一个手机面板里，带名字
+        if phone_npc:
+            phone_text = npc.phone_reply(db, conv_id, phone_npc, user_message, deepseek,
+                                         api_key=api_key, story_minutes=now_minutes)
+            if phone_text:
+                yield _sse({"type": "npc_phone", "name": phone_npc.get("name") or "对方",
+                            "content": phone_text})
+                db.touch_last_seen(conv_id)
 
         # 窗口按 token 预算选；掉出去的那段并进检查点，检查点放在历史最前面。
         # 前台不等摘要：这一轮照常用窗口，摘要写完下一轮生效（失败也只是照旧）。
@@ -842,8 +871,9 @@ def chat():
         # 注意要用「全部消息数」：get_message_count 只数玩家消息，不会变
         wrote_before = db.get_total_message_count(conv_id)
         # 传「是否同处一地」：异地时动作照收（她在自己那边做事），但不允许写身体接触
-        actions = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
-                                 allow_actions=co_located)
+        reply = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
+                               allow_actions=co_located)
+        actions = reply["actions"]
         if db.get_total_message_count(conv_id) == wrote_before:
             # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
             # 明确要一句最短的话或一个动作，别让玩家对着空气等
@@ -857,9 +887,9 @@ def chat():
                                          api_key_override=api_key), rewrite):
                 retry_full += chunk
                 yield _sse({"type": "chunk", "content": chunk})
-            actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
-                                     now_minutes, channel,
-                                     allow_actions=co_located) or actions
+            retry = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
+                                   now_minutes, channel, allow_actions=co_located)
+            actions = retry["actions"] or actions
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
@@ -889,6 +919,9 @@ def _recent_spoken(db, conv_id, limit=4):
                 if obj.get(key):
                     out.extend(_bubble_parts(str(obj[key])))
         elif channel == PHONE_CHANNEL:
+            # 手机里第三人（妈妈这类）发来的话不是她说的，别拿去算"重复"
+            if row.get("speaker"):
+                continue
             out.append(content)
     return out[-limit:]
 
@@ -897,11 +930,13 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
                    allow_actions=True):
     """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
 
-    返回这一轮写下的「动作」列表，调用方可以立刻推给前端。
+    返回 {"actions": [...], "phone": [{"speaker","text"}]}：
+    调用方可以把这一轮的动作和「不是她发的」手机消息立刻推给前端。
     """
     clean = (full or "").strip()
+    out = {"actions": [], "phone": []}
     if not clean:
-        return []
+        return out
 
     objects = _extract_json_objects(clean)
     if not objects:
@@ -915,7 +950,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         parts = [_strip_speaker(p) for p in re.split(r"[\r\n]+", clean)]
         parts = [p for p in parts if p]
         if not parts:
-            return []
+            return out
         is_error = parts[0].startswith(("API 错误", "错误:", "无法连接", "[生成失败"))
         for part in parts[:4]:
             if can_speak:
@@ -925,16 +960,21 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
                                story_minutes=now_minutes)
             else:
                 db.add_message(conv_id, "assistant", part,
-                               channel=fallback_channel, scene=yuxia_loc)
+                               channel=fallback_channel, scene=yuxia_loc,
+                               story_minutes=now_minutes)
+                out["phone"].append({"speaker": "", "text": part})
         db.set_last_yuxia_at(conv_id, time.time(), fallback_channel)
         if not is_error:
             memory_engine.remember_assistant_message(
                 db, conv_id, " ".join(parts)[:200], now_minutes)
-        return []
+        return out
 
     speech, stickers_used, phone_msgs, actions = [], [], [], []
     mood = ""
     for obj in objects:
+        # 这一条里声明的物件 / 人物先落地：下文提到它们时就是同一件东西、同一个人
+        meta = entities.apply_reply(db, conv_id, obj, yuxia_loc)
+        speaker = meta.get("speaker") or ""
         if obj.get("对白"):
             # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆。
             # 异地时先收着，下面统一转成手机消息发出去（以前这里带着 can_speak 判断，
@@ -952,10 +992,13 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
-            phone_msgs.extend(_bubble_parts(_strip_speaker(str(obj["消息"])), limit=40))
+            if speaker:
+                entities.ensure_speaker(db, conv_id, speaker, location=yuxia_loc)
+            for part in _bubble_parts(_strip_speaker(str(obj["消息"])), limit=40):
+                phone_msgs.append((part, speaker))
         state_engine.apply_reply(db, conv_id, obj)
         if not mood and obj.get("心情"):
-            mood = str(obj["心情"]).strip()[:8]
+            mood = str(obj.get("心情")).strip()[:8]
 
     # 心情只影响界面头像；不在白名单里的（模型偶尔会发明"担心"这类）丢掉，沿用上一次
     if mood and mood not in MOOD_FACES:
@@ -968,7 +1011,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
 
     # 异地时她只有「消息」通道：模型偶尔还是会给「对白」，别丢掉，转成消息发出来
     if not can_speak and speech:
-        phone_msgs.extend(speech)
+        phone_msgs.extend((p, "") for p in speech)
         speech = []
     if can_speak and speech:
         # 把刚说过的话原样再说一遍，看起来像卡住了：整句重复的直接丢掉。
@@ -998,9 +1041,10 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
                            channel=CHAT_CHANNEL, scene=yuxia_loc,
                            story_minutes=now_minutes)
 
-    for msg in phone_msgs:
+    for msg, speaker in phone_msgs:
         db.add_message(conv_id, "assistant", msg, channel=PHONE_CHANNEL, scene=yuxia_loc,
-                       story_minutes=now_minutes)
+                       story_minutes=now_minutes, speaker=speaker)
+        out["phone"].append({"speaker": speaker, "text": msg})
 
     # 她的动作：写进独立的 action 通道（前端渲染成斜体旁白），不进对话框。
     # 以前和「神态」共用 state 通道，而前端对 state 只保留最后一条，
@@ -1010,7 +1054,7 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         db.add_message(conv_id, "assistant", act, channel="action", scene=yuxia_loc,
                        story_minutes=now_minutes)
 
-    readable = " ".join(speech + [f"（手机）{m}" for m in phone_msgs]).strip()
+    readable = " ".join(speech + [f"（手机）{m}" for m in (p[0] for p in phone_msgs)]).strip()
     if readable:
         memory_engine.remember_assistant_message(db, conv_id, readable, now_minutes)
 
@@ -1020,7 +1064,8 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     elif speech or stickers_used or actions:
         db.set_last_yuxia_at(conv_id, time.time(), CHAT_CHANNEL)
 
-    return actions
+    out["actions"] = actions
+    return out
 
 
 # ──────────────────────────────────────────────
@@ -1330,18 +1375,21 @@ def idle(conv_id):
 
     acted = autonomy.maybe_act(db, conv_id, deepseek, now, brief,
                                api_key=api_key, msg_count=msg_count, idle=True)
+    now_after = time_keeper.init_clock(db, conv_id)
     payload = {"acted": bool(acted), "action": (acted or {}).get("action"),
                "text": (acted or {}).get("text", ""),
                "channel": (acted or {}).get("channel", ""),
                "location": (acted or {}).get("location", ""),
                "visible": (acted or {}).get("visible", True),
+               # 时钟一直在走：哪怕她这次什么都没做，客户端也要拿到最新时间
+               "story_time": clock.format_time(now_after),
+               "story_minutes": now_after,
+               "sync_at": time.time(),
                "unread": db.get_phone_unread(conv_id)}
     if acted and acted.get("action") in ("move", "lead"):
         payload["scene"] = _scene_payload(conv_id, api_key)
     if acted and acted.get("action") == "act":
         payload["events"] = db.get_recent_events(conv_id, limit=50)
-    if acted:
-        payload["story_time"] = clock.format_time(db.get_story_minutes(conv_id))
     return jsonify(payload)
 
 
@@ -1383,7 +1431,8 @@ def atmosphere(conv_id):
                             "jump": jump["jump"], "reason": jump.get("reason", ""),
                             "from": jump["from"], "to": jump["to"]})
 
-        if should_run_random_event(msg_count, is_push_cmd):
+        if should_run_random_event(msg_count, is_push_cmd, db=db, conv_id=conv_id,
+                                   now_minutes=now):
             yield _sse({"type": "event_organizing", "hint": "事件生成中..."})
             random_event = _run_random_event(conv_id, db, deepseek,
                                              now_minutes=now, api_key=api_key)
@@ -1460,8 +1509,11 @@ def atmosphere(conv_id):
                             "content": acted["text"], "channel": acted.get("channel", "")})
             # 自主行动也会推进故事时间（做事 2 分钟、说话 1 分钟），页面上的时钟要跟上
             try:
+                now_after = time_keeper.init_clock(db, conv_id)
                 yield _sse({"type": "story_time",
-                            "content": clock.format_time(db.get_story_minutes(conv_id))})
+                            "content": clock.format_time(now_after),
+                            "minutes": now_after,
+                            "sync_at": time.time()})
             except Exception:
                 pass
 
@@ -1579,11 +1631,15 @@ def notify_pending():
         if channel not in (CHAT_CHANNEL, PHONE_CHANNEL):
             continue
         text, sticker_url = _readable_reply(row.get("content") or "", channel)
+        speaker = (row.get("speaker") or "").strip()
+        if speaker:
+            text = f"{speaker}：{text}"
         if not text and not sticker_url:
             continue
         items.append({
             "id": mid,
             "channel": channel,
+            "speaker": speaker,
             "text": text,
             "sticker": sticker_url,
             "at": row.get("created_at") or "",
@@ -1620,4 +1676,112 @@ def _readable_reply(content, channel):
         if hit:
             sticker_url = hit[0]["url"]
     return speech, sticker_url
+
+
+# ──────────────────────────────────────────────
+# 导出会话（手机端调试用）
+# ──────────────────────────────────────────────
+
+def _message_line(row):
+    """一条消息导出成一行人话：谁、在哪个通道、什么时间说了什么"""
+    channel = row.get("channel") or CHAT_CHANNEL
+    content = row.get("content") or ""
+    who = "青梅" if row.get("role") == "user" else CHARACTER_NAME
+    if channel == "npc":
+        try:
+            data = json.loads(content)
+            who = data.get("name") or "路人"
+            content = data.get("text") or content
+        except Exception:
+            pass
+        channel = "当面"
+    elif channel == PHONE_CHANNEL:
+        speaker = (row.get("speaker") or "").strip()
+        if speaker:
+            who = speaker
+        channel = "手机"
+    elif channel == "action":
+        who = ""
+        channel = "动作"
+    elif channel == "state":
+        who = ""
+        channel = "旁白"
+    else:
+        channel = "当面"
+        if row.get("role") == "assistant" and content.lstrip().startswith("{"):
+            try:
+                obj = json.loads(content)
+                content = str(obj.get("对白") or obj.get("消息") or "")
+                if obj.get("表情包") and not content:
+                    content = f"（表情包：{obj['表情包']}）"
+            except Exception:
+                pass
+        if row.get("role") == "user" and content.lstrip().startswith("{"):
+            try:
+                obj = json.loads(content)
+                if obj.get("表情包"):
+                    content = f"（表情包：{obj.get('desc') or obj['表情包']}）"
+            except Exception:
+                pass
+    minutes = int(row.get("story_minutes") or 0)
+    stamp = clock.format_time(minutes) if minutes else (row.get("created_at") or "")
+    head = f"[{stamp}] "
+    if who:
+        head += f"{who}（{channel}）："
+    else:
+        head += f"（{channel}）"
+    return head + content.replace("\n", " ")
+
+
+@chat_bp.route("/api/export/<conv_id>", methods=["GET"])
+@require_auth
+def export_conversation(conv_id):
+    """把整段会话导成纯文本：手机上点一下就能把记录发出来调试"""
+    denied = ensure_conversation_owner(db, conv_id, request.user_id)
+    if denied:
+        return denied
+    try:
+        now = time_keeper.init_clock(db, conv_id)
+        loc = db.get_current_location(conv_id)
+        player_loc = db.get_player_location(conv_id)
+        lines = [
+            f"{CHARACTER_NAME} · 会话导出",
+            f"会话 ID：{conv_id}",
+            f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"故事时间：{clock.format_time(now)}",
+            "地点：" + (f"同在{loc}" if loc == player_loc else
+                       f"尤夏在{loc}，青梅在{player_loc}"),
+            "",
+            "── 对话 ──",
+        ]
+        for row in db.get_messages(conv_id):
+            lines.append(_message_line(row))
+        events = db.get_recent_events(conv_id, limit=60)
+        if events:
+            lines += ["", "── 故事进展 ──"]
+            for ev in events:
+                lines.append(f"[{ev.get('story_time') or '—'}] [{ev.get('event_type')}] "
+                             f"{ev.get('title')}：{ev.get('description')}")
+        try:
+            people = db.get_npcs(conv_id)
+        except Exception:
+            people = []
+        if people:
+            lines += ["", "── 出场的人 ──"]
+            for p in people:
+                tag = "电话联系人" if p.get("phone") else (p.get("location") or "")
+                lines.append(f"{p['name']}（{p.get('role') or '—'}，{tag}）")
+        prop_items = props.items(db, conv_id, loc)
+        if prop_items:
+            lines += ["", f"── {loc}的物件 ──"]
+            for it in prop_items:
+                lines.append(f"{it['name']}：{it.get('state') or '—'}")
+    except Exception as e:
+        print(f"[导出] 失败: {e}")
+        return jsonify({"error": "导出失败"}), 500
+
+    body = "\ufeff" + "\n".join(lines) + "\n"
+    filename = f"yuxia-{conv_id}.txt"
+    return Response(body, mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 

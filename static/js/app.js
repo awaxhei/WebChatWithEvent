@@ -124,6 +124,63 @@ function unwrapStructured(text) {
     return text;
 }
 
+// 一条回复拆成几个气泡：和服务端 _bubble_parts 同一套规则（按句读切，长句按逗号硬拆）。
+// 服务端已经一条一句存好了；流式显示还没经过服务端，所以这里再拆一次，
+// 否则一整段话会挤成一个长条，看起来不像在发消息。
+const BUBBLE_SENT_RE = /(?<=[。！？!?])/;
+function splitBubbles(text, limit = 24, maxParts = 5) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw) return [];
+    const out = [];
+    const pushLong = (piece) => {
+        let rest = piece;
+        while (rest.length > limit) {
+            out.push(rest.slice(0, limit));
+            rest = rest.slice(limit);
+        }
+        if (rest) out.push(rest);
+    };
+    raw.split(BUBBLE_SENT_RE).forEach((part) => {
+        const seg = part.trim();
+        if (!seg) return;
+        if (seg.length <= limit) {
+            out.push(seg);
+            return;
+        }
+        // 太长：按逗号凑到 limit 以内
+        let buf = '';
+        seg.split(/(?<=[，,、；;])/).forEach((s) => {
+            if (!s) return;
+            if (buf.length + s.length <= limit) {
+                buf += s;
+                return;
+            }
+            if (buf) out.push(buf);
+            buf = '';
+            if (s.length <= limit) buf = s;
+            else pushLong(s);
+        });
+        if (buf) out.push(buf);
+    });
+    return (out.length ? out : [raw]).slice(0, maxParts);
+}
+
+// 故事时间格式化：服务端输出「第N天 HH:MM」，界面上的钟自己往前走
+const CN_DIGITS = '零一二三四五六七八九';
+function cnNumber(n) {
+    n = Math.max(0, Math.floor(n));
+    if (n < 10) return CN_DIGITS[n];
+    if (n < 20) return '十' + (n % 10 ? CN_DIGITS[n % 10] : '');
+    if (n < 100) return CN_DIGITS[Math.floor(n / 10)] + '十' + (n % 10 ? CN_DIGITS[n % 10] : '');
+    return String(n);
+}
+function formatStoryMinutes(minutes) {
+    const m = Math.max(0, Math.floor(minutes));
+    const h = Math.floor((m % 1440) / 60);
+    const mm = m % 60;
+    return `第${cnNumber(Math.floor(m / 1440) + 1)}天 ${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
 // 表情包图片消息：{"表情包": 路径, "url": 地址, "desc": 说明}
 // 注意她自己的 JSON 里也有「表情包」字段（存的是情绪词），所以必须靠 url 区分。
 function stickerMessageOf(text) {
@@ -429,6 +486,19 @@ class ChatManager {
     _enableInput() { this.inputEl.disabled = false; this.btnSend.disabled = false; if (this.btnPushMode) this.btnPushMode.disabled = false; this.inputEl.focus(); }
 
     // ── 场景 ──
+    _applyStoryTime(data) {
+        if (!data) return;
+        if (typeof data.minutes === 'number') {
+            this.storyMinutes = data.minutes;
+            this._clockAt = data.sync_at ? data.sync_at * 1000 : Date.now();
+        }
+        const text = data.content || (this.storyMinutes ? formatStoryMinutes(this.storyMinutes) : '');
+        if (text) this.storyTime = text;
+        if (text && window.emotionAssistant && window.emotionAssistant.eventPanel) {
+            window.emotionAssistant.eventPanel.updateStoryTime(text);
+        }
+    }
+
     async loadScene() {
         if (!this.currentConvId) return;
         try {
@@ -440,7 +510,10 @@ class ChatManager {
     applyScene(scene) {
         if (!scene) return;
         this.coLocated = !!scene.co_located;
-        if (typeof scene.story_minutes === 'number') this.storyMinutes = scene.story_minutes;
+        if (typeof scene.story_minutes === 'number') {
+            this.storyMinutes = scene.story_minutes;
+            this._clockAt = scene.sync_at ? scene.sync_at * 1000 : Date.now();
+        }
         // 她的心情 → 手机里的颜文字头像
         if (scene.mood_face) {
             this.moodFace = scene.mood_face;
@@ -615,7 +688,7 @@ class ChatManager {
                 window.phonePanel.showTyping();
             }
         } else {
-            this._addBubble(this._looksLikeSceneNote(displayMsg) ? 'narration' : 'user', displayMsg);
+            this._addUserText(displayMsg);
         }
         AnimationEngine.showThinking(this.messagesContainer);
         try {
@@ -643,11 +716,12 @@ class ChatManager {
                             fullText += data.content;
                             this._renderStreamingJSON(fullText);
                         } else if (data.type === 'story_time') {
-                            this.storyTime = data.content;
-                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
-                                window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                            this._applyStoryTime(data);
                         } else if (data.type === 'yuxia_action') {
                             if (data.content) this._addYuxiaAction(data.content);
+                        } else if (data.type === 'npc_phone') {
+                            if (window.phonePanel) window.phonePanel.push(
+                                'assistant', data.content, true, data.name || '');
                         } else if (data.type === 'scene_changed' && data.scene) {
                             this.applyScene(data.scene);
                         } else if (data.type === 'done') {
@@ -773,12 +847,19 @@ class ChatManager {
     _renderJSONObject(obj) {
         // 主页面只呈现「对白」和「表情包」；动作与神态由系统的场景描写负责
         if (obj["对白"]) {
-            this._addHerBubble(obj["对白"], obj["心情"], true);
+            // 一句话一个气泡：模型偶尔把两句写进一条 JSON，也不能挤成一个长条
+            splitBubbles(obj["对白"]).forEach((line) => {
+                this._addHerBubble(line, obj["心情"], true);
+            });
         }
 
-        // 手机消息：不进主页面，交给手机面板并亮红点
+        // 手机消息：不进主页面，交给手机面板并亮红点。
+        // 带「说话人」的是妈妈/店员这类第三人发的，不是她说的，气泡上要带名字。
         if (obj["消息"]) {
-            if (window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
+            const speaker = String(obj["说话人"] || '').trim();
+            splitBubbles(obj["消息"], 40, 4).forEach((line) => {
+                if (window.phonePanel) window.phonePanel.push('assistant', line, false, speaker);
+            });
         }
 
         // 表情包
@@ -831,7 +912,7 @@ class ChatManager {
                                 this._addWorldNarration(data.content || '尤夏拉着你走了', 'low');
                                 this.loadScene();
                             } else if (data.action === 'act') {
-                                if (data.content) this._addWorldNarration(this._asYuxiaAction(data.content), 'low', '尤夏');
+                                if (data.content) this._addYuxiaAction(data.content);
                             } else if (data.channel === 'phone' || !this.coLocated) {
                                 if (window.phonePanel) window.phonePanel.push('assistant', data.content, true);
                             } else {
@@ -849,8 +930,7 @@ class ChatManager {
                                 this._addEventOrganizing();
                             }
                         } else if (data.type === 'story_time') {
-                            if (window.emotionAssistant && window.emotionAssistant.eventPanel)
-                                window.emotionAssistant.eventPanel.updateStoryTime(data.content);
+                            this._applyStoryTime(data);
                             // 时间跳跃时给一条提示，让玩家知道时间被推进了
                             if (data.jump && data.jump !== 'NONE' && data.from && data.to) {
                                 this._addWorldNarration(`时间流转：${data.from} → ${data.to}`, 'low');
@@ -875,19 +955,34 @@ class ChatManager {
     // ── 渲染方法 ──
     _addBubble(role, content, isStream) {
         const isNote = role === 'narration';
-        // 她的话统一走头像气泡：历史里以前混用过不带头像的气泡，看着就歪
+        // 她的「动作」有单独的样式；玩家的动作（「（青梅……）」）也不是世界事件
         if (role === 'assistant' && !isNote) return this._addHerBubble(content, null, isStream);
+        const isPlayerAction = role === 'player-action';
         const row = document.createElement('div');
-        row.className = isNote ? 'message-row narration-row' : `message-row ${role}`;
+        row.className = isPlayerAction ? 'message-row player-action-row'
+            : (isNote ? 'message-row narration-row' : `message-row ${role}`);
         if (isStream) row.classList.add('stream-temp');
         const bubble = document.createElement('div');
-        bubble.className = isNote ? 'scene-note' : 'message-bubble';
-        bubble.textContent = (role === 'user' || isNote) ? content : stripSpeakerPrefix(content);
+        bubble.className = isPlayerAction ? 'player-action'
+            : (isNote ? 'scene-note' : 'message-bubble');
+        bubble.textContent = (role === 'user' || isNote || isPlayerAction) ? content : stripSpeakerPrefix(content);
         row.appendChild(bubble);
         this.messagesContainer.appendChild(row);
         AnimationEngine.slideIn(row);
         AnimationEngine.scrollToBottom(this.messagesContainer);
         return bubble;
+    }
+
+    /** 这句话是玩家的动作旁白（「（青梅把窗关上。）」），不是世界事件 */
+    _isPlayerAction(text) {
+        const t = (text || '').trim();
+        return /^[（(]青梅/.test(t);
+    }
+
+    /** 渲染玩家消息：动作旁白 / 普通消息 */
+    _addUserText(text) {
+        if (this._isPlayerAction(text)) return this._addBubble('player-action', text);
+        return this._addBubble(this._looksLikeSceneNote(text) ? 'narration' : 'user', text);
     }
 
     /** 她说的话：气泡左边挂一个颜文字头像（当面也显示，头像跟着心情变）
@@ -1067,7 +1162,7 @@ class ChatManager {
                     } else if (msg.role === 'user') {
                         const st = stickerMessageOf(msg.content);
                         if (st) this._addStickerBubble(st.url, 'me');
-                        else this._addBubble(this._looksLikeSceneNote(msg.content) ? 'narration' : 'user', msg.content);
+                        else this._addUserText(msg.content);
                     } else {
                         this._parseAndRenderHistory(msg.content);
                     }
@@ -1111,8 +1206,13 @@ class ChatManager {
             if (!trimmed.startsWith('{')) continue;
             try {
                 const obj = JSON.parse(this._normalizeQuotes(trimmed));
-                if (obj["对白"]) this._addHerBubble(obj["对白"], obj["心情"]);
-                if (obj["消息"] && window.phonePanel) window.phonePanel.push('assistant', obj["消息"], false);
+                if (obj["对白"]) {
+                    splitBubbles(obj["对白"]).forEach((line) => this._addHerBubble(line, obj["心情"]));
+                }
+                if (obj["消息"] && window.phonePanel) {
+                    splitBubbles(obj["消息"], 40, 4).forEach((line) =>
+                        window.phonePanel.push('assistant', line, false, String(obj["说话人"] || '').trim()));
+                }
                 if (obj["表情包"]) {
                     String(obj["表情包"]).split(/[,，]/).filter(Boolean)
                         .forEach(name => this._addSticker(name.trim()));
@@ -1148,16 +1248,25 @@ class ChatManager {
 
     _e(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 
-    /** 她的动作：居中的斜体旁白，逐条保留（和「她说的」分开，读起来像描写） */
+    /** 她的动作：带她的小头像和名字，一眼看得出这是尤夏做的，不是世界旁白 */
     _addYuxiaAction(text) {
         if (!text) return;
-        const row = document.createElement('div');
-        row.className = 'message-row yuxia-action-row';
+        // 自主行动那边的 text 自带主语（「尤夏把水杯推过去」），名字已经在标签上，去掉重复
+        const body = String(text).trim().replace(/^尤夏[，,、\s]*/, '');
+        const row = this._herRow('yuxia-action-row');
+        // 动作前面是她说的话时，_herRow 会把头像留空；动作要一直看得见是她做的
+        const avatar = row.querySelector('.chat-avatar');
+        if (avatar) {
+            avatar.classList.remove('chat-avatar-ghost');
+            avatar.textContent = this.moodFace || '(ᗜ ‸ ᗜ)';
+        }
         const box = document.createElement('div');
         box.className = 'yuxia-action';
-        box.textContent = text;
+        box.innerHTML = '<span class="yuxia-action-name">尤夏</span>'
+            + `<span class="yuxia-action-text">${this._e(body)}</span>`;
         row.appendChild(box);
         this.messagesContainer.appendChild(row);
+        AnimationEngine.slideIn(row);
         AnimationEngine.scrollToBottom(this.messagesContainer);
     }
 
@@ -1351,8 +1460,8 @@ class PhonePanel {
         this.moodFace = face;
         if (this.isOpen) this.render();
     }
-    push(role, text, markUnread) {
-        this.messages.push({ role, content: text });
+    push(role, text, markUnread, speaker) {
+        this.messages.push({ role, content: text, speaker: speaker || '' });
         if (role === 'assistant') this.hideTyping();
         this.render();
         if (role === 'assistant') {
@@ -1408,6 +1517,12 @@ class PhonePanel {
                 if (m.role === 'user') {
                     prevWasHer = false;
                     return `<div class="phone-row me"><div class="phone-msg me">${inner}</div></div>`;
+                }
+                // 手机里第三个人（妈妈、室友）发来的消息：带上名字，换个颜色
+                if (m.speaker) {
+                    prevWasHer = false;
+                    return `<div class="phone-row npc"><div class="phone-msg npc">`
+                         + `<span class="phone-npc-name">${this._e(m.speaker)}</span>${inner}</div></div>`;
                 }
                 const grouped = prevWasHer;
                 prevWasHer = true;
@@ -1765,6 +1880,23 @@ class SettingsPanel {
     open() {
         this.input.value = (window.apiKeyManager && window.apiKeyManager.get()) || '';
         this._renderHint();
+        // 导出当前会话：整段对话 + 故事进展 + 出场的人/物件，纯文本方便排查
+        const link = document.getElementById('btnExportChat');
+        if (link) {
+            const cm = window.emotionAssistant && window.emotionAssistant.chatManager;
+            const conv = cm && cm.currentConvId;
+            if (conv) {
+                link.href = `/api/export/${conv}`;
+                link.style.opacity = '1';
+                link.style.pointerEvents = 'auto';
+                link.textContent = '导出为文本';
+            } else {
+                link.removeAttribute('href');
+                link.style.opacity = '0.5';
+                link.style.pointerEvents = 'none';
+                link.textContent = '先开始一段对话';
+            }
+        }
         this.overlay.classList.remove('hidden');
         this.input.focus();
     }
@@ -1962,6 +2094,22 @@ class EmotionAssistant {
         this.historyManager.loadHistory();
         document.getElementById('messageInput').focus();
         this._startIdlePolling();
+        this._startClockTicking();
+    }
+
+    /** 故事时间跟着真实时间走：界面上的钟每 15 秒自己往前一格，
+     *  不再只在进页面或发消息时才动一下。 */
+    _startClockTicking() {
+        if (this._clockTimer) return;
+        this._clockTimer = setInterval(() => {
+            const cm = this.chatManager;
+            if (!cm || !cm.storyMinutes) return;
+            const at = cm._clockAt || Date.now();
+            const extra = Math.floor((Date.now() - at) / 60000);
+            if (extra <= 0) return;
+            const text = formatStoryMinutes(cm.storyMinutes + extra);
+            if (this.eventPanel) this.eventPanel.updateStoryTime(text);
+        }, 15000);
     }
     _startIdlePolling() {
         if (this._idleTimer) { clearInterval(this._idleTimer); this._idleTimer = null; }
@@ -1990,6 +2138,11 @@ class EmotionAssistant {
             const data = await res.json();
             if (!data.acted) {
                 if (data.unread) this.phonePanel.setUnread(data.unread);
+                if (typeof data.story_minutes === 'number') {
+                    cm.storyMinutes = data.story_minutes;
+                    cm._clockAt = data.sync_at ? data.sync_at * 1000 : Date.now();
+                    if (this.eventPanel) this.eventPanel.updateStoryTime(formatStoryMinutes(data.story_minutes));
+                }
                 return;
             }
             if (data.action === 'move') {
@@ -1999,14 +2152,20 @@ class EmotionAssistant {
                 cm._addWorldNarration(`尤夏拉着你去了${data.location || '别处'}`, 'low');
                 if (data.scene) cm.applyScene(data.scene);
             } else if (data.action === 'act') {
-                if (data.visible && data.text) cm._addWorldNarration(cm._asYuxiaAction(data.text), 'low', '尤夏');
+                if (data.visible && data.text) cm._addYuxiaAction(data.text);
                 if (data.events && this.eventPanel) this.eventPanel.renderEvents(data.events, false, '');
             } else if (data.channel === 'phone') {
                 this.phonePanel.push('assistant', data.text, true);
             } else {
                 cm._addBubble('assistant', data.text);
             }
-            if (data.story_time && this.eventPanel) this.eventPanel.updateStoryTime(data.story_time);
+            if (data.story_time && this.eventPanel) {
+                this.eventPanel.updateStoryTime(data.story_time);
+                if (typeof data.story_minutes === 'number') {
+                    cm.storyMinutes = data.story_minutes;
+                    cm._clockAt = data.sync_at ? data.sync_at * 1000 : Date.now();
+                }
+            }
         } catch (e) {}
     }
     async _loadClientConfig() {

@@ -282,7 +282,8 @@ def main():
         check("手机里不出现 npc 事件", "npc" not in kinds, str(kinds))
         check("手机里还是有她的回复", "done" in kinds, str(kinds))
         check("手机里她不知道「现场还有」谁",
-              "现场还有" not in phone_stub.stream_prompt, phone_stub.stream_prompt[-200:])
+              "【现场还有】路人" not in phone_stub.stream_prompt,
+              phone_stub.stream_prompt[-200:])
         check("手机通道要求活蹦乱跳、可以连发",
               "活蹦乱跳" in phone_stub.stream_prompt and "连发" in phone_stub.stream_prompt,
               phone_stub.stream_prompt[-260:])

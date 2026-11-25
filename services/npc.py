@@ -20,7 +20,10 @@ import json
 import re
 import time
 
-from config import NPC_ENABLED, NPC_PROMPT, NPC_CAP, NPC_LLM_DETECT, NPC_DETECT_PROMPT
+from config import (
+    NPC_ENABLED, NPC_PROMPT, NPC_PHONE_PROMPT, NPC_CAP, NPC_LLM_DETECT,
+    NPC_DETECT_PROMPT, CHARACTER_NAME,
+)
 
 # 只用来剥掉模型偶尔带出的 ``` 围栏 / 从文字里捞出 JSON（属于解析，不是判断）
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -132,7 +135,10 @@ def find_addressed(db, conv_id, location, message):
         kept.append(npc)
     present = kept
     if is_private(location):
-        return None
+        # 私人空间里只认「剧情明确点名」的人（妈妈、室友），不认路边刷出来的路人
+        present = [n for n in present if n.get("declared")]
+        if not present:
+            return None
     # 句子里提到了现场某个人的名字 / 身份 → 就是在跟他说
     for npc in present:
         if _hit(message, npc.get("name")):
@@ -225,9 +231,127 @@ def spawn_named(db, conv_id, location, name):
     return _create(db, conv_id, location, name)
 
 
+def ensure_person(db, conv_id, name, role="", location="", phone=False, persona=""):
+    """登记一个**明确被提到**的人：在场的人 / 电话联系人
+
+    和 spawn_named 的区别：这条路径是模型在输出里点名声明的人物（「妈妈」
+    「煎饼摊老板」），不是在猜玩家在跟谁说话，所以私人空间也照收——
+    她家里来了人，是剧情说清楚的，不是路边随便冒出来的路人。
+    同名的人只登记一次，之后拿到的都是同一个人。
+    """
+    if not NPC_ENABLED:
+        return None
+    name = (name or "").strip()[:12]
+    if not name or _is_bogus_name(name):
+        return None
+    role = (role or "").strip()[:20] or _role_of(name)
+    try:
+        existing = db.find_npc(conv_id, name)
+    except Exception:
+        existing = None
+    if existing:
+        if not existing.get("declared"):
+            try:
+                db.set_npc_declared(existing["id"])
+                existing["declared"] = 1
+            except Exception:
+                pass
+        if phone and not existing.get("phone"):
+            db.set_npc_phone(existing["id"], True)
+            existing["phone"] = 1
+        if location and not phone and existing.get("location") != location:
+            db.set_npc_location(existing["id"], location)
+            existing["location"] = location
+        if persona and not existing.get("persona"):
+            existing["persona"] = persona
+        return existing
+
+    try:
+        if db.count_npcs(conv_id) >= NPC_CAP:
+            return None
+        npc_id = db.add_npc(conv_id, name, role, "" if phone else location,
+                            persona or f"{role}，说话随意、简短，只管自己眼前的事。",
+                            phone=1 if phone else 0, declared=1)
+        return db.get_npc(npc_id)
+    except Exception as e:
+        print(f"[NPC] 登记失败: {e}")
+        return None
+
+
+def phone_contacts(db, conv_id):
+    try:
+        return db.get_phone_contacts(conv_id)
+    except Exception:
+        return []
+
+
+def contacts_block(db, conv_id):
+    """给提示词用：手机里能联系到谁"""
+    people = phone_contacts(db, conv_id)
+    if not people:
+        return ""
+    names = "、".join(f"{p['name']}（{p['role']}）" if p.get("role") and p["role"] != p["name"]
+                     else p["name"] for p in people)
+    return f"【手机里的联系人】{names}"
+
+
+def resolve_phone_addressed(db, conv_id, message):
+    """玩家这句话是不是在手机里对某个联系人说的（只做名字/身份的找回）"""
+    if not NPC_ENABLED or not message:
+        return None
+    for person in phone_contacts(db, conv_id):
+        if _hit(message, person.get("name")):
+            return person
+    for person in phone_contacts(db, conv_id):
+        role = person.get("role") or ""
+        if len(role) >= 2 and _hit(message, role):
+            return person
+    return None
+
+
+def phone_reply(db, conv_id, npc, user_message, deepseek, api_key=None,
+                story_minutes=0, listener=""):
+    """让电话联系人用手机回一条消息
+
+    消息写进 phone 通道并带上 speaker：前端把它渲染成那个人的气泡，
+    尤夏也能在历史里看到「妈妈：……」，不会以为是自己说的。
+    """
+    if not NPC_ENABLED or not npc:
+        return ""
+    name = npc.get("name") or "对方"
+    system = (
+        NPC_PHONE_PROMPT
+        .replace("{name}", name)
+        .replace("{role}", npc.get("role") or "")
+        .replace("{persona}", npc.get("persona") or "")
+        .replace("{listener}", listener or CHARACTER_NAME)
+    )
+    try:
+        raw = deepseek.chat_sync(
+            [{"role": "user", "content": f"消息：{user_message}"}],
+            system_prompt=system,
+            temperature=0.8,
+            api_key_override=api_key,
+        )
+    except Exception as e:
+        print(f"[NPC] 手机回复失败: {e}")
+        return ""
+    if not raw or raw.startswith("[生成失败"):
+        return ""
+    text = _clean(raw, limit=60)
+    if len(text) < 1:
+        return ""
+    db.add_message(conv_id, "assistant", text, channel="phone",
+                   speaker=name, story_minutes=int(story_minutes or 0))
+    db.touch_npc(npc["id"], time.time())
+    return text
+
+
 def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
     """让 NPC 回一两句话；失败返回空串（不打断主流程）"""
-    if not NPC_ENABLED or not npc or is_private(npc.get("location")):
+    if not NPC_ENABLED or not npc:
+        return ""
+    if is_private(npc.get("location")) and not npc.get("declared"):
         return ""
     system = (
         NPC_PROMPT
@@ -285,6 +409,9 @@ def _detect_recent(db, conv_id, limit=None):
             lines.append(f"（尤夏的动作）{m['content']}")
         else:
             speaker = "青梅" if m["role"] == "user" else "尤夏"
+            who = (m.get("speaker") or "").strip()
+            if who:
+                speaker = who      # 手机里第三人发的话，别记成她说的
             lines.append(f"{speaker}（{'手机' if channel == 'phone' else '当面'}）：{m['content']}")
     return "\n".join(lines) or "（还没有对话）"
 
@@ -395,12 +522,15 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
 
 def present_block(db, conv_id, location):
     """给尤夏的世界块用：现场还有谁"""
-    if not NPC_ENABLED or is_private(location):
+    if not NPC_ENABLED:
         return ""
     try:
         present = db.get_npcs(conv_id, location=location)
     except Exception:
         return ""
+    # 私人空间里只列剧情明确点名的人（妈妈、室友），不列路边刷出来的路人
+    if is_private(location):
+        present = [n for n in present if n.get("declared")]
     if not present:
         return ""
     names = "、".join(f"{n['name']}（{n['role']}）" if n.get("role") and n["role"] != n["name"]

@@ -46,6 +46,9 @@ sealed interface Entry {
     /** 世界旁白（随机事件、换场景） */
     data class Narration(val text: String) : Entry
 
+    /** 玩家自己做的动作（「（青梅把窗关上。）」），不是世界事件 */
+    data class PlayerAction(val text: String) : Entry
+
     /** 两人的动作神态描写 */
     data class StateDesc(val text: String) : Entry
 
@@ -69,8 +72,13 @@ object Model {
     }
 
     /** 她的一条输出（当面通道存的是 JSON） */
-    class Reply(val speeches: List<String>, val stickerEmotions: List<String>,
-               val mood: String = "")
+    class Reply(
+        val speeches: List<String>,
+        val stickerEmotions: List<String>,
+        val mood: String = "",
+        /** 手机消息：文字 + 说话人（第三个人发的就有名字，她本人发的是空） */
+        val phoneMessages: List<Pair<String, String>> = emptyList(),
+    )
 
     /** 模型偶尔把"尤夏："也写进台词，显示前切掉（只剥开头一层） */
     private val SPEAKER_PREFIX = Regex("^\\s*(?:尤夏|青梅|她|我|对方|旁白)\\s*[:：]\\s*")
@@ -98,15 +106,74 @@ object Model {
     fun parseReply(content: String): Reply {
         val raw = content.trim()
         if (!raw.startsWith("{")) {
-            return Reply(listOf(stripSpeaker(raw)).filter { it.isNotEmpty() }, emptyList())
+            return Reply(splitBubbles(stripSpeaker(raw)).filter { it.isNotEmpty() }, emptyList())
         }
         val obj = runCatching { JSONObject(raw) }.getOrNull()
             ?: return Reply(listOf(stripSpeaker(raw)), emptyList())
-        val speech = obj.optString("对白")
-            .split("\n").map { stripSpeaker(it) }.filter { it.isNotEmpty() }
+        val speech = splitBubbles(obj.optString("对白"))
         val stickers = obj.optString("表情包")
             .split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
-        return Reply(speech, stickers)
+        val speaker = obj.optString("说话人").trim()
+        val phone = splitBubbles(obj.optString("消息"), limit = 40, maxParts = 4)
+            .map { it to speaker }
+        return Reply(speech, stickers, phoneMessages = phone)
+    }
+
+    /** 一条回复拆成几个气泡：和服务端 _bubble_parts 同一套规则 */
+    fun splitBubbles(text: String?, limit: Int = 24, maxParts: Int = 5): List<String> {
+        val raw = (text ?: "").trim()
+        if (raw.isEmpty()) return emptyList()
+        val out = ArrayList<String>()
+        val pushLong = { piece: String ->
+            var rest = piece
+            while (rest.length > limit) {
+                out.add(rest.substring(0, limit))
+                rest = rest.substring(limit)
+            }
+            if (rest.isNotEmpty()) out.add(rest)
+        }
+        raw.split(Regex("(?<=[。！？!?])")).forEach { part ->
+            val seg = part.trim()
+            if (seg.isEmpty()) return@forEach
+            if (seg.length <= limit) {
+                out.add(seg)
+                return@forEach
+            }
+            var buf = ""
+            seg.split(Regex("(?<=[，,、；;])")).forEach { s ->
+                if (s.isEmpty()) return@forEach
+                if (buf.length + s.length <= limit) {
+                    buf += s
+                    return@forEach
+                }
+                if (buf.isNotEmpty()) out.add(buf)
+                buf = if (s.length <= limit) s else ""
+                if (s.length > limit) pushLong(s)
+            }
+            if (buf.isNotEmpty()) out.add(buf)
+        }
+        return (if (out.isEmpty()) listOf(raw) else out).take(maxParts)
+    }
+
+    // 故事时间格式化：服务端输出「第N天 HH:MM」，界面上的钟跟着真实时间自己走
+    private const val CN_DIGITS = "零一二三四五六七八九"
+
+    fun cnNumber(n: Int): String {
+        val v = n.coerceAtLeast(0)
+        return when {
+            v < 10 -> CN_DIGITS[v].toString()
+            v < 20 -> "十" + if (v % 10 != 0) CN_DIGITS[v % 10].toString() else ""
+            v < 100 -> CN_DIGITS[v / 10].toString() + "十" +
+                if (v % 10 != 0) CN_DIGITS[v % 10].toString() else ""
+            else -> v.toString()
+        }
+    }
+
+    fun formatStoryMinutes(minutes: Int): String {
+        val m = minutes.coerceAtLeast(0)
+        val h = (m % 1440) / 60
+        val mm = m % 60
+        return "第${cnNumber(m / 1440 + 1)}天 " + String.format("%02d:%02d", h, mm)
     }
 
     /** 按括号配对，从流式文本里取出已经完整的 JSON 对象 */

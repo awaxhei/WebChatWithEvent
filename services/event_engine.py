@@ -6,21 +6,138 @@ v3 变化：
 - 历史压缩改用 AI 小镇式记忆检索（core.memory），不再依赖对话摘要
 - 事件写入后会由 services.memory_engine 转成高重要度记忆
 """
+import difflib
 import json
 import random
 import re
 
 import core.clock as clock
 import core.memory as memory
+import core.props as props
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from config import (
     EVENT_PROMPT, CHARACTER_NAME, EVENT_AI_INTERVAL, RANDOM_EVENT_BASE_PROB,
     RANDOM_EVENT_TIERS, RANDOM_EVENT_TIER_GUIDE,
+    RANDOM_EVENT_COOLDOWN_MINUTES, RANDOM_EVENT_INTIMATE_COOLDOWN_MINUTES,
+    RANDOM_EVENT_CONTEXT_ROWS,
 )
+from services import entities, npc, state_engine
 from services.atmosphere import extract_location
 
 EVENT_TYPES = ("milestone", "scene_change", "emotional_shift", "time_advance", "random", "misc")
+
+# 最近对话里出现这些，说明此刻是两个人的私密时刻：门铃、快递、电话都不该来打断。
+# 分成两档：强词单独出现就算；弱词要凑到两个才算（「抱」和「喜欢」在普通对话里也很常见）。
+_INTIMATE_STRONG = (
+    "亲吻", "吻", "亲了", "亲了亲", "做爱", "脱衣服", "脱掉", "脱了", "洗澡", "浴室",
+    "胸", "大腿", "腰", "喘", "呻吟", "裸", "湿了", "舔", "床上", "被窝里",
+)
+_INTIMATE_WEAK = (
+    "亲", "抱", "摸", "贴", "靠", "搂", "蹭", "床", "被子", "衣服", "耳朵", "尾巴",
+    "喜欢", "害羞", "脸红", "身体", "抱紧", "抱抱",
+)
+_INTIMATE_ALL = _INTIMATE_STRONG + _INTIMATE_WEAK
+
+
+def _readable_row(row):
+    """一条消息的人话版本（当面通道存的是 JSON）"""
+    content = row.get("content") or ""
+    channel = row.get("channel") or "chat"
+    if channel in ("chat",) and content.lstrip().startswith("{"):
+        try:
+            obj = json.loads(content)
+        except Exception:
+            return content
+        if isinstance(obj, dict):
+            return " ".join(str(obj.get(k) or "") for k in ("对白", "动作", "消息")).strip()
+    return content
+
+
+def _moment_text(db, conv_id, limit=None):
+    limit = limit or RANDOM_EVENT_CONTEXT_ROWS
+    try:
+        rows = [m for m in db.get_messages(conv_id)
+                if (m.get("channel") or "chat") in ("chat", "phone", "action", "state")][-limit:]
+    except Exception:
+        return ""
+    return "\n".join(_readable_row(m) for m in rows if _readable_row(m))
+
+
+def scene_is_intimate(db, conv_id, limit=None):
+    """此刻是不是不该被打扰的私密/专注时刻"""
+    text = _moment_text(db, conv_id, limit)
+    if not text:
+        return False
+    strong = [w for w in _INTIMATE_STRONG if w in text]
+    if strong:
+        return True
+    weak = [w for w in _INTIMATE_WEAK if w in text]
+    return len(weak) >= 2
+
+
+def _busy_reason(db, conv_id, now_minutes):
+    """她正忙 / 正睡着 / 在浴室里：这时候不安排外部事件"""
+    try:
+        if state_engine.is_asleep(db, conv_id):
+            return "她睡着了"
+    except Exception:
+        pass
+    loc = db.get_current_location(conv_id) or ""
+    play = db.get_player_location(conv_id) or ""
+    if any(k in loc + play for k in ("浴室", "卫生间", "洗手间", "厕所")):
+        return "有人正在洗澡/在洗手间"
+    try:
+        activity, at = db.get_yuxia_activity(conv_id)
+    except Exception:
+        activity, at = "", 0
+    if activity and abs(int(now_minutes or 0) - int(at or 0)) <= 3:
+        if any(k in activity for k in ("洗澡", "睡", "上课", "考试", "接电话")):
+            return "她正在忙"
+    return ""
+
+
+def event_gate(db, conv_id, now_minutes, is_push_cmd=False):
+    """这一次该不该让世界插一脚。返回 (allowed, reason)"""
+    reason = _busy_reason(db, conv_id, now_minutes)
+    if reason:
+        return False, reason
+    # 私密时刻的冷却：不是"此刻有没有亲密词"，而是那之后的一段时间都别来打扰
+    try:
+        last_intimate = _last_seen_minutes(db, conv_id, _INTIMATE_ALL)
+    except Exception:
+        last_intimate = None
+    if last_intimate and now_minutes - last_intimate < RANDOM_EVENT_INTIMATE_COOLDOWN_MINUTES:
+        return False, "刚才正亲密，先别打扰"
+    if is_push_cmd:
+        return True, ""
+    try:
+        last = db.get_last_random_event_minutes(conv_id)
+    except Exception:
+        last = 0
+    if last and 0 <= int(now_minutes) - int(last) < RANDOM_EVENT_COOLDOWN_MINUTES:
+        return False, "离上次插曲太近"
+    return True, ""
+
+
+def _last_seen_minutes(db, conv_id, words):
+    """最近一次出现这些词的消息发生在第几分钟（没有就返回 None）
+
+    消息没记 story_minutes 的老数据退回"最后几条内出现过"——那就按当前时刻算，
+    宁可多安静一会儿，也不要挑在正好的时候敲门。
+    """
+    try:
+        rows = [m for m in db.get_messages(conv_id)
+                if (m.get("channel") or "chat") in ("chat", "phone", "action", "state")][-12:]
+    except Exception:
+        return None
+    for row in reversed(rows):
+        text = _readable_row(row)
+        if not text:
+            continue
+        if any(w in text for w in words):
+            return int(row.get("story_minutes") or 0)
+    return None
 
 
 def pick_tier():
@@ -58,8 +175,13 @@ def _parse_event_json(raw_text):
 # 触发判断
 # ──────────────────────────────────────────────
 
-def should_run_random_event(msg_count, is_push_cmd):
-    """偶然事件概率触发"""
+def should_run_random_event(msg_count, is_push_cmd, db=None, conv_id="", now_minutes=0):
+    """偶然事件概率触发（带氛围门控）"""
+    if db is not None and conv_id:
+        allowed, reason = event_gate(db, conv_id, now_minutes, is_push_cmd)
+        if not allowed:
+            print(f"[随机事件] 这次不安排：{reason}")
+            return False
     if is_push_cmd:
         return random.random() < 0.5
     adjusted = RANDOM_EVENT_BASE_PROB + (msg_count * 0.005)
@@ -122,16 +244,35 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
             return None
         recent = messages[-6:]
         conversation_text = "\n".join(
-            f"{'青梅' if m['role'] == 'user' else CHARACTER_NAME}：{m['content']}"
+            f"{'青梅' if m['role'] == 'user' else CHARACTER_NAME}：{_readable_row(m)}"
             for m in recent
         )
         story_time = clock.format_time(now_minutes)
         tier = pick_tier()
+        yuxia_loc = db.get_current_location(conv_id)
+        player_loc = db.get_player_location(conv_id)
+        co_located = yuxia_loc == player_loc
+        # 现场的事实一起给：她此刻在哪儿、在做什么、身边有什么东西、还有谁。
+        # 没有这些，模型就会在洗澡的时候安排人敲门、在空房间里说"有人在门口"。
+        try:
+            activity, _at = db.get_yuxia_activity(conv_id)
+        except Exception:
+            activity = ""
+        props_line = props.block(db, conv_id, yuxia_loc)
+        people_line = npc.present_block(db, conv_id, player_loc if co_located else yuxia_loc)
+        mood = "两人此刻在一起。" if co_located else "两人此刻不在一起，只在手机里联系。"
         event_user_msg = (
             f"【当前故事时间】{story_time}\n"
-            f"【最近对话】\n{conversation_text}\n\n"
+            f"【尤夏所在地】{yuxia_loc}\n"
+            f"【青梅所在地】{player_loc}\n"
+            f"【两人此刻】{mood}\n"
+            + (f"【她正在做】{activity}\n" if activity else "")
+            + (f"{props_line}\n" if props_line else "")
+            + (f"{people_line}\n" if people_line else "")
+            + f"【最近对话】\n{conversation_text}\n\n"
             f"【本次事件的强度等级】{tier}——{RANDOM_EVENT_TIER_GUIDE.get(tier, '')}\n"
-            "请按这个强度生成一个偶然事件（不要提高或降低强度）。输出 JSON。"
+            "请按这个强度生成一个偶然事件（不要提高或降低强度）。"
+            "location 必须原样填上面两个地点之一，不要写别的地点名。输出 JSON。"
         )
         result = deepseek.chat_sync(
             messages=[{"role": "user", "content": event_user_msg}],
@@ -143,15 +284,49 @@ def _run_random_event(conv_id, db: ChatDB, deepseek: DeepSeekClient,
         if not data:
             return None
         random_event = data.get("random_event")
-        if random_event and isinstance(random_event, dict):
-            random_event["intensity"] = tier
-            db.add_event(conv_id, "random", random_event.get("title", "偶然事件"),
-                         random_event.get("description", ""), "active",
-                         story_time=story_time, tier=tier)
-            # 有些事件会连带改变她的状态（忙起来 / 淋雨感冒 / 发烧）
-            _apply_event_state(db, conv_id, random_event.get("state"), now_minutes)
-            return random_event
-        return None
+        if not (random_event and isinstance(random_event, dict)):
+            return None
+
+        # 事件必须发生在有人在的地方：模型写到别处就丢掉，不能凭空在看不见的地方出事
+        event_loc = str(random_event.get("location") or "").strip()[:20]
+        if event_loc and event_loc not in (yuxia_loc, player_loc):
+            print(f"[随机事件] 地点不在场（{event_loc}），丢弃")
+            return None
+
+        # 车轱辘事件：同一件事（汤溢了、风把叶子吹到窗上）不要一次次重演
+        description = str(random_event.get("description") or "")
+        try:
+            recent_random = [e for e in db.get_recent_events(conv_id, limit=20)
+                             if e.get("event_type") == "random"][-6:]
+        except Exception:
+            recent_random = []
+        for old in recent_random:
+            if difflib.SequenceMatcher(None, description,
+                                        old.get("description") or "").ratio() > 0.7:
+                print(f"[随机事件] 和刚才那件太像，丢弃：{description[:20]}")
+                return None
+
+        # 事件里提到的实体当场落地：快递箱真的有箱子、门口真的站着人
+        try:
+            entities.remember_props(db, conv_id, event_loc or yuxia_loc,
+                                    random_event.get("objects"))
+            entities.remember_people(db, conv_id, event_loc or yuxia_loc,
+                                     random_event.get("people"))
+        except Exception as e:
+            print(f"[随机事件] 实体登记失败: {e}")
+
+        random_event["intensity"] = tier
+        random_event["location"] = event_loc or yuxia_loc
+        db.add_event(conv_id, "random", random_event.get("title", "偶然事件"),
+                     random_event.get("description", ""), "active",
+                     story_time=story_time, tier=tier)
+        try:
+            db.set_last_random_event_minutes(conv_id, now_minutes)
+        except Exception:
+            pass
+        # 有些事件会连带改变她的状态（忙起来 / 淋雨感冒 / 发烧）
+        _apply_event_state(db, conv_id, random_event.get("state"), now_minutes)
+        return random_event
     except Exception as e:
         print(f"[随机事件] 生成异常: {e}")
         return None
@@ -228,6 +403,10 @@ def _run_event_summary(conv_id, db: ChatDB, deepseek: DeepSeekClient,
             etype = event.get("type", "misc")
             if etype not in EVENT_TYPES:
                 etype = "misc"
+            # 偶然事件只由 event_engine 的随机事件生成器写（那里有氛围门控和冷却）。
+            # 总结器只是回顾已经发生的事，让它再记一条 random 就会凭空多出一次"插曲"
+            if etype == "random":
+                continue
             title = event.get("title", "未命名事件")
             desc = event.get("description", "")
             # 去重：同样的类型 + 标题在最近事件里已存在就不再重复记一条

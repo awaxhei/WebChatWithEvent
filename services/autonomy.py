@@ -461,11 +461,17 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
 
     if action in ("speak", "phone") and text:
         channel = "phone" if action == "phone" else "chat"
+        # 口头禅限流：自主行动也走同一条额度，否则玩家不回话的时候她会每句都「唔姆」
+        import core.tics as tics
+        text = tics.Budget(tics.budget_for(db, conv_id)).clean(text)
+        if not text:
+            return None
         # 当面通道统一存成她输出的那种 JSON（对白）：历史回灌与前端解析都按这个格式，
         # 以前这里直接存纯文本，模型会在自己的历史里看到一段不带结构的裸文本
         payload = (json.dumps({"对白": text}, ensure_ascii=False)
                    if channel == "chat" else text)
-        db.add_message(conv_id, "assistant", payload, channel=channel, scene=yuxia_loc)
+        db.add_message(conv_id, "assistant", payload, channel=channel, scene=yuxia_loc,
+                       story_minutes=now_minutes)
         db.push_autonomy(conv_id, {"action": action, "text": text, "at": time.time(),
                                    "at_minutes": int(now_minutes)},
                          keep=_TAIL_KEEP)
@@ -595,7 +601,8 @@ def _do_act(db, conv_id, text, yuxia_loc, now_minutes, co_located):
     # 否则下一轮对话模型不知道她刚才动手做了什么，就会出现「被子」和「椅子」打架。
     # 只写玩家在场时看得见的动作。
     if co_located:
-        db.add_message(conv_id, "assistant", text, channel="action", scene=yuxia_loc)
+        db.add_message(conv_id, "assistant", text, channel="action", scene=yuxia_loc,
+                       story_minutes=now_minutes)
     db.push_autonomy(conv_id, {"action": "act", "text": text, "at": time.time(),
                                "at_minutes": int(now_minutes)},
                      keep=_TAIL_KEEP)
