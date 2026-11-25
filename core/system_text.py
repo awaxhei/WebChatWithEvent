@@ -29,10 +29,11 @@ WAKE_UP = "尤夏迷迷糊糊地睁开眼睛"
 STICKER_RECEIVED = "青梅发来一个表情包"
 STICKER_RECEIVED_WITH_FEEL = "青梅发来一个表情包，情绪是「{feel}」"
 
+# 玩家做的动作（「你的动作」模式）：按旁白记录下来，而不是当成一句台词
+PLAYER_ACTION = "青梅{action}"
+
 # 给模型看的系统提示（不显示给玩家）
 RETRY_HINT = "【系统】上一轮没有产生任何内容。请至少输出一句话，或一个动作。"
-PUSH_RETRY_HINT = ("【系统】这一轮是推进剧情，但你只写了话、没有写动作。"
-                   "请只输出一个 JSON 对象，用 `动作` 推进画面，对白可以省略。")
 
 
 def move_player(place):
@@ -55,6 +56,24 @@ def sticker_received(desc, feel=""):
     return note(body)
 
 
+def player_action(action):
+    """玩家做的动作：写成第三人称旁白，直接放进时间线。
+
+    她读到的是「（青梅把拖鞋放到她脚边。）」这种一行旁白，就像世界里刚发生的事，
+    不需要额外的"这一轮是动作"提示。
+    """
+    body = (action or "").strip()
+    if not body:
+        body = "轻轻碰了碰她"
+    if body.startswith("我"):
+        body = "青梅" + body[1:].lstrip()
+    elif body.startswith(("青梅", "尤夏")):
+        pass
+    else:
+        body = "青梅" + body
+    return note(body)
+
+
 def wake_up():
     return note(WAKE_UP)
 
@@ -63,5 +82,5 @@ def wake_up():
 PUBLIC_TEMPLATES = (
     MOVE_PLAYER, MOVE_TOGETHER, MOVE_BLOCKED,
     FALL_ASLEEP, WAKE_UP, STICKER_RECEIVED, STICKER_RECEIVED_WITH_FEEL,
-    RETRY_HINT, PUSH_RETRY_HINT,
+    PLAYER_ACTION, RETRY_HINT,
 )

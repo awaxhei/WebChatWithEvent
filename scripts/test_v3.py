@@ -126,8 +126,22 @@ def test_clock_follows_real_time():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# ── 2. 地点实体 ──────────────────────────────────────
+def test_tic_limit():
+    """口头禅限流：「唔姆」一轮最多留一个，最近说过就一个都不留"""
+    import core.tics as tics
 
+    one = tics.Budget(1)
+    check("第一个「唔姆」留下", one.clean("唔姆，门根本没锁嘛。") == "唔姆，门根本没锁嘛。")
+    check("同一轮第二个删掉", one.clean("唔姆，站着不动吗？") == "站着不动吗？")
+
+    none = tics.Budget(0)
+    check("额度为零时整句删掉", none.clean("唔姆……那我进来了。") == "那我进来了。")
+    check("只剩一声的气泡整个去掉", none.clean("唔姆。") == "")
+    check("句中的「唔姆」也能删", none.clean("我唔姆，想睡觉。") == "我想睡觉。")
+    check("没有「唔姆」的原样返回", tics.Budget(0).clean("门没锁。") == "门没锁。")
+
+
+# ── 2. 地点实体 ──────────────────────────────────────
 def test_locations():
     db, _uid, conv, tmp = fresh_db()
     try:
@@ -566,6 +580,8 @@ def main():
     test_clock()
     print("\n── 时钟跟随真实世界 ──")
     test_clock_follows_real_time()
+    print("\n── 口头禅限流 ──")
+    test_tic_limit()
     print("\n── 地点实体 ──")
     test_locations()
     print("\n── v4 场景 / 手机 / 事件分级 ──")

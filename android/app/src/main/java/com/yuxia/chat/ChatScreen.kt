@@ -206,7 +206,7 @@ fun ChatScreen(vm: ChatViewModel) {
                                 onClick = { menuOpen = false; showSpeed = true },
                             )
                             DropdownMenuItem(
-                                text = { Text("故事推进模式：" + if (s.pushMode) "开" else "关") },
+                                text = { Text("动作模式（你来做一件事）：" + if (s.pushMode) "开" else "关") },
                                 onClick = { menuOpen = false; vm.togglePushMode() },
                             )
                             DropdownMenuItem(
@@ -666,7 +666,7 @@ private fun InputBar(
                 IconButton(onClick = onTogglePush) {
                     Icon(
                         Icons.Filled.AutoAwesome,
-                        contentDescription = "故事推进模式",
+                        contentDescription = "动作模式",
                         tint = if (pushMode) YuxiaColors.Sakura else YuxiaColors.InkFaint,
                     )
                 }
@@ -677,7 +677,7 @@ private fun InputBar(
                     placeholder = {
                         Text(
                             when {
-                                pushMode -> "推进剧情…（留空＝轻戳一下）"
+                                pushMode -> "你的动作…（留空＝轻轻碰一下）"
                                 coLocated -> "输入消息…"
                                 else -> "不在同一个地方，发消息给她…"
                             },

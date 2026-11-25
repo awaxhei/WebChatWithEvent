@@ -242,7 +242,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     else -> {
                         if (role == "user") {
-                            entries.add(meEntry(content))
+                            // 动作模式下玩家发的是旁白（「（青梅把拖鞋放到你脚边。）」），
+                            // 不是他说的话，别渲染成自己的气泡
+                            if (content.trimStart().startsWith("（")) {
+                                entries.add(Entry.Narration(content))
+                            } else {
+                                entries.add(meEntry(content))
+                            }
                         } else {
                             val reply = Model.parseReply(content)
                             reply.speeches.forEach {
@@ -499,12 +505,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 故事推进模式：不发"我"的气泡，只提示一句，然后让她接着演 */
+    /** 动作模式：这一轮玩家做一件事（旁白），不开口；她像读到世界里的事一样接下去。 */
     fun sendPush(hint: String) {
         if (state.busy) return
         val body = hint.trim()
-        appendEntry(false, Entry.Narration(if (body.isBlank()) "（轻戳尤夏）" else body))
-        viewModelScope.launch { sendInternal("/推进 " + body, null, false, echo = false) }
+        val act = when {
+            body.isBlank() -> "青梅轻轻碰了碰她"
+            body.startsWith("我") -> "青梅" + body.removePrefix("我").trimStart()
+            body.startsWith("青梅") || body.startsWith("尤夏") -> body
+            else -> "青梅$body"
+        }
+        appendEntry(false, Entry.Narration("（${act.trimEnd('。')}。）"))
+        viewModelScope.launch { sendInternal("/动作 " + body, null, false, echo = false) }
     }
 
     private fun applyEvent(ev: JSONObject, phone: Boolean) {

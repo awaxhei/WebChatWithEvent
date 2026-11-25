@@ -239,7 +239,7 @@ class ChatManager {
         // 点空白处收起地点列表
         document.addEventListener('click', () => this._toggleLocationPicker(false));
     }
-    togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '输入推进方向...'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
+    togglePushMode() { this.pushMode = !this.pushMode; if (this.pushMode) { this.btnPushMode.classList.add('active'); this.btnSend.classList.add('push-active'); this.inputEl.placeholder = '你的动作...（留空＝轻轻碰一下）'; } else { this.btnPushMode.classList.remove('active'); this.btnSend.classList.remove('push-active'); this._updatePlaceholder(); } }
 
     // ── 行动速度（1 很慢 … 5 很快；等待期仍是递增的，最长 20 秒） ──
     _speedText(speed) {
@@ -591,8 +591,11 @@ class ChatManager {
             this.inputEl.value = ''; this.inputEl.style.height = 'auto';
         }
         if (this.welcomeEl) { AnimationEngine.hideWelcome(); this.welcomeEl = null; }
-        const displayMsg = this.pushMode ? (message || '（轻戳尤夏）') : message;
-        const serverMsg = this.pushMode ? `/推进 ${message}` : message;
+        // 动作模式：这一轮玩家做一件事（旁白），不是说话
+        const displayMsg = this.pushMode
+            ? (message ? `（青梅${message}）` : '（青梅轻轻碰了碰尤夏。）')
+            : message;
+        const serverMsg = this.pushMode ? `/动作 ${message}` : message;
         const isPushCmd = this.pushMode;
         if (this.pushMode) this.togglePushMode();
         const viaPhone = forceChannel === 'phone' || !this.coLocated;

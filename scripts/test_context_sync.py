@@ -299,19 +299,28 @@ def main():
     finally:
         chat_mod.deepseek = real
 
-    # ── 10b) 推进剧情：这一轮要出动作推进画面，不能又变成一句安抚的台词
+    # ── 10b) 动作模式：玩家做的是一件事，作为旁白进时间线，不需要"这一轮是动作"这类元指令
     convP = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, convP)
     locations.switch_both(app_db, convP, "公寓客厅")
     llmP = CaptureLLM('{"动作": "我把被子往上拉了拉，往你那边挪了半个身位。"}')
     chat_mod.deepseek = llmP
     try:
-        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/推进 一起睡"})
+        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/动作 把拖鞋放到她脚边"})
         body = r.data.decode("utf-8")
-        check("推进剧情在提示词里说明这一轮要出动作",
-              "【这一轮是推进剧情】" in llmP.system_prompt, llmP.system_prompt[-300:])
-        check("普通聊天不带这段提示",
-              "【这一轮是推进剧情】" not in (llmT.system_prompt or ""))
+        check("动作模式不写元指令（她只是读到了这件事）",
+              "这一轮青梅做的是动作" not in llmP.system_prompt
+              and "这一轮是动作" not in llmP.system_prompt
+              and "青梅刚刚做了一个动作" not in llmP.system_prompt,
+              llmP.system_prompt[-400:])
+        users = [m for m in app_db.get_messages(convP) if m["role"] == "user"]
+        check("玩家动作按旁白存下来",
+              any((m["content"] or "").startswith("（青梅") and "拖鞋" in (m["content"] or "")
+                  and (m["content"] or "").endswith("）") for m in users),
+              str([m["content"] for m in users]))
+        sent = json.dumps(llmP.messages, ensure_ascii=False)
+        check("模型读到的也是这行旁白",
+              "（青梅把拖鞋放到她脚边。）" in sent, sent[-300:])
         check("动作当场推给前端",
               '"yuxia_action"' in body and "挪了半个身位" in body, body[-300:])
         acts = [m for m in app_db.get_messages(convP) if m["channel"] == "action"]
@@ -319,28 +328,36 @@ def main():
               any("挪了半个身位" in (m["content"] or "") for m in acts),
               str([m["content"] for m in acts]))
 
-        # 只给台词不给动作：再要一次，而且这次只要动作
-        class PushRetryLLM(CaptureLLM):
-            def __init__(self):
-                super().__init__('{"对白": "……嗯。"}')
-                self.sync_calls = 0
-
-            def chat_sync(self, messages, system_prompt="", **kw):
-                if "推进剧情" not in (system_prompt or ""):
-                    return "[生成失败: 测试桩]"
-                self.sync_calls += 1
-                self.messages = list(messages)
-                return '{"动作": "我伸手把灯关了，房间里只剩窗帘缝里那点光。"}'
-
-        llmR = PushRetryLLM()
-        chat_mod.deepseek = llmR
-        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/推进"})
+        # 她只回一句台词也正常：玩家做动作，不代表她这一轮也必须有动作
+        llmSay = CaptureLLM('{"对白": "……拖鞋我收下了。"}')
+        chat_mod.deepseek = llmSay
+        r = c.post("/api/chat", json={"conversation_id": convP, "message": "/动作"})
         body = r.data.decode("utf-8")
-        check("推进剧情缺动作时会再要一次", llmR.sync_calls == 1, str(llmR.sync_calls))
-        check("追要的请求里说明只差动作",
-              "没有写动作" in json.dumps(llmR.messages, ensure_ascii=False),
-              json.dumps(llmR.messages, ensure_ascii=False)[-200:])
-        check("追来的动作也推给前端", "窗帘缝里那点光" in body, body[-200:])
+        check("她只回话也可以", '"yuxia_action"' not in body, body[-200:])
+    finally:
+        chat_mod.deepseek = real
+
+    # ── 10c) 口头禅限流：一轮最多一个「唔姆」，流里和库里都一样
+    convTic = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, convTic)
+    locations.switch_both(app_db, convTic, "公寓客厅")
+    llmTic = CaptureLLM(
+        '{"对白": "唔姆，门根本没锁嘛。"}\n'
+        '{"对白": "唔姆，站着不动吗？"}\n'
+        '{"对白": "唔姆。"}')
+    chat_mod.deepseek = llmTic
+    try:
+        r = c.post("/api/chat", json={"conversation_id": convTic, "message": "我回来了"})
+        body = r.data.decode("utf-8")
+        check("流里只剩一个「唔姆」", body.count("唔姆") == 1, str(body.count("唔姆")))
+        stored = " ".join(m["content"] or "" for m in app_db.get_messages(convTic))
+        check("库里也只剩一个", stored.count("唔姆") == 1, stored)
+
+        llmTic2 = CaptureLLM('{"对白": "唔姆，那我把门关上了。"}')
+        chat_mod.deepseek = llmTic2
+        r = c.post("/api/chat", json={"conversation_id": convTic, "message": "嗯"})
+        body2 = r.data.decode("utf-8")
+        check("紧接着的下一轮一个都不留", "唔姆" not in body2, body2[-200:])
     finally:
         chat_mod.deepseek = real
 

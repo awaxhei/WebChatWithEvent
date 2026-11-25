@@ -22,6 +22,7 @@ import core.props as props
 import core.system_text as system_text
 import core.scenes as scenes
 import core.stickers as stickers
+import core.tics as tics
 import core.tokens as tokens
 from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
@@ -47,21 +48,9 @@ chat_bp = Blueprint("chat", __name__)
 db = None        # 由外部注入
 deepseek = None  # 由外部注入
 
-_PUSH_CMD_RE = re.compile(r"^/推进\s*(.*)")
+_ACT_CMD_RE = re.compile(r"^/(?:动作|推进)\s*(.*)")
 _MOVE_CMD_RE = re.compile(r"^/去\s*(.+)")
 _BRING_CMD_RE = re.compile(r"^/带\s*(.+)")
-
-# 推进剧情：玩家没说话，只戳了一下、或者给了一个方向。
-# 这一轮该由「动作」推进画面——以前和普通聊天同一条提示词，
-# 于是按下去只换来一句安抚的话，手机端看着就像什么都没发生。
-PUSH_RULE = (
-    "【这一轮是推进剧情】\n"
-    "青梅没有开口，只是动了一下，或者给了一个方向。这一小段由你来推进画面：\n"
-    "- **至少写一个 `动作`**：写清我做了什么、场面因此变成什么样；动作是这一轮的主体\n"
-    "- 对白可以有，但要短；没有对白也可以\n"
-    "- 接着上一轮的时间线往下做，不要重复刚做过的动作\n"
-    "- 两个人不在一起时，动作只写我自己在这边做的事\n"
-)
 
 
 def _sse(payload):
@@ -195,6 +184,54 @@ def _extract_json_objects(text):
                     pass
                 start = -1
     return out
+
+
+def _rewrite_stream(chunks, rewrite):
+    """边收边把完整的 JSON 对象改写后再发，不是 JSON 的文本原样发。
+
+    客户端本来就是等一个完整的 JSON 对象再渲染成气泡，所以按对象转发不影响显示：
+    一个气泡整体出现，而不是逐字出现。
+    """
+    buf, scan, emitted = "", 0, 0
+    decoder = json.JSONDecoder()
+
+    def flush_to(pos):
+        nonlocal emitted
+        if pos <= emitted:
+            return ""
+        text = buf[emitted:pos]
+        emitted = pos
+        return text
+
+    for chunk in chunks:
+        buf += chunk
+        while True:
+            start = buf.find("{", scan)
+            if start < 0:
+                out = flush_to(len(buf))
+                scan = len(buf)
+                if out:
+                    yield out
+                break
+            try:
+                obj, end = decoder.raw_decode(buf, start)
+            except ValueError:
+                # 还没收完（或根本不是 JSON）：先把对象之前的话发出去
+                out = flush_to(start)
+                scan = start
+                if out:
+                    yield out
+                break
+            if not isinstance(obj, dict):
+                scan = end
+                continue
+            prefix = flush_to(start)
+            text = json.dumps(rewrite(obj), ensure_ascii=False)
+            emitted = end
+            scan = end
+            yield prefix + text
+    if emitted < len(buf):
+        yield buf[emitted:]
 
 
 def _co_located(conv_id):
@@ -561,11 +598,14 @@ def chat():
     _mark("会话/地点初始化")
 
     is_push_cmd = False
-    push_match = _PUSH_CMD_RE.match(user_message)
-    if push_match:
+    act_match = _ACT_CMD_RE.match(user_message)
+    if act_match:
+        # 「你的动作」模式：玩家写的是他做的事，不是他说的台词。
+        # 直接作为一行旁白放进时间线（「（青梅把拖鞋放到她脚边。）」），
+        # 她自己会像读到世界里发生的事一样接下去——不需要额外告诉她"这一轮是动作"。
         is_push_cmd = True
-        hint = push_match.group(1).strip()
-        user_message = hint if hint else "（青梅轻轻戳了戳尤夏的肩膀，似乎在期待什么）"
+        player_action = act_match.group(1).strip() or "轻轻碰了碰她"
+        user_message = system_text.player_action(player_action)
 
     # 玩家主动移动：/去 地点（一个人走）、/带 地点（拉着尤夏一起走）
     moved = False
@@ -724,21 +764,34 @@ def chat():
                                       deepseek, api_key)
                      if SCHEDULE_ENABLED else "")
     state_block = state_engine.block(db, conv_id)
+    # 口头禅额度：最近几条消息里已经「唔姆」过，这一轮就让模型一句都别说。
+    # 它模仿的是自己前面的消息，只写人设里的频率规矩压不住。
+    tic_hint = ""
+    if tics.recent_usage(db, conv_id):
+        tic_hint = ("【口头禅额度】最近几条消息里「唔姆」已经出现过。这一轮一次都不要说；"
+                    "它不是每条消息的开头，真的在权衡的时候偶尔漏一次就够。")
     # 她的动作不单独成块：它作为一条 action 消息在历史时间线里（见 _context_window），
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
     blocks = "\n\n".join(b for b in (world, place, scene_here, schedule_here,
-                                     props_here, npcs_here, state_block) if b)
+                                     props_here, npcs_here, state_block, tic_hint) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
-    if is_push_cmd:
-        system_prompt += f"{PUSH_RULE}\n\n"
     system_prompt += f"{channel_rule}\n\n{format_rule}"
     _mark("提示词组装完成（准备开始流式）")
 
     def generate():
         full = ""
         first_chunk_at = [None]
+        # 口头禅限流：一轮最多留一个「唔姆」，最近说过就一个都不留（见 core/tics.py）
+        tic = tics.Budget(tics.budget_for(db, conv_id))
+
+        def rewrite(obj):
+            for key in ("对白", "消息", "动作"):
+                if obj.get(key):
+                    obj[key] = tic.clean(str(obj[key]))
+            return obj
+
         yield _sse({"type": "conv_id", "id": conv_id})
         yield _sse({"type": "story_time", "content": story_time,
                     "jump": keyword_jump, "reason": "关键词规则" if keyword_jump else ""})
@@ -775,8 +828,9 @@ def chat():
         context_messages = checkpoint.inject(context_messages, checkpoint_text)
         if dropped_rows:
             checkpoint.fold_async(db, conv_id, dropped_rows, deepseek, api_key=api_key)
-        for chunk in deepseek.chat_stream(context_messages, system_prompt,
-                                          api_key_override=api_key):
+        for chunk in _rewrite_stream(
+                deepseek.chat_stream(context_messages, system_prompt,
+                                     api_key_override=api_key), rewrite):
             if first_chunk_at[0] is None:
                 first_chunk_at[0] = time.time()
                 _mark("AI A 首个 token")
@@ -797,29 +851,14 @@ def chat():
                 "content": system_text.RETRY_HINT,
             }]
             retry_full = ""
-            for chunk in deepseek.chat_stream(retry_messages, system_prompt,
-                                              api_key_override=api_key):
+            for chunk in _rewrite_stream(
+                    deepseek.chat_stream(retry_messages, system_prompt,
+                                         api_key_override=api_key), rewrite):
                 retry_full += chunk
                 yield _sse({"type": "chunk", "content": chunk})
             actions = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
                                      now_minutes, channel,
                                      allow_actions=co_located) or actions
-        if is_push_cmd and not actions:
-            # 推进剧情这一轮必须有动作：只说了一句话就再要一次，只要动作。
-            # 这次不流式：台词已经存过，再流一遍会在界面上重复出现。
-            try:
-                extra = deepseek.chat_sync(
-                    list(context_messages) + [{"role": "user",
-                                               "content": system_text.PUSH_RETRY_HINT}],
-                    system_prompt=system_prompt, api_key_override=api_key)
-            except Exception as e:
-                print(f"[推进] 追要动作失败: {e}")
-                extra = ""
-            if extra:
-                more = _persist_reply(conv_id, extra, can_speak, yuxia_loc,
-                                      now_minutes, channel,
-                                      allow_actions=co_located)
-                actions = list(actions or []) + list(more or [])
         # 她的「动作」要当场推给前端：只落库的话，手机 App 不重开界面就一条也看不到
         for act in actions or []:
             yield _sse({"type": "yuxia_action", "content": act})
