@@ -39,8 +39,9 @@ ROLE_SUFFIXES = (
 # 同一地点最多几个 NPC（连同全局上限一起用）
 PER_LOCATION_CAP = 3
 
-# 这些不是"第三人"：模型偶尔会把 who 填成「你」「我」「尤夏」「青梅」，
-# 那样就会建出一个叫「尤夏」的 NPC，之后每句都会被它接走。
+# 这些不是"第三人"：类型上就不可能是名字（代词/她自己）。
+# 不做「英文口头禅黑名单」：名字只需要满足形状（至少一个汉字），
+# hey/hi/ok 这些自然就被挡在外面，也不会漏掉别的口头禅。
 RESERVED_NAMES = {
     "你", "您", "我", "她", "他", "它", "你们", "我们", "大家", "对方", "自己",
     "尤夏", "青梅", "主人", "路人", "路人甲", "路人乙",
@@ -62,22 +63,17 @@ def is_private(location):
 
 # 只用于清理历史数据：把以前被正则误当成称呼建出来的口头禅 NPC 退场。
 # 它不参与任何判断，新 NPC 的名字完全由模型给。
-_EN_INTERJECTIONS = {
-    "hey", "hi", "hello", "yo", "ok", "okay", "yes", "no", "yeah", "nope",
-    "thanks", "thank", "please", "pls", "lol", "hmm", "huh", "um", "uh",
-    "wait", "well", "sorry", "good", "nice", "omg", "wow", "gg", "nb",
-    "emmm", "emd", "emm", "lmao", "rofl", "sup", "bro",
-}
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _is_bogus_name(name):
-    """不是"第三人"的名字：口头禅（hey/hi）、你/我/尤夏这类代词，或叫她的昵称"""
+    """不是"第三人"的名字：代词、她自己、或者根本不像名字（没有汉字）"""
     n = (name or "").strip()
     if not n:
         return False
     if n in RESERVED_NAMES:
         return True
-    return n.isascii() and n.lower() in _EN_INTERJECTIONS
+    return not _CJK_RE.search(n)
 
 
 def _role_of(name):

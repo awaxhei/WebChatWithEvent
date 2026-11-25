@@ -298,7 +298,8 @@ def main():
 
     class PhoneStub(StubLLM):
         def __init__(self):
-            super().__init__(reply='{"消息": "隔着手机抱不到啦", "动作": "被抱住，脸往她肩上贴"}')
+            super().__init__(
+                reply='{"消息": "隔着手机抱不到啦", "动作": "被抱住，脸往她肩上贴", "对谁": "青梅"}')
             self.prompt = ""
 
         def chat_stream(self, messages, system_prompt="", **kw):

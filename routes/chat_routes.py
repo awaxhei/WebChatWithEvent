@@ -118,16 +118,11 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
 # 一轮里最多几条动作旁白
 MAX_ACTIONS_PER_REPLY = 2
 
-# 两人不在一起时，动作里出现这些就说明她写成了「碰到对方」——那不是此刻能发生的事
-_CONTACT_WORDS = ("抱住", "抱紧", "拥抱", "抱着", "摸", "靠", "贴", "牵", "递", "塞",
-                  "喂", "亲", "搂", "蹭", "拉住", "抓住她", "拍她", "碰她", "抱住她")
-
-
-def _action_ok(action, co_located):
-    """这个动作此刻说不说得通：异地时不能有身体接触，但一个人在那边做事是允许的"""
-    if co_located:
-        return True
-    return not any(w in action for w in _CONTACT_WORDS)
+# 动作可以为「对谁」：只有涉及另一个人的动作才需要标对象。
+# 异地时她标了青梅的动作不成立（碰不到），由她自己声明的对象来判断；
+# 不再用「抱、摸、递、靠……」这种词表去猜——词表既挡不全，也会误伤
+# 「靠着窗台」「摸口袋」这些她一个人做得出来的事。
+_ACTION_TARGETS = {"青梅", "你", "对方", "她"}
 
 
 def _bubble_parts(text, limit=24, max_parts=5):
@@ -763,10 +758,12 @@ def chat():
         "手机里是活蹦乱跳又嘴硬的那一面：句子短、节奏快，可以连发两三条"
         "（一条问、一条催、一条自己找补），语气词（呀、嘛、叭、诶、啦、哦）和颜文字往外掉，"
         "被戳中了先嘴硬「才没有」，下一条又忍不住露出来。"
-        "**你们不在一起，看不见对方**：消息里不要写动作，也不要写抱、摸、靠过去、递东西"
-        "这类身体接触——那些此刻都还发生不了。她发来括号里的动作（「（抱住她）」这种），"
-        "那只是她打的一行字，就当成一句文字回她（「隔着手机抱不到啦」这样）。"
-        "你自己在这边做的事可以写进 `动作` 字段，系统会当旁白记下来。"
+        f"**你们不在一起，看不见对方**：`动作` 只写她一个人在{yuxia_loc}做得出来的事——"
+        "走动、坐下、拿起东西、看手机、收拾、换衣服；动作的宾语只能是她自己、或她身边的东西。"
+        "想对青梅做什么，写进 `消息` 里说（「想抱你」「等你回来」），不要写成动作；"
+        "涉及青梅的动作要标 `对谁`: \"青梅\"，系统会知道那一下此刻发生不了。"
+        "她发来括号里的动作（「（抱住她）」）只是她打的一行字，当成一句文字回。"
+        "她在这边自己做的事可以写进 `动作`，系统会当旁白记下来。"
     )
     # 格式提醒放在最后：模型对 system prompt 末尾的指令最敏感
     format_rule = ("【格式】每一条输出都必须是完整的 JSON 对象，以 { 开头、以 } 结尾；"
@@ -1038,13 +1035,16 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         if obj.get("动作") and len(actions) < max_actions:
             # 她可以用动作代替说话：动作走旁白通道，不进对话框。
             # 一轮最多两条：动作堆多了会盖过对白。
-            # 两人不在一起时仍然收动作用来推进剧情，但写「抱、摸、递」这种接触的丢掉。
-            for piece in _bubble_parts(_strip_speaker(str(obj["动作"])),
-                                       limit=action_limit,
-                                       max_parts=max_actions - len(actions)):
-                if not _action_ok(piece, allow_actions):
-                    continue
-                actions.append(piece)
+            # 异地时：只有她自己标明「对谁=青梅」的动作不成立（这一刻碰不到对方），
+            # 其余动作照收——她在自己那边做事，不需要用词表拦。
+            # 注意同一条 JSON 里可能还有消息，不能因为丢掉动作就整条跳过。
+            target = str(obj.get("对谁") or "").strip()
+            reachable = allow_actions or target not in _ACTION_TARGETS
+            if reachable:
+                for piece in _bubble_parts(_strip_speaker(str(obj["动作"])),
+                                           limit=action_limit,
+                                           max_parts=max_actions - len(actions)):
+                    actions.append(piece)
         if obj.get("表情包"):
             stickers_used.append(str(obj["表情包"]).strip())
         if obj.get("消息"):
