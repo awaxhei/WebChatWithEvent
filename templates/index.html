@@ -72,6 +72,7 @@
                 手机上想用原生 App？
                 <a href="/app.apk" download>下载安卓版 APK</a>
                 （同一 Wi-Fi 下可直接安装，装好后在设置里填这台电脑的地址）
+                <div id="apkVersionInfo" style="margin-top:6px"></div>
             </div>
         </div>
     </div>
@@ -320,6 +321,7 @@
 
     <script src="/static/js/api_key.js"></script>
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/version.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             // 清理旧版本遗留在 /static/ 作用域下的 SW（它只控制静态资源，

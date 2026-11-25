@@ -91,6 +91,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -111,6 +112,7 @@ fun ChatScreen(vm: ChatViewModel) {
     var showEvents by remember { mutableStateOf(false) }
     var showTimeDial by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -215,6 +217,10 @@ fun ChatScreen(vm: ChatViewModel) {
                                 text = { Text("API Key") },
                                 onClick = { menuOpen = false; vm.openApiKeyScreen() },
                             )
+                            DropdownMenuItem(
+                                text = { Text("关于与更新日志") },
+                                onClick = { menuOpen = false; showAbout = true },
+                            )
                         }
                     }
                 },
@@ -274,6 +280,12 @@ fun ChatScreen(vm: ChatViewModel) {
 
     if (showSpeed) {
         SpeedDialog(state = s, onClose = { showSpeed = false }, onChange = vm::setSpeed)
+    }
+
+    if (showAbout) {
+        val ctx = LocalContext.current
+        val appBuild = remember { AppInfo.load(ctx) }
+        AboutDialog(appBuild, s.backendBuild, onClose = { showAbout = false })
     }
 
     if (showTimeDial) {

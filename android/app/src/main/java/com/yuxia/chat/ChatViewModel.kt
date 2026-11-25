@@ -49,6 +49,8 @@ data class UiState(
     val yuxiaDesc: String = "",
     /** 手机面板是不是开着：开着的时候进来的消息不算未读 */
     val phoneOpen: Boolean = false,
+    /** 内置后端自报的版本，用来核对它和 App 是同一份 */
+    val backendBuild: BackendBuild = BackendBuild(),
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -76,6 +78,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         state = state.copy(baseUrl = Prefs.baseUrl(app), error = null)
+        loadBackendBuild()
         if (Prefs.apiKey(app).isEmpty()) {
             state = state.copy(screen = Screen.ApiKey)
             return
@@ -86,6 +89,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 重新尝试启动（启动失败时的按钮） */
     fun retryBoot() {
         state = state.copy(screen = Screen.Boot, error = null)
+    }
+
+    /** 问一次后端自报的版本，和 App 内显示的版本对照 */
+    fun loadBackendBuild() {
+        viewModelScope.launch {
+            val obj = runCatching { withContext(Dispatchers.IO) { Api.ping(app) } }.getOrNull()
+                ?: return@launch
+            state = state.copy(
+                backendBuild = BackendBuild(
+                    version = obj.optString("app_version", ""),
+                    sha = obj.optString("build_sha", ""),
+                    builtAt = obj.optString("build_at", ""),
+                    online = true,
+                )
+            )
+        }
     }
 
     private fun enterHome() {
@@ -106,7 +125,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // 先打一次接口确认服务在跑，再进主界面
             val ok = runCatching { withContext(Dispatchers.IO) { Api.ping(app) } }.isSuccess
             state = state.copy(busy = false)
-            if (ok) enterHome()
+            if (ok) { loadBackendBuild(); enterHome() }
             else state = state.copy(error = "本机服务无响应，请稍后重试")
         }
     }

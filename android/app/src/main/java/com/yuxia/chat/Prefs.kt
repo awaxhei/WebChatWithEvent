@@ -15,6 +15,7 @@ object Prefs {
     private const val K_SEEN = "last_seen_id"
     private const val K_NOTIFY = "notify_enabled"
     private const val K_API_KEY = "api_key"
+    private const val K_VERSION = "last_version"
 
     private fun sp(c: Context): SharedPreferences = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
@@ -37,4 +38,8 @@ object Prefs {
 
     fun notifyEnabled(c: Context): Boolean = sp(c).getBoolean(K_NOTIFY, true)
     fun setNotifyEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean(K_NOTIFY, v).apply()
+
+    /** 上次运行的版本号：覆盖安装后第一次启动要提示更新了什么 */
+    fun lastVersion(c: Context): String = sp(c).getString(K_VERSION, "").orEmpty()
+    fun setLastVersion(c: Context, v: String) = sp(c).edit().putString(K_VERSION, v).apply()
 }

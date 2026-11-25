@@ -2,7 +2,7 @@
 AI 情感助手 - Flask 后端 (三 AI 架构 + 账号系统)
 入口文件：创建应用、注册蓝图、启动服务
 """
-import os, socket, subprocess, sys, threading
+import json, os, socket, subprocess, sys, threading
 from flask import Flask, jsonify, render_template, request, send_file
 
 from config import (
@@ -75,18 +75,32 @@ def android_apk():
 
     APK 由 scripts/build_apk.ps1 构建并拷到 static/download/yuxia.apk；
     这里显式给 Android 的 MIME，浏览器才会直接进安装流程而不是当文件下载。
+    文件名带版本号：手机上下载列表里能直接看出拿到的是哪一版。
     """
     path = os.path.join(app.static_folder, "download", "yuxia.apk")
     if not os.path.exists(path):
         return jsonify({"error": "还没有构建 APK：先在电脑上运行 scripts\\build_apk.ps1"}), 404
+    meta = _apk_meta()
+    name = "yuxia-%s.apk" % meta["version"] if meta.get("version") else "yuxia.apk"
     resp = send_file(
         path,
         mimetype="application/vnd.android.package-archive",
         as_attachment=True,
-        download_name="yuxia.apk",
+        download_name=name,
     )
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+@app.route("/api/apk_info")
+def apk_info():
+    """当前提供的 APK 是哪一版（网页下载入口据此显示版本）。"""
+    meta = _apk_meta()
+    if not meta:
+        return jsonify({"error": "还没有构建 APK：先在电脑上运行 scripts\\build_apk.ps1"}), 404
+    out = jsonify(meta)
+    out.headers["Cache-Control"] = "no-store"
+    return out
 
 
 @app.route("/api/ping")
@@ -96,18 +110,43 @@ def ping():
     前端用它区分两种情况：进程没了（请求直接失败）和 未登录（正常返回）。
     如果没有这一步，后端一退出，页面还能靠 Service Worker 缓存照常显示，
     点登录只会得到一句笼统的"网络错误"，看不出真正原因。
+
+    手机端还用它核对版本：app_version 与 App 内显示的版本一致，
+    才说明跑起来的确实是随 APK 一起装进去的那份后端。
     """
-    build = {}
-    try:
-        import build_info                      # 打包时生成，开发环境里没有这个模块
-        build = {"build_sha": getattr(build_info, "BUILD_TAG", "")
-                 or getattr(build_info, "BUILD_SHA", ""),
-                 "build_at": getattr(build_info, "BUILD_TIME", "")}
-    except Exception:
-        build = {"build_sha": "dev", "build_at": ""}
-    out = jsonify({"ok": True, "app": "yuxia", "host": request.host, **build})
+    out = jsonify({"ok": True, "app": "yuxia", "host": request.host, **_build_meta()})
     out.headers["Cache-Control"] = "no-store"
     return out
+
+
+def _build_meta():
+    """打包时写进 build_info.py 的版本信息；开发环境里没有这个模块。"""
+    meta = {"app_version": "", "version_code": 0, "build_sha": "dev",
+            "build_tag": "", "build_at": ""}
+    try:
+        import build_info
+        meta.update({
+            "app_version": getattr(build_info, "BUILD_VERSION", ""),
+            "version_code": int(getattr(build_info, "BUILD_VERSION_CODE", 0) or 0),
+            "build_sha": getattr(build_info, "BUILD_SHA", "dev"),
+            "build_tag": getattr(build_info, "BUILD_TAG", ""),
+            "build_at": getattr(build_info, "BUILD_TIME", ""),
+        })
+    except Exception:
+        pass
+    return meta
+
+
+def _apk_meta():
+    """scripts/build_apk.ps1 发布的 apk_info.json：版本、大小、构建时间。"""
+    path = os.path.join(app.static_folder, "download", "apk_info.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 @app.route("/api/config", methods=["GET"])

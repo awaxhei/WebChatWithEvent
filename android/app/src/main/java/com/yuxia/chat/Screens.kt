@@ -13,14 +13,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -48,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +66,21 @@ import androidx.lifecycle.LifecycleEventObserver
 @Composable
 fun AppRoot(vm: ChatViewModel) {
     val s = vm.state
+    val ctx = LocalContext.current
+    val appBuild = remember { AppInfo.load(ctx) }
+    var showAbout by remember { mutableStateOf(false) }
+    var whatsNew by remember { mutableStateOf<ChangelogSection?>(null) }
+
+    // 覆盖安装后第一次打开：把这一版的更新内容列一次。
+    // 第一次安装（没有旧版本记录）不弹，免得刚装好就被一段说明拦住。
+    LaunchedEffect(Unit) {
+        val last = Prefs.lastVersion(ctx)
+        if (last.isNotEmpty() && last != appBuild.version) {
+            whatsNew = appBuild.section(appBuild.version)
+        }
+        if (last != appBuild.version) Prefs.setLastVersion(ctx, appBuild.version)
+    }
+
     // 回到前台就对齐一次：后台时她可能已经发过消息（通知先到），界面得跟上
     val lifecycle = LocalLifecycleOwner.current
     DisposableEffect(lifecycle) {
@@ -71,7 +91,7 @@ fun AppRoot(vm: ChatViewModel) {
         onDispose { lifecycle.lifecycle.removeObserver(observer) }
     }
     when (s.screen) {
-        Screen.Boot -> BootScreen(s, onRetry = vm::retryBoot)
+        Screen.Boot -> BootScreen(s, appBuild.label, appBuild.builtAt, onRetry = vm::retryBoot)
         Screen.ApiKey -> ApiKeyScreen(s, onSave = vm::saveApiKey, onSkip = { vm.enterHomeFromKeyScreen() })
         Screen.Conversations -> ConversationsScreen(
             state = s,
@@ -79,15 +99,110 @@ fun AppRoot(vm: ChatViewModel) {
             onNew = vm::newConversation,
             onRefresh = { vm.loadConversations() },
             onApiKey = vm::openApiKeyScreen,
+            onAbout = { showAbout = true },
             onDelete = vm::deleteConversation,
             onDeleteMany = vm::deleteConversations,
         )
         Screen.Chat -> ChatScreen(vm)
     }
+
+    if (showAbout) {
+        AboutDialog(appBuild, s.backendBuild, onClose = { showAbout = false })
+    }
+
+    whatsNew?.let { section ->
+        AlertDialog(
+            onDismissRequest = { whatsNew = null },
+            title = { Text("已更新到 ${appBuild.label}") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    section.lines.forEach { line ->
+                        Text(
+                            "· $line",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { whatsNew = null }) { Text("知道了") }
+            },
+        )
+    }
+}
+
+/** 版本、安装时间、构建信息与更新日志。装没装上，看这里最直接。 */
+@Composable
+fun AboutDialog(info: AppBuild, backend: BackendBuild, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("关于尤夏") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("版本 ${info.label}", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(10.dp))
+                InfoRow("安装/更新", info.installedAt.ifBlank { "未知" })
+                InfoRow("构建时间", info.builtAt.ifBlank { "未知" })
+                InfoRow("构建提交", info.sha.ifBlank { "未知" })
+                InfoRow("内置后端", backendText(backend))
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(10.dp))
+                Text("更新日志", style = MaterialTheme.typography.titleSmall)
+                if (info.sections.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "本版本未附带更新日志。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                info.sections.take(5).forEach { section ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        section.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    section.lines.forEach { line ->
+                        Text(
+                            "· $line",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("关闭") } },
+    )
 }
 
 @Composable
-fun BootScreen(state: UiState, onRetry: () -> Unit) {
+private fun InfoRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun backendText(b: BackendBuild): String {
+    if (!b.online) return "尚未响应"
+    if (b.version.isBlank()) return "开发模式（未打包）"
+    val extra = listOf(b.sha, b.builtAt).filter { it.isNotBlank() }.joinToString(" · ")
+    return if (extra.isBlank()) b.version else "${b.version} · $extra"
+}
+
+@Composable
+fun BootScreen(state: UiState, version: String, builtAt: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
             if (state.error.isNullOrBlank()) {
@@ -110,6 +225,12 @@ fun BootScreen(state: UiState, onRetry: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    "版本 $version" + if (builtAt.isBlank()) "" else " · 构建于 $builtAt",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
@@ -213,6 +334,7 @@ fun ConversationsScreen(
     onNew: () -> Unit,
     onRefresh: () -> Unit,
     onApiKey: () -> Unit,
+    onAbout: () -> Unit,
     onDelete: (String) -> Unit,
     onDeleteMany: (List<String>) -> Unit,
 ) {
@@ -261,6 +383,9 @@ fun ConversationsScreen(
                         }
                         IconButton(onClick = onApiKey) {
                             Icon(Icons.Filled.Settings, contentDescription = "API Key")
+                        }
+                        IconButton(onClick = onAbout) {
+                            Icon(Icons.Filled.Info, contentDescription = "关于与更新日志")
                         }
                     }
                 },
