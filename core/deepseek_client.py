@@ -98,7 +98,13 @@ class DeepSeekClient:
             yield f"错误: {str(e)}"
 
     def chat_sync(self, messages, system_prompt="", temperature=0.8, api_key_override=None,
-                  max_tokens=None, thinking=None):
+                  max_tokens=None, thinking=False):
+        """同步短调用（判类型、排日程、写旁白、结算……）。
+
+        默认**关闭思考模式**：这些调用都在等一段严格 JSON 或一两句旁白，
+        思维链只会把 max_tokens 吃光（排日程就因此整天整天空输出、一直退回兜底模板）。
+        需要思考的只有主对话，走 chat_stream。
+        """
         msgs = self._build_messages(system_prompt, messages)
         payload = self._payload(msgs, False, temperature, thinking=thinking)
         if max_tokens:

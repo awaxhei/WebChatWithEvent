@@ -110,6 +110,8 @@ SCHEDULE_ENABLED = True
 OFFLINE_SETTLE_MIN_MINUTES = 25
 # 一次结算里她最多发几条消息（多了像刷屏）
 OFFLINE_MAX_MESSAGES = 2
+# 排一天日程的输出上限（两份作息、十几段，900 token 会被截断成半个 JSON）
+SCHEDULE_MAX_TOKENS = 2000
 SCHEDULE_PROMPT = (
     "你在给一个角色扮演世界排**某一天**的作息表。人物是尤夏（猫娘，大一，计算机专业，"
     "和青梅同居）和青梅（大一，同一个专业）。\n\n"

@@ -14,9 +14,10 @@
     tag         class / meal / rest / free / sleep / other
 """
 import json
+import re
 import threading
 
-from config import SCHEDULE_PROMPT
+from config import SCHEDULE_MAX_TOKENS, SCHEDULE_PROMPT
 
 # 兜底模板：模型还没生成、或生成失败时用
 # 起床排在 7:30 之后：早上七点她当然还在被窝里（她自己也这么说过）
@@ -94,16 +95,25 @@ def _norm_blocks(raw):
     return out
 
 
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
 def _parse(raw):
-    text = (raw or "").strip()
-    if text.startswith("{"):
+    """模型给的日程 JSON：容忍代码块围栏和前后多余文字"""
+    text = _FENCE_RE.sub("", (raw or "").strip())
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except Exception:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            return None
         try:
-            data = json.loads(text)
+            data = json.loads(text[start:end + 1])
         except Exception:
             return None
-        if isinstance(data, dict):
-            return data
-    return None
+    return data if isinstance(data, dict) else None
 
 
 def _generate(db, conv_id, day, deepseek, api_key=None):
@@ -129,17 +139,19 @@ def _generate(db, conv_id, day, deepseek, api_key=None):
             system_prompt=SCHEDULE_PROMPT,
             temperature=0.6,
             api_key_override=api_key,
-            max_tokens=900,
+            max_tokens=SCHEDULE_MAX_TOKENS,
         )
     except Exception as e:
         print(f"[日程] 生成失败: {e}")
         return None
     data = _parse(raw)
     if not data:
+        print(f"[日程] 解析不到 JSON，退回兜底模板：{str(raw)[:80]}")
         return None
     yuxia = _norm_blocks(data.get("yuxia"))
     qingmei = _norm_blocks(data.get("qingmei"))
     if len(yuxia) < 4:
+        print(f"[日程] 时段太少（{len(yuxia)} 段），退回兜底模板")
         return None
     payload = {"yuxia": yuxia, "qingmei": qingmei or _fallback("qingmei")}
     try:

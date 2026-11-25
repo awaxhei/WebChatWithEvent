@@ -79,9 +79,11 @@ def main():
         class SchedLLM:
             def __init__(self):
                 self.calls = 0
+                self.last_kw = {}
 
             def chat_sync(self, messages, system_prompt="", **kw):
                 self.calls += 1
+                self.last_kw = kw
                 if "作息表" in (system_prompt or ""):
                     return json.dumps({
                         "yuxia": [
@@ -118,6 +120,19 @@ def main():
         data = schedule._generate(app_db, conv0, 0, sched_llm)
         check("模型能排出一天的日程", bool(data) and len(data["yuxia"]) == 5,
               str(data)[:120])
+        check("排日程的 token 预算够用（900 会被截断成半个 JSON）",
+              (sched_llm.last_kw or {}).get("max_tokens", 0) >= 2000,
+              str(sched_llm.last_kw))
+        # 模型偶尔会包一层代码块：解析要能容忍
+        check("能解析代码块包着的日程",
+              schedule._parse('```json\n{"yuxia": [{"start": 0, "end": 10}]}\n```')
+              is not None)
+        check("解析不了时返回 None", schedule._parse("随便说说") is None)
+        # 短调用默认不开思考：否则思维链会把 token 吃光、内容为空
+        import inspect
+        from core.deepseek_client import DeepSeekClient
+        check("chat_sync 默认关闭思考模式",
+              inspect.signature(DeepSeekClient.chat_sync).parameters["thinking"].default is False)
         again = schedule.ensure_day(app_db, conv0, 9 * 60)
         check("当天日程会被缓存复用",
               len(again["yuxia"]) == 5 and again["yuxia"][1]["activity"] == "赶早八",
