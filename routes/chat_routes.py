@@ -29,8 +29,9 @@ from core.auth import require_auth, ensure_conversation_owner, request_api_key
 from core.database import ChatDB
 from core.deepseek_client import DeepSeekClient
 from services import (
-    autonomy, character_writer, checkpoint, context_writer, entities, memory_engine,
-    npc, offline, scene_watcher, schedule, time_keeper, world_context, state_engine,
+    autonomy, character_writer, checkpoint, context_writer, entities, intimacy,
+    memory_engine, npc, offline, scene_watcher, schedule, time_keeper, world_context,
+    state_engine,
 )
 from services.event_engine import (
     _run_event_summary, _run_random_event,
@@ -706,6 +707,9 @@ def chat():
         db, conv_id, "" if sticker_row else user_message)
     story_time = clock.format_time(now_minutes)
     msg_count = db.get_message_count(conv_id)
+    # 此刻贴得有多近：0 没接触 / 1 碰到 / 2 亲密接触。
+    # 只在同一地点时才放宽她的动作条数——手机里碰不到对方。
+    heat = intimacy.level(db, conv_id) if co_located else 0
     _mark("时钟推进")
 
     # 预热当前场景的环境描写（后台线程，不阻塞回复）：让前端首屏更快拿到文字
@@ -783,6 +787,8 @@ def chat():
                                       deepseek, api_key)
                      if SCHEDULE_ENABLED else "")
     state_block = state_engine.block(db, conv_id)
+    # 贴在一起的时候，她的反应要写得比平时多（见 services/intimacy.py）
+    contact_block = intimacy.chat_block(heat, co_located)
     # 口头禅额度：最近几条消息里已经「唔姆」过，这一轮就让模型一句都别说。
     # 它模仿的是自己前面的消息，只写人设里的频率规矩压不住。
     tic_hint = ""
@@ -793,7 +799,7 @@ def chat():
     # 两个模型读同一份历史，就不必在提示词里再强调一遍。
     blocks = "\n\n".join(b for b in (world, place, scene_here, schedule_here,
                                      props_here, npcs_here, contacts_here,
-                                     state_block, tic_hint) if b)
+                                     state_block, contact_block, tic_hint) if b)
     system_prompt = f"{CHAT_PROMPT}\n\n"
     if blocks:
         system_prompt += f"{blocks}\n\n"
@@ -872,7 +878,9 @@ def chat():
         wrote_before = db.get_total_message_count(conv_id)
         # 传「是否同处一地」：异地时动作照收（她在自己那边做事），但不允许写身体接触
         reply = _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel,
-                               allow_actions=co_located)
+                               allow_actions=co_located,
+                               max_actions=4 if heat >= 2 else (3 if heat == 1 else 2),
+                               action_limit=32 if heat >= 2 else 24)
         actions = reply["actions"]
         if db.get_total_message_count(conv_id) == wrote_before:
             # 模型一个字都没给（54 轮试玩里出现过一次空回复）：再要一次，
@@ -888,7 +896,9 @@ def chat():
                 retry_full += chunk
                 yield _sse({"type": "chunk", "content": chunk})
             retry = _persist_reply(conv_id, retry_full, can_speak, yuxia_loc,
-                                   now_minutes, channel, allow_actions=co_located)
+                                   now_minutes, channel, allow_actions=co_located,
+                                   max_actions=4 if heat >= 2 else (3 if heat == 1 else 2),
+                                   action_limit=32 if heat >= 2 else 24)
             actions = retry["actions"] or actions
             if retry.get("phone"):
                 reply["phone"] = retry["phone"]
@@ -969,9 +979,12 @@ def _recent_spoken(db, conv_id, limit=4):
 
 
 def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL,
-                   allow_actions=True):
+                   allow_actions=True, max_actions=MAX_ACTIONS_PER_REPLY,
+                   action_limit=24):
     """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
 
+    `max_actions` / `action_limit`：贴在一起的时候放宽——她的反应本来就该多几条，
+    不会被「一轮最多两条动作」的常规上限砍掉。
     返回 {"actions": [...], "phone": [{"speaker","text"}]}：
     调用方可以把这一轮的动作和「不是她发的」手机消息立刻推给前端。
     """
@@ -1022,12 +1035,13 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
             # 异地时先收着，下面统一转成手机消息发出去（以前这里带着 can_speak 判断，
             # 于是异地模型偶尔给了「对白」就整句丢掉，还会白白触发一次"空回复"重试）
             speech.extend(_bubble_parts(_strip_speaker(str(obj["对白"]))))
-        if obj.get("动作") and len(actions) < MAX_ACTIONS_PER_REPLY:
+        if obj.get("动作") and len(actions) < max_actions:
             # 她可以用动作代替说话：动作走旁白通道，不进对话框。
             # 一轮最多两条：动作堆多了会盖过对白。
             # 两人不在一起时仍然收动作用来推进剧情，但写「抱、摸、递」这种接触的丢掉。
             for piece in _bubble_parts(_strip_speaker(str(obj["动作"])),
-                                       max_parts=MAX_ACTIONS_PER_REPLY - len(actions)):
+                                       limit=action_limit,
+                                       max_parts=max_actions - len(actions)):
                 if not _action_ok(piece, allow_actions):
                     continue
                 actions.append(piece)

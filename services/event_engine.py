@@ -65,15 +65,13 @@ def _moment_text(db, conv_id, limit=None):
 
 
 def scene_is_intimate(db, conv_id, limit=None):
-    """此刻是不是不该被打扰的私密/专注时刻"""
-    text = _moment_text(db, conv_id, limit)
-    if not text:
-        return False
-    strong = [w for w in _INTIMATE_STRONG if w in text]
-    if strong:
-        return True
-    weak = [w for w in _INTIMATE_WEAK if w in text]
-    return len(weak) >= 2
+    """此刻是不是不该被打扰的私密时刻
+
+    判定和「身体接触热度」共用一套规则：第 2 档才算（亲、吻、贴着、喘息这类），
+    普通抱一下只会让她的反应多一点，不会把世界静音。
+    """
+    from services import intimacy
+    return intimacy.is_intimate(db, conv_id, limit)
 
 
 def _busy_reason(db, conv_id, now_minutes):

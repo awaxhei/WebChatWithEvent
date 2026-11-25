@@ -12,6 +12,7 @@ import re
 
 from config import CHARACTER_DESC_ENABLED, CHARACTER_DESC_PROMPT
 import core.pronoun as pronoun
+from services import intimacy
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -40,7 +41,7 @@ def _clip(text, limit=MAX_DESC_CHARS):
     return head
 
 
-def _parse_output(raw):
+def _parse_output(raw, limit=MAX_DESC_CHARS):
     """输出可以是 JSON（旁白 + 道具状态），也可以是纯文本（模型不听话时）"""
     text = (raw or "").strip()
     if text.startswith("{"):
@@ -51,11 +52,11 @@ def _parse_output(raw):
         if isinstance(data, dict):
             desc = str(data.get("旁白") or data.get("描写") or "").strip()
             items = [it for it in (data.get("道具") or []) if isinstance(it, dict)][:6]
-            return _clean(desc), items
-    return _clean(text), []
+            return _clean(desc, limit), items
+    return _clean(text, limit), []
 
 
-def _clean(text):
+def _clean(text, limit=MAX_DESC_CHARS):
     if not text:
         return ""
     text = _FENCE_RE.sub("", text.strip()).strip()
@@ -65,7 +66,7 @@ def _clean(text):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
     text = text.strip('"“”「」『』 ')
-    return pronoun.fix(_clip(text))
+    return pronoun.fix(_clip(text, limit))
 
 
 def player_action(db, conv_id):
@@ -111,7 +112,10 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
     """
     if not CHARACTER_DESC_ENABLED:
         return ""
-    if _turn_has_action(db, conv_id):
+    heat = intimacy.level(db, conv_id)
+    # 平时她这一轮已经给过动作就不再重复；亲密接触时例外——那一段本来就该多写，
+    # 旁白补的是另一处反应（呼吸、手、耳朵），不是把她的动作再说一遍。
+    if _turn_has_action(db, conv_id) and heat < 2:
         return ""
 
     # 只看对话通道：上一次的 state 描写不再回灌，否则"他"这种错会一直自我强化
@@ -168,11 +172,20 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         props_line = ""
 
     previous = _recent_state_texts(db, conv_id)
+    # 亲密接触时把她刚写过的动作也当反面清单：旁白不能只是换句话重复同一个动作
+    if heat >= 2:
+        try:
+            recent_actions = [m.get("content") or "" for m in db.get_messages(conv_id)
+                              if m.get("channel") == "action"][-2:]
+        except Exception:
+            recent_actions = []
+        previous = previous + [a for a in recent_actions if a]
     prev_line = ""
     if previous:
         prev_line = ("\n\n刚写过的描写（换一个动作，不要重复，包括耳朵和尾巴的小动作）：\n"
                      + "\n".join(f"- {p}" for p in previous))
 
+    ask = intimacy.desc_ask(heat)
     user_msg = (
         f"{context_brief}\n"
         f"{where}{time_line}"
@@ -180,13 +193,22 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         + (f"\n\n{props_line}" if props_line else "")
         + f"{prev_line}"
         + f"\n\n最近的对话：\n{recent_text or '（还没有对话）'}\n\n"
-        "请写一句尤夏此刻的动作描写。"
+        + ask
     )
+
+    system_prompt = CHARACTER_DESC_PROMPT.replace("{player_action}", player_part)
+    clip_limit = MAX_DESC_CHARS
+    if heat >= 2:
+        # 覆盖「一次只写一个动作、最多两句」：这一段允许两到三句连续的生理反应
+        system_prompt += ("\n\n【此刻】两人正在亲密接触。上面第 2 条按这里写："
+                          "两到三个连续的身体反应，60 到 90 字；只写看得见的，不写心理，"
+                          "不替青梅动作。")
+        clip_limit = 110
 
     try:
         raw = deepseek.chat_sync(
             [{"role": "user", "content": user_msg}],
-            system_prompt=CHARACTER_DESC_PROMPT.replace("{player_action}", player_part),
+            system_prompt=system_prompt,
             temperature=0.9,
             api_key_override=api_key,
         )
@@ -197,7 +219,7 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
     if not raw or raw.startswith("[生成失败"):
         return ""
 
-    text, prop_items = _parse_output(raw)
+    text, prop_items = _parse_output(raw, clip_limit)
     if len(text) < 4:
         return ""
     # 她动到的东西改状态：道具是真的，改了要记住
