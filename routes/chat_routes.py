@@ -870,6 +870,29 @@ def chat():
     return Response(generate(), mimetype="text/event-stream")
 
 
+def _recent_spoken(db, conv_id, limit=4):
+    """她最近说过的几句（当面存的是她输出的 JSON，手机是纯文本）"""
+    out = []
+    try:
+        rows = [m for m in db.get_messages(conv_id) if m["role"] == "assistant"]
+    except Exception:
+        return out
+    for row in rows[-limit * 4:]:
+        channel = row.get("channel")
+        content = (row.get("content") or "").strip()
+        if channel == CHAT_CHANNEL:
+            try:
+                obj = json.loads(content)
+            except Exception:
+                continue
+            for key in ("对白", "消息"):
+                if obj.get(key):
+                    out.extend(_bubble_parts(str(obj[key])))
+        elif channel == PHONE_CHANNEL:
+            out.append(content)
+    return out[-limit:]
+
+
 def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHAT_CHANNEL,
                    allow_actions=True):
     """把模型输出拆成 对白/表情包（当面）与 消息（手机）分别落库
@@ -947,6 +970,11 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
     if not can_speak and speech:
         phone_msgs.extend(speech)
         speech = []
+    if can_speak and speech:
+        # 把刚说过的话原样再说一遍，看起来像卡住了：整句重复的直接丢掉。
+        # 全被丢掉时下面会因为"一条也没写"触发一次重答，她会换个说法。
+        recent = _recent_spoken(db, conv_id)
+        speech = [p for p in speech if not (len(p) >= 4 and p in recent)]
     # 异地时对白没人看：把「对白」也当消息处理（上面已经转过了）
     if speech or stickers_used:
         # 每条对白单独存一条消息（一次说几句本来就该是几条 JSON），

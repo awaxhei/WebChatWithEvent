@@ -72,7 +72,10 @@ def main():
     check("speak 落到 chat 通道", acted and acted["channel"] == "chat")
     check("确实调用了模型", llm.calls == 1)
     msgs = [m for m in db.get_messages(conv) if m["channel"] == "chat" and m["role"] == "assistant"]
-    check("消息已入库", any(m["content"] == "……没什么。" for m in msgs))
+    stored = [json.loads(m["content"]).get("对白") for m in msgs
+              if (m["content"] or "").startswith("{")]
+    check("消息已入库（当面通道和其它回复一样存成 JSON）",
+          "……没什么。" in stored, str([m["content"][:30] for m in msgs]))
 
     # 2) 异地：模型说 speak → 强制改成 phone
     conv2 = fresh()
@@ -82,6 +85,9 @@ def main():
                                 600, "异地", idle=False)
     check("异地 speak 自动改成 phone", acted2 and acted2["action"] == "phone", str(acted2))
     check("phone 落到手机通道", acted2 and acted2["channel"] == "phone")
+    check("phone 通道仍是纯文本",
+          all(not (m["content"] or "").startswith("{") for m in db.get_messages(conv2)
+              if m["channel"] == "phone"))
 
     # 3) 模型说 none → 不做任何事
     conv3 = fresh()

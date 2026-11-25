@@ -461,7 +461,11 @@ def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
 
     if action in ("speak", "phone") and text:
         channel = "phone" if action == "phone" else "chat"
-        db.add_message(conv_id, "assistant", text, channel=channel, scene=yuxia_loc)
+        # 当面通道统一存成她输出的那种 JSON（对白）：历史回灌与前端解析都按这个格式，
+        # 以前这里直接存纯文本，模型会在自己的历史里看到一段不带结构的裸文本
+        payload = (json.dumps({"对白": text}, ensure_ascii=False)
+                   if channel == "chat" else text)
+        db.add_message(conv_id, "assistant", payload, channel=channel, scene=yuxia_loc)
         db.push_autonomy(conv_id, {"action": action, "text": text, "at": time.time(),
                                    "at_minutes": int(now_minutes)},
                          keep=_TAIL_KEEP)

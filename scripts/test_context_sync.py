@@ -27,7 +27,16 @@ database.DB_PATH = os.path.join(tmp, "chat.db")
 from app import app, db as app_db               # noqa: E402
 from core.auth import generate_token            # noqa: E402
 import routes.chat_routes as chat_mod           # noqa: E402
+import core.system_text as system_text          # noqa: E402
 import services.world_context as world_context  # noqa: E402
+
+
+def parse_jsonish(text):
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 FAILED = []
 
@@ -358,6 +367,49 @@ def main():
         r = c.post("/api/chat", json={"conversation_id": convTic, "message": "嗯"})
         body2 = r.data.decode("utf-8")
         check("紧接着的下一轮一个都不留", "唔姆" not in body2, body2[-200:])
+    finally:
+        chat_mod.deepseek = real
+
+    # ── 10d) 不要把刚说过的话原样再说一遍
+    convDup = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, convDup)
+    locations.switch_both(app_db, convDup, "公寓客厅")
+
+    class RepeatLLM(CaptureLLM):
+        """第一次回一句；第二次先说同一句（应被丢掉），重答时换个说法"""
+
+        def __init__(self):
+            super().__init__('{"对白": "靠窗好。"}')
+            self.calls = 0
+
+        def chat_stream(self, messages, system_prompt="", api_key_override=None, temperature=0.7):
+            self.calls += 1
+            self.messages = list(messages)
+            self.system_prompt = system_prompt
+            if self.calls == 1:
+                yield '{"对白": "靠窗好。"}'
+            elif self.calls == 2:
+                yield '{"对白": "靠窗好。"}'
+            else:
+                yield '{"对白": "窗边风有点大，坐里面那张。"}'
+
+    llmDup = RepeatLLM()
+    chat_mod.deepseek = llmDup
+    try:
+        r = c.post("/api/chat", json={"conversation_id": convDup, "message": "坐窗边吧"})
+        r.data.decode("utf-8")           # 必须消费流，生成器才会真的跑起来
+        r = c.post("/api/chat", json={"conversation_id": convDup, "message": "就坐窗边"})
+        r.data.decode("utf-8")
+        spoken = []
+        for m in app_db.get_messages(convDup):
+            if m["role"] != "assistant" or m["channel"] != "chat":
+                continue
+            obj = parse_jsonish(m["content"])
+            if obj and obj.get("对白"):
+                spoken.append(obj["对白"])
+        check("重复的那句不会再存一遍", spoken.count("靠窗好。") == 1, str(spoken))
+        check("被丢掉之后会换个说法", any("窗边风有点大" in t for t in spoken), str(spoken))
+        check("兜底提示说明了可能重复", "重复" in (system_text.RETRY_HINT or ""))
     finally:
         chat_mod.deepseek = real
 

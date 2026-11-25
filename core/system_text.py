@@ -33,7 +33,8 @@ STICKER_RECEIVED_WITH_FEEL = "青梅发来一个表情包，情绪是「{feel}�
 PLAYER_ACTION = "青梅{action}"
 
 # 给模型看的系统提示（不显示给玩家）
-RETRY_HINT = "【系统】上一轮没有产生任何内容。请至少输出一句话，或一个动作。"
+RETRY_HINT = ("【系统】上一轮没有产生任何新内容（可能重复了你刚说过的话）。"
+              "请换一种说法，至少输出一句话，或一个动作。")
 
 
 def move_player(place):
