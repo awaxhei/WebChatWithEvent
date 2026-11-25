@@ -112,7 +112,11 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
     """
     if not CHARACTER_DESC_ENABLED:
         return ""
-    heat = intimacy.level(db, conv_id)
+    yuxia_loc = db.get_current_location(conv_id)
+    player_loc = db.get_player_location(conv_id)
+    co_located = yuxia_loc == player_loc
+    # 异地时碰不到对方：接触程度不作数，旁白也不能写成身体接触
+    heat = intimacy.level(db, conv_id) if co_located else 0
     # 平时她这一轮已经给过动作就不再重复；亲密接触时例外——那一段本来就该多写，
     # 旁白补的是另一处反应（呼吸、手、耳朵），不是把她的动作再说一遍。
     if _turn_has_action(db, conv_id) and heat < 2:
@@ -127,9 +131,6 @@ def describe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         for m in recent
     )
 
-    yuxia_loc = db.get_current_location(conv_id)
-    player_loc = db.get_player_location(conv_id)
-    co_located = yuxia_loc == player_loc
     where = (f"尤夏在{yuxia_loc}，青梅在{player_loc}。"
              + ("两人此刻在一起。" if co_located else "两人此刻不在一起（靠手机联系）。"))
 

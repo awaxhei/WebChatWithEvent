@@ -20,6 +20,7 @@ import json
 import re
 import time
 
+import core.locations as locations
 from config import (
     NPC_ENABLED, NPC_PROMPT, NPC_PHONE_PROMPT, NPC_CAP, NPC_LLM_DETECT,
     NPC_DETECT_PROMPT, CHARACTER_NAME,
@@ -47,19 +48,12 @@ RESERVED_NAMES = {
     "尤夏", "青梅", "主人", "路人", "路人甲", "路人乙",
 }
 
-# 「家里不站人」：这些地方是两个人待着的地方，不会有陌生人在场搭话。
-# 以前判别的兜底会按地点编一个「路人」，于是青梅的房间里站了个路人，
-# 打手机的时候他还会插一句嘴。私人空间现在完全不参与 NPC。
-_PRIVATE_KEYWORDS = (
-    "房间", "卧室", "床", "浴室", "卫生间", "洗手间", "厕所", "厨房",
-    "客厅", "玄关", "阳台", "宿舍", "家里", "家中", "屋内", "室内",
-)
-
-
-def is_private(location):
-    """这个地点是不是私人空间（只有你们两个人，不会有第三人）"""
-    loc = location or ""
-    return any(k in loc for k in _PRIVATE_KEYWORDS)
+# 「家里不站人」：私人空间不会有陌生人在场搭话。
+# 是不是私人空间由 locations.private 这个数据字段决定（默认地点建表时标好，
+# 新地点默认私人），不再按名字里有没有「房间/客厅」去猜。
+def is_private(db, conv_id, location):
+    """这个地点是不是私人空间（只有你们两个人，不会有第三人凭空出现）"""
+    return locations.is_private(db, conv_id, location)
 
 # 只用于清理历史数据：把以前被正则误当成称呼建出来的口头禅 NPC 退场。
 # 它不参与任何判断，新 NPC 的名字完全由模型给。
@@ -130,7 +124,7 @@ def find_addressed(db, conv_id, location, message):
             continue
         kept.append(npc)
     present = kept
-    if is_private(location):
+    if is_private(db, conv_id, location):
         # 私人空间里只认「剧情明确点名」的人（妈妈、室友），不认路边刷出来的路人
         present = [n for n in present if n.get("declared")]
         if not present:
@@ -222,7 +216,7 @@ def spawn_named(db, conv_id, location, name):
     没有称呼就不编人：以前这里会兜底成「路人」，
     于是只要模型误判一次，房间里就多一个叫「路人」的人站着不走。
     """
-    if not NPC_ENABLED or is_private(location):
+    if not NPC_ENABLED or is_private(db, conv_id, location):
         return None
     return _create(db, conv_id, location, name)
 
@@ -347,7 +341,7 @@ def reply(db, conv_id, npc, user_message, deepseek, api_key=None):
     """让 NPC 回一两句话；失败返回空串（不打断主流程）"""
     if not NPC_ENABLED or not npc:
         return ""
-    if is_private(npc.get("location")) and not npc.get("declared"):
+    if is_private(db, conv_id, npc.get("location")) and not npc.get("declared"):
         return ""
     system = (
         NPC_PROMPT
@@ -488,7 +482,7 @@ def resolve_addressed(db, conv_id, location, message, deepseek=None, api_key=Non
     found = find_addressed(db, conv_id, location, message)
     if found:
         return found
-    if deepseek is None or is_private(location):
+    if deepseek is None or is_private(db, conv_id, location):
         return None
     decision = detect_addressed(db, conv_id, location, message, deepseek, api_key=api_key)
     if not decision:
@@ -525,7 +519,7 @@ def present_block(db, conv_id, location):
     except Exception:
         return ""
     # 私人空间里只列剧情明确点名的人（妈妈、室友），不列路边刷出来的路人
-    if is_private(location):
+    if is_private(db, conv_id, location):
         present = [n for n in present if n.get("declared")]
     if not present:
         return ""

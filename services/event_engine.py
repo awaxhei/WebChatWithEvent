@@ -20,24 +20,11 @@ from config import (
     EVENT_PROMPT, CHARACTER_NAME, EVENT_AI_INTERVAL, RANDOM_EVENT_BASE_PROB,
     RANDOM_EVENT_TIERS, RANDOM_EVENT_TIER_GUIDE,
     RANDOM_EVENT_COOLDOWN_MINUTES, RANDOM_EVENT_INTIMATE_COOLDOWN_MINUTES,
-    RANDOM_EVENT_CONTEXT_ROWS,
 )
 from services import entities, npc, state_engine
 from services.atmosphere import extract_location
 
 EVENT_TYPES = ("milestone", "scene_change", "emotional_shift", "time_advance", "random", "misc")
-
-# 最近对话里出现这些，说明此刻是两个人的私密时刻：门铃、快递、电话都不该来打断。
-# 分成两档：强词单独出现就算；弱词要凑到两个才算（「抱」和「喜欢」在普通对话里也很常见）。
-_INTIMATE_STRONG = (
-    "亲吻", "吻", "亲了", "亲了亲", "做爱", "脱衣服", "脱掉", "脱了", "洗澡", "浴室",
-    "胸", "大腿", "腰", "喘", "呻吟", "裸", "湿了", "舔", "床上", "被窝里",
-)
-_INTIMATE_WEAK = (
-    "亲", "抱", "摸", "贴", "靠", "搂", "蹭", "床", "被子", "衣服", "耳朵", "尾巴",
-    "喜欢", "害羞", "脸红", "身体", "抱紧", "抱抱",
-)
-_INTIMATE_ALL = _INTIMATE_STRONG + _INTIMATE_WEAK
 
 
 def _readable_row(row):
@@ -52,26 +39,6 @@ def _readable_row(row):
         if isinstance(obj, dict):
             return " ".join(str(obj.get(k) or "") for k in ("对白", "动作", "消息")).strip()
     return content
-
-
-def _moment_text(db, conv_id, limit=None):
-    limit = limit or RANDOM_EVENT_CONTEXT_ROWS
-    try:
-        rows = [m for m in db.get_messages(conv_id)
-                if (m.get("channel") or "chat") in ("chat", "phone", "action", "state")][-limit:]
-    except Exception:
-        return ""
-    return "\n".join(_readable_row(m) for m in rows if _readable_row(m))
-
-
-def scene_is_intimate(db, conv_id, limit=None):
-    """此刻是不是不该被打扰的私密时刻
-
-    判定和「身体接触热度」共用一套规则：第 2 档才算（亲、吻、贴着、喘息这类），
-    普通抱一下只会让她的反应多一点，不会把世界静音。
-    """
-    from services import intimacy
-    return intimacy.is_intimate(db, conv_id, limit)
 
 
 def _busy_reason(db, conv_id, now_minutes):
@@ -100,12 +67,14 @@ def event_gate(db, conv_id, now_minutes, is_push_cmd=False):
     reason = _busy_reason(db, conv_id, now_minutes)
     if reason:
         return False, reason
-    # 私密时刻的冷却：不是"此刻有没有亲密词"，而是那之后的一段时间都别来打扰
+    # 私密时刻的冷却：读她自己声明的接触程度（conversations.contact_level），
+    # 不再扫最近消息里的词。她说了「亲密」，那之后的 45 故事分钟里世界先安静。
     try:
-        last_intimate = _last_seen_minutes(db, conv_id, _INTIMATE_ALL)
+        contact_level, contact_at = db.get_contact_level(conv_id)
     except Exception:
-        last_intimate = None
-    if last_intimate and now_minutes - last_intimate < RANDOM_EVENT_INTIMATE_COOLDOWN_MINUTES:
+        contact_level, contact_at = 0, 0
+    if (contact_level >= 2 and contact_at
+            and int(now_minutes) - int(contact_at) < RANDOM_EVENT_INTIMATE_COOLDOWN_MINUTES):
         return False, "刚才正亲密，先别打扰"
     if is_push_cmd:
         return True, ""
@@ -116,26 +85,6 @@ def event_gate(db, conv_id, now_minutes, is_push_cmd=False):
     if last and 0 <= int(now_minutes) - int(last) < RANDOM_EVENT_COOLDOWN_MINUTES:
         return False, "离上次插曲太近"
     return True, ""
-
-
-def _last_seen_minutes(db, conv_id, words):
-    """最近一次出现这些词的消息发生在第几分钟（没有就返回 None）
-
-    消息没记 story_minutes 的老数据退回"最后几条内出现过"——那就按当前时刻算，
-    宁可多安静一会儿，也不要挑在正好的时候敲门。
-    """
-    try:
-        rows = [m for m in db.get_messages(conv_id)
-                if (m.get("channel") or "chat") in ("chat", "phone", "action", "state")][-12:]
-    except Exception:
-        return None
-    for row in reversed(rows):
-        text = _readable_row(row)
-        if not text:
-            continue
-        if any(w in text for w in words):
-            return int(row.get("story_minutes") or 0)
-    return None
 
 
 def pick_tier():

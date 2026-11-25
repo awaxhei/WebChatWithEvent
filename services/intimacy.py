@@ -54,7 +54,21 @@ def recent_text(db, conv_id, limit=None):
 
 
 def level(db, conv_id, limit=None):
-    """这一档接触有多近：0 / 1 / 2"""
+    """这一档接触有多近：0 / 1 / 2
+
+    以她自己声明的 `接触` 为准（存在 conversations.contact_level）；文字扫描只是
+    在还没有声明时（这一轮刚接触）给她一个起步的提示。门控用声明值，不用扫描。
+    """
+    stored = 0
+    try:
+        stored, _at = db.get_contact_level(conv_id)
+    except Exception:
+        stored = 0
+    scanned = _scan(db, conv_id, limit)
+    return max(stored, scanned)
+
+
+def _scan(db, conv_id, limit=None):
     text = recent_text(db, conv_id, limit)
     if not text:
         return 0
@@ -64,6 +78,37 @@ def level(db, conv_id, limit=None):
     if len(hits) >= 2:
         return 2
     return 1 if hits else 0
+
+
+# 她声明的接触程度 → 数值。只认这三个词，避免模型自由发挥。
+CONTACT_MARKERS = {
+    "无": 0, "没有": 0, "没碰到": 0, "分开": 0,
+    "碰到": 1, "轻碰": 1, "挨着": 1, "靠着": 1,
+    "亲密": 2, "很亲密": 2, "贴着": 2, "缠着": 2,
+}
+
+
+def parse_marker(value):
+    """把回复里的 `接触` 解析成 0/1/2；不认识返回 None（不改之前的状态）"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for key, level_value in CONTACT_MARKERS.items():
+        if key in text:
+            return level_value
+    return None
+
+
+def record(db, conv_id, value, story_minutes=0):
+    """把这一轮声明的 `接触` 写进会话，供随机事件门控读取"""
+    parsed = parse_marker(value)
+    if parsed is None:
+        return None
+    try:
+        db.set_contact_level(conv_id, parsed, story_minutes)
+    except Exception:
+        return None
+    return parsed
 
 
 def is_intimate(db, conv_id, limit=None):

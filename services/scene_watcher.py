@@ -41,6 +41,7 @@ def _parse(raw_text):
     return {
         "new_location": str(data.get("new_location") or "").strip()[:20],
         "entered_by": entered,
+        "private": bool(data.get("private", False)),
         "reason": str(data.get("reason") or "")[:80],
     }
 
@@ -92,7 +93,8 @@ def observe(db, conv_id, deepseek, now_minutes, context_brief, api_key=None):
         return None
 
     existing = set(locations.list_names(db, conv_id))
-    name, created = locations.resolve(db, conv_id, name)
+    name, created = locations.resolve(db, conv_id, name,
+                                      private=bool(decision.get("private")))
     if not name:
         return None
 

@@ -390,6 +390,7 @@ def main():
     # ── 7) 数量上限
     conv2 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv2)
+    locations.resolve(app_db, conv2, "街上")      # 地点要先登记（默认公共）
     for i in range(npc.NPC_CAP):
         app_db.add_npc(conv2, f"路人{i}", "路人", "街上", "")
     overflow, _ = resolve(app_db, conv2, "街上", "老板，来个煎饼",
@@ -403,6 +404,7 @@ def main():
     # ── 8) 同一地点超过上限时，最久没说话的先退场
     conv4 = app_db.create_conversation(user)
     locations.ensure_defaults(app_db, conv4)
+    locations.resolve(app_db, conv4, "街上")
     for i in range(npc.PER_LOCATION_CAP):
         app_db.add_npc(conv4, f"路人{i}", "路人", "街上", "")
     extra, _ = resolve(app_db, conv4, "街上", "老板，来个煎饼",

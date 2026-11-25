@@ -169,10 +169,14 @@ def main():
     # ── 3) 事件门控：亲密时刻 / 冷却 / 睡着
     conv3 = new_conv(user)
     app_db.add_message(conv3, "user", "别走", story_minutes=600)
-    app_db.add_message(conv3, "assistant", json.dumps({"对白": "我把你抱紧，亲了一下。"},
+    app_db.add_message(conv3, "assistant", json.dumps({"对白": "我把你抱紧，亲了一下。",
+                                                      "接触": "亲密"},
                                                       ensure_ascii=False),
                        channel="chat", story_minutes=601)
-    check("亲密时刻被认出来", events.scene_is_intimate(app_db, conv3))
+    # 门控读的是她自己声明的接触程度（回复里的 `接触` 字段）
+    app_db.set_contact_level(conv3, 2, 601)
+    check("亲密程度被记成第 2 档", app_db.get_contact_level(conv3)[0] == 2,
+          str(app_db.get_contact_level(conv3)))
     allowed, reason = events.event_gate(app_db, conv3, 610)
     check("亲密之后一段时间不安排偶然事件", not allowed and "亲密" in reason, reason)
     conv4 = new_conv(user)

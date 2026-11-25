@@ -9,7 +9,7 @@
 import re
 
 from config import (
-    DEFAULT_LOCATIONS, LOCATION_CAP,
+    DEFAULT_LOCATIONS, DEFAULT_PRIVATE_LOCATIONS, LOCATION_CAP,
     DEFAULT_YUXIA_LOCATION, DEFAULT_PLAYER_LOCATION,
 )
 
@@ -36,7 +36,8 @@ def ensure_defaults(db, conv_id):
     names = db.get_location_names(conv_id)
     if not names:
         for name in DEFAULT_LOCATIONS:
-            db.add_location(conv_id, name)
+            db.add_location(conv_id, name,
+                            private=name in DEFAULT_PRIVATE_LOCATIONS)
         names = db.get_location_names(conv_id)
     if not db.get_current_location(conv_id):
         start = DEFAULT_YUXIA_LOCATION if DEFAULT_YUXIA_LOCATION in names else (
@@ -60,8 +61,11 @@ def list_names(db, conv_id):
     return ensure_defaults(db, conv_id)
 
 
-def resolve(db, conv_id, candidate):
+def resolve(db, conv_id, candidate, private=False):
     """把 AI 给出的地点名归一化到已有地点；不存在则新建。
+
+    `private`：新地点是不是私人空间。默认公共；默认地点里的私人房间建表时已标好，
+    剧情新建的地点由场景观察者声明（私人空间不让陌生人自动出现）。
 
     返回 (最终地点名, 是否新建)。
     """
@@ -83,8 +87,19 @@ def resolve(db, conv_id, candidate):
     # 3) 申请新建（有数量上限，防止刷表）
     if len(names) >= MAX_LOCATIONS_PER_CONV:
         return names[0], False
-    db.add_location(conv_id, name)
+    db.add_location(conv_id, name, private=private)
     return name, True
+
+
+def set_private(db, conv_id, name, private):
+    """显式声明一个地点是私人还是公共（剧情/玩家/测试都可以用）"""
+    db.set_location_private(conv_id, name, private)
+    return name
+
+
+def is_private(db, conv_id, name):
+    """地点是不是私人空间（读 locations.private，不再按名字里的词猜）"""
+    return db.get_location_private(conv_id, name)
 
 
 def switch(db, conv_id, candidate):

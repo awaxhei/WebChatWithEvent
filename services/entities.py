@@ -85,9 +85,12 @@ def apply_reply(db, conv_id, obj, location, co_located=True):
     out = {"props": [], "people": [], "speaker": ""}
     if not isinstance(obj, dict):
         return out
-    # 她说的东西在她那边；同处一地时也是同一个房间，按尤夏所在地记
+    # 她说的东西在她那边；同处一地时也是同一个房间，按尤夏所在地记。
+    # `物件` 是这轮新出现的东西；`道具` 是动作把它们改了状态（挪走、打开、弄湿）。
     prop_loc = location or ""
-    out["props"] = remember_props(db, conv_id, prop_loc, obj.get("物件"))
+    declared = list(obj.get("物件") or []) if isinstance(obj.get("物件"), list) else []
+    touched = list(obj.get("道具") or []) if isinstance(obj.get("道具"), list) else []
+    out["props"] = remember_props(db, conv_id, prop_loc, declared + touched)
     out["people"] = remember_people(db, conv_id, prop_loc, obj.get("人物"))
     speaker = str(obj.get("说话人") or "").strip()[:MAX_NAME]
     if speaker:

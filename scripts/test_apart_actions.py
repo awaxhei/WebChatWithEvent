@@ -108,6 +108,9 @@ def main():
     conv2 = new_conv(user, "公寓客厅", "公寓客厅")
     stub2 = StubLLM([
         json.dumps({"动作": "把杯子递给她", "对谁": "青梅"}, ensure_ascii=False),
+        json.dumps({"动作": "把马克杯挪到窗台",
+                    "道具": [{"名字": "马克杯", "状态": "窗台上，杯口朝外"}]},
+                   ensure_ascii=False),
     ])
     chat_mod.deepseek = stub2
     try:
@@ -117,6 +120,9 @@ def main():
         chat_mod.deepseek = real_llm
     check("当面时接触动作保留", any("递给她" in a for a in actions_of(conv2)),
           str(actions_of(conv2)))
+    props = {p["name"]: p["state"] for p in app_db.get_props(conv2, "公寓客厅")}
+    check("动作能改变实体的状态",
+          props.get("马克杯") == "窗台上，杯口朝外", str(props))
 
     # ── 3) NPC 名字：形状校验代替英文口头禅黑名单
     check("英文口头禅不是名字", npc._is_bogus_name("hey") is True)
@@ -124,6 +130,25 @@ def main():
     check("中文身份可以是名字", npc._is_bogus_name("学姐") is False)
     check("代词不是名字", npc._is_bogus_name("你") is True)
     check("路人不是名字", npc._is_bogus_name("路人") is True)
+
+    # ── 4) 地点隐私是数据字段，不再按名字里的词猜
+    check("私人地点词表已经删掉", not hasattr(npc, "_PRIVATE_KEYWORDS"))
+    locations.ensure_defaults(app_db, conv2)
+    check("默认的家里是私人空间",
+          npc.is_private(app_db, conv2, "公寓客厅") is True)
+    check("默认的便利店是公共空间",
+          npc.is_private(app_db, conv2, "便利店") is False)
+    custom, _ = locations.resolve(app_db, conv2, "旧仓库")
+    check("新地点默认公共", npc.is_private(app_db, conv2, custom) is False,
+          str(custom))
+    locations.set_private(app_db, conv2, custom, True)
+    check("地点隐私可以显式声明", npc.is_private(app_db, conv2, custom) is True)
+    import services.scene_watcher as scene_watcher
+    parsed = scene_watcher._parse(
+        '{"new_location": "旅店房间", "entered_by": "both", "private": true, '
+        '"reason": "两个人进去了"}')
+    check("场景观察者能声明新地点是私人空间",
+          parsed and parsed.get("private") is True, str(parsed))
 
     print()
     if FAILED:

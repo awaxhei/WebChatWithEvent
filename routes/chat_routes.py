@@ -554,7 +554,7 @@ def _scene_payload(conv_id, api_key):
         if view.get("co_located"):
             people = [n for n in db.get_npcs(conv_id) if n.get("location") == loc]
             # 私人空间里只列剧情明确点名的人（妈妈/室友），不列路边刷出来的路人
-            if npc.is_private(loc):
+            if npc.is_private(db, conv_id, loc):
                 people = [n for n in people if n.get("declared")]
             view["npcs"] = people
         else:
@@ -1027,6 +1027,10 @@ def _persist_reply(conv_id, full, can_speak, yuxia_loc, now_minutes, channel=CHA
         # 这一条里声明的物件 / 人物先落地：下文提到它们时就是同一件东西、同一个人
         meta = entities.apply_reply(db, conv_id, obj, yuxia_loc)
         speaker = meta.get("speaker") or ""
+        # 她自己声明的身体接触程度：随机事件门控读它，不再去扫最近消息里的词。
+        # 异地时只能是 0，不认「隔着手机亲密」这种声明。
+        if allow_actions and obj.get("接触") is not None:
+            intimacy.record(db, conv_id, obj.get("接触"), now_minutes)
         if obj.get("对白"):
             # 她的多个短句要分开一条条发：按句号切成几个气泡，太长的再按逗号拆。
             # 异地时先收着，下面统一转成手机消息发出去（以前这里带着 can_speak 判断，

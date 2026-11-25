@@ -99,7 +99,7 @@ def main():
 
     # ── 2) 亲密时的对话提示词与动作条数
     hot_text = "\n".join(
-        [json.dumps({"对白": "别……"}, ensure_ascii=False)]
+        [json.dumps({"对白": "别……", "接触": "亲密"}, ensure_ascii=False)]
         + [json.dumps({"动作": f"第{i}个反应：手抓得紧了一点"}, ensure_ascii=False)
            for i in range(5)])
     stub = StubLLM(hot_text)
@@ -109,6 +109,8 @@ def main():
         evs = sse(r.data.decode("utf-8"))
     finally:
         chat_mod.deepseek = real_llm
+    check("她声明的接触程度落库", app_db.get_contact_level(conv_hot)[0] == 2,
+          str(app_db.get_contact_level(conv_hot)))
     check("亲密时提示词里有【此刻的身体接触】",
           "【此刻的身体接触】" in stub.stream_prompt, stub.stream_prompt[-300:])
     check("亲密时允许输出到六条",
@@ -169,10 +171,19 @@ def main():
     check("给旁白的要求是「另一处反应」",
           "身体接触" in joined and "另一处" in joined, joined[-300:])
 
-    # ── 5) 事件门控仍然只认第 2 档
+    # ── 5) 事件门控读声明值，不再扫亲密词
     import services.event_engine as events
-    check("抱一下不会让世界静音", events.scene_is_intimate(app_db, conv_hug) is False)
-    check("亲密接触会让世界静音", events.scene_is_intimate(app_db, conv_hot) is True)
+    app_db.set_contact_level(conv_hug, 1, 601)
+    allowed_hug, _ = events.event_gate(app_db, conv_hug, 610)
+    check("只是抱着不会让世界静音", allowed_hug is True)
+    app_db.set_contact_level(conv_hot, 2, 601)
+    allowed_hot, reason_hot = events.event_gate(app_db, conv_hot, 610)
+    check("亲密接触会让世界静音", allowed_hot is False and "亲密" in reason_hot,
+          str(reason_hot))
+    check("接触声明能解析成三档",
+          intimacy.parse_marker("亲密") == 2 and intimacy.parse_marker("碰到") == 1
+          and intimacy.parse_marker("无") == 0,
+          str([intimacy.parse_marker(x) for x in ("亲密", "碰到", "无")]))
 
     print()
     if FAILED:

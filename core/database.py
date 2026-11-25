@@ -94,6 +94,7 @@ class ChatDB:
                     name            TEXT NOT NULL,
                     description     TEXT DEFAULT '',
                     variants        TEXT DEFAULT '{}',
+                    private         INTEGER DEFAULT 1,
                     created_at      TEXT DEFAULT (datetime('now','localtime')),
                     UNIQUE(conversation_id, name),
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -242,6 +243,11 @@ class ChatDB:
                 ("npcs", "phone", "INTEGER DEFAULT 0"),
                 # v16：是不是模型/剧情明确点名的人（私人空间里也认，和路边刷出来的路人区分）
                 ("npcs", "declared", "INTEGER DEFAULT 0"),
+                # v17：地点是不是私人空间（数据驱动，不再靠名字里有没有「房间/客厅」去猜）
+                ("locations", "private", "INTEGER DEFAULT 1"),
+                # v17：她声明的身体接触程度（0 无 / 1 碰到 / 2 亲密），以及发生在第几分钟
+                ("conversations", "contact_level", "INTEGER DEFAULT 0"),
+                ("conversations", "contact_at", "INTEGER DEFAULT 0"),
                 ("locations", "description", "TEXT DEFAULT ''"),
                 ("locations", "variants", "TEXT DEFAULT '{}'"),
             ]:
@@ -266,6 +272,18 @@ class ChatDB:
             try:
                 if version < 16:
                     conn.execute("PRAGMA user_version=16")
+            except Exception:
+                pass
+            # v17：地点隐私改成数据字段。默认地点按名单标好；自定义地点保持私人
+            # （宁可不站陌生人，也不要让路人凭空出现在别人家里）。
+            try:
+                if version < 17:
+                    public = ("便利店", "大学教室", "食堂", "图书馆", "公园",
+                              "咖啡店", "回家路上")
+                    conn.execute("UPDATE locations SET private=1")
+                    conn.executemany("UPDATE locations SET private=0 WHERE name=?",
+                                     [(n,) for n in public])
+                    conn.execute("PRAGMA user_version=17")
             except Exception:
                 pass
 
@@ -516,14 +534,49 @@ class ChatDB:
             return 0, 0.0
         return int(row["story_minutes"] or 0), float(row["story_at"] or 0)
 
+    # ----- v17：她声明的身体接触程度（事件门控读这个，不再扫词） -----
+    def set_contact_level(self, conv_id, level, story_minutes=0):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE conversations SET contact_level=?, contact_at=? WHERE id=?",
+                (int(level or 0), int(story_minutes or 0), conv_id))
+
+    def get_contact_level(self, conv_id):
+        """返回 (level, 发生时的故事分钟)。level 0/1/2"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT contact_level, contact_at FROM conversations WHERE id=?",
+                (conv_id,)).fetchone()
+        if not row:
+            return 0, 0
+        return int(row["contact_level"] or 0), int(row["contact_at"] or 0)
+
     # ----- v3：地点 -----
-    def add_location(self, conv_id, name, description=""):
+    def add_location(self, conv_id, name, description="", private=1):
         with self._get_conn() as conn:
             try:
-                conn.execute("INSERT OR IGNORE INTO locations(conversation_id, name, description) VALUES(?,?,?)",
-                             (conv_id, name, description))
+                conn.execute(
+                    "INSERT OR IGNORE INTO locations(conversation_id, name, description,"
+                    " private) VALUES(?,?,?,?)",
+                    (conv_id, name, description, 1 if private else 0))
             except sqlite3.Error:
                 pass
+
+    def get_location_private(self, conv_id, name):
+        """这个地点是不是私人空间（没有第三个人会凭空出现）；查不到按私人算"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT private FROM locations WHERE conversation_id=? AND name=?",
+                (conv_id, name)).fetchone()
+        if not row:
+            return True
+        return bool(row["private"])
+
+    def set_location_private(self, conv_id, name, private=True):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE locations SET private=? WHERE conversation_id=? AND name=?",
+                (1 if private else 0, conv_id, name))
 
     def get_location_names(self, conv_id):
         with self._get_conn() as conn:
