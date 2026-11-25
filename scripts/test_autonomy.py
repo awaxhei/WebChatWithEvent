@@ -2,6 +2,7 @@
 自主行动探针（v6：由模型判断，不掷骰子；桩模型零额度）
 校验：LLM 决定 speak / phone / move、通道约束、连续输出上限、最小间隔
 """
+import json
 import os
 import sys
 import time
@@ -214,6 +215,18 @@ def main():
           str(db.get_story_minutes(conv13)))
     check("act 事件标记为 self（不能当世界事件喂回去）",
           any(e.get("tier") == "self" for e in db.get_recent_events(conv13, limit=5)))
+
+    # 13b) 日程里她这个点在睡：她不会主动发消息
+    # （否则手机上会同时出现「起床了没？」和系统那句「尤夏迷迷糊糊地睁开眼睛」）
+    conv_sleep = fresh()
+    db.set_day_schedule(conv_sleep, 0, json.dumps({"yuxia": [
+        {"start": 0, "end": 1440, "activity": "睡着", "location": "尤夏的房间",
+         "reply": "asleep", "enterable": False, "tag": "sleep"},
+    ], "qingmei": []}, ensure_ascii=False))
+    llm_sleep = StubLLM('{"action": "phone", "text": "起床了没？"}')
+    acted_sleep = autonomy.maybe_act(db, conv_sleep, llm_sleep, 600, "早上")
+    check("睡着时不主动发消息", acted_sleep is None, str(acted_sleep))
+    check("睡着时不调用模型", llm_sleep.calls == 0, str(llm_sleep.calls))
 
     # 14) 同一时间窗内动手次数有预算（默认 12 分钟内只允许一次）
     conv14 = fresh()

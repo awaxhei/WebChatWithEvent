@@ -35,14 +35,37 @@ STYLE = {
             "被关心时会嘴硬（「没事」），但身体反应是瞒不住的。",
 }
 
-# 夜里到这个点她就睡了（分钟）
+# 夜里到这个点她就睡了（分钟）——只作为「日程读不出来」时的兜底
 _SLEEP_FROM = 23 * 60
 _SLEEP_TO = 8 * 60          # 一直到八点都算睡：早上七点她当然还在被窝里
 # 刚醒的迷糊期：醒来之后的四十分钟（由 set_state 记的时刻算，不再按钟点）
 
 
-def rules_state(now_minutes):
-    """按故事时间给一个"该是什么状态"；返回空串表示时间上不做要求"""
+def schedule_asleep(db, conv_id, now_minutes):
+    """按当日日程判断她这个点是不是在睡；日程给不出结论时返回 None
+
+    睡眠的真值放在日程里：那天排的是「睡着」，她就是睡着的；
+    排的是「刚起床、洗漱」，那她已经醒了。否则状态和对话会打架——
+    手机上她正发消息叫你起床，系统却在旁边写一句「她迷迷糊糊地睁开眼睛」。
+    """
+    try:
+        import services.schedule as schedule_mod
+        block = schedule_mod.block_at(db, conv_id, now_minutes, "yuxia")
+    except Exception:
+        return None
+    if not isinstance(block, dict):
+        return None
+    return (block.get("reply") or "") == "asleep"
+
+
+def rules_state(now_minutes, asleep=None):
+    """按故事时间给一个"该是什么状态"；返回空串表示时间上不做要求
+
+    asleep 是当日日程给出的结论（True 在睡 / False 醒着 / None 读不出来）；
+    读不出来时退回钟点规则，保证一定有兜底。
+    """
+    if asleep is not None:
+        return "睡眠" if asleep else ""
     m = int(now_minutes) % (24 * 60)
     if m >= _SLEEP_FROM or m < _SLEEP_TO:
         return "睡眠"
@@ -98,9 +121,12 @@ def expire(db, conv_id, now_minutes):
 
 
 def apply_rules(db, conv_id, now_minutes):
-    """时间规则：到点睡、天亮迷糊；其余状态保持不动"""
+    """时间规则：到点睡、天亮迷糊；其余状态保持不动。
+
+    睡没睡以当日日程为准（她就按那张表过日子），日程读不出来才用钟点兜底。
+    """
     state = get(db, conv_id)
-    want = rules_state(now_minutes)
+    want = rules_state(now_minutes, schedule_asleep(db, conv_id, now_minutes))
     # 只有夜里强行进睡眠（免得她半夜还精神抖擞）；天亮的迷糊只从睡眠里醒来时给
     if state in ("感冒", "发烧", "忙碌"):
         return state          # 生病/忙碌时不按时间强行改成睡着

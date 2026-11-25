@@ -105,6 +105,28 @@ def main():
     check("非法状态不认", app_db.get_yuxia_state(conv) == "兴奋")
     app_db.set_yuxia_state(conv, "清醒")
 
+    # 睡没睡以当日日程为准：日程说她醒着，就不能再判她睡着
+    # （手机上她正发消息叫你起床、系统却在旁边写「她迷迷糊糊地睁开眼睛」，就是这么来的）
+    conv_sched = app_db.create_conversation(user)
+    locations.ensure_defaults(app_db, conv_sched)
+    app_db.set_day_schedule(conv_sched, 0, json.dumps({"yuxia": [
+        {"start": 0, "end": 420, "activity": "睡着", "location": "尤夏的房间",
+         "reply": "asleep", "enterable": False, "tag": "sleep"},
+        {"start": 420, "end": 1440, "activity": "在图书馆赶作业", "location": "图书馆",
+         "reply": "busy", "enterable": True, "tag": "study"},
+    ], "qingmei": []}, ensure_ascii=False))
+    app_db.set_yuxia_state(conv_sched, "清醒")
+    check("日程写着在赶作业：10 点不是睡着",
+          st.schedule_asleep(app_db, conv_sched, 10 * 60) is False)
+    check("日程说她醒着，就不改睡眠",
+          st.apply_rules(app_db, conv_sched, 10 * 60) == "清醒",
+          app_db.get_yuxia_state(conv_sched))
+    check("日程写着睡：凌晨就是睡",
+          st.apply_rules(app_db, conv_sched, 3 * 60) == "睡眠",
+          app_db.get_yuxia_state(conv_sched))
+    check("日程写着 7 点起床：七点半之后不再判睡",
+          st.schedule_asleep(app_db, conv_sched, 8 * 60) is False)
+
     # ── 2) 到点睡着：只由世界说一句「尤夏睡着了」，不再拦她的回复
     # 把故事时钟拨到深夜：否则 07:00 的"天亮迷糊"规则会立刻把她叫醒
     app_db.set_story_minutes(conv, 23 * 60 + 30)

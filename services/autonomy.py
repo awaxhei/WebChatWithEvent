@@ -374,9 +374,22 @@ def _build_prompt(db, conv_id, now_minutes, context_brief, yuxia_loc,
     return "\n\n".join(p for p in parts if p)
 
 
+def _asleep_now(db, conv_id, now_minutes):
+    """按当日日程看她这个点是不是在睡。睡着时不该主动做事、更不该发消息。"""
+    try:
+        import services.schedule as schedule_mod
+        block = schedule_mod.block_at(db, conv_id, now_minutes, "yuxia")
+    except Exception:
+        return False
+    return isinstance(block, dict) and (block.get("reply") or "") == "asleep"
+
+
 def maybe_act(db, conv_id, deepseek, now_minutes, context_brief, api_key=None,
               msg_count=0, idle=False):
     """问她要不要自主行动；返回行动详情或 None"""
+    # 睡着的时候她不会主动发消息：否则手机上会出现「起床了没？」配着系统那句「她睡着了」
+    if _asleep_now(db, conv_id, now_minutes):
+        return None
     yuxia_loc = db.get_current_location(conv_id)
     player_loc = db.get_player_location(conv_id)
     co_located = yuxia_loc == player_loc

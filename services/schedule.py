@@ -19,11 +19,12 @@ import threading
 from config import SCHEDULE_PROMPT
 
 # 兜底模板：模型还没生成、或生成失败时用
+# 起床排在 7:30 之后：早上七点她当然还在被窝里（她自己也这么说过）
 FALLBACK_YUXIA = [
-    (0, 7 * 60, "睡着", "尤夏的房间", "asleep", False, "sleep"),
-    (7 * 60, 7 * 60 + 40, "刚起床，洗漱", "尤夏的房间", "busy", False, "morning"),
-    (7 * 60 + 40, 8 * 60, "在厨房弄早饭", "厨房", "free", True, "meal"),
-    (8 * 60, 11 * 60 + 40, "在上课", "大学教室", "busy", False, "class"),
+    (0, 7 * 60 + 30, "睡着", "尤夏的房间", "asleep", False, "sleep"),
+    (7 * 60 + 30, 8 * 60, "刚起床，洗漱", "尤夏的房间", "busy", False, "morning"),
+    (8 * 60, 8 * 60 + 30, "在厨房弄早饭", "厨房", "free", True, "meal"),
+    (8 * 60 + 30, 11 * 60 + 40, "在上课", "大学教室", "busy", False, "class"),
     (11 * 60 + 40, 12 * 60 + 40, "在食堂吃午饭", "食堂", "free", True, "meal"),
     (12 * 60 + 40, 14 * 60, "回房间午休", "尤夏的房间", "busy", False, "rest"),
     (14 * 60, 17 * 60 + 40, "在上课", "大学教室", "busy", False, "class"),
